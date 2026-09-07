@@ -1,0 +1,25 @@
+## .NET
+bin/
+obj/
+.vs/
+*.user
+*.suo
+
+## Local configuration and secrets
+appsettings.Local.json
+.env
+.env.*
+!.env.example
+
+## IDE and OS
+.idea/
+.vscode/
+.DS_Store
+
+## Test output
+TestResults/
+coverage/
+
+## Local runtime data
+logs/
+App_Data/DataProtectionKeys/
