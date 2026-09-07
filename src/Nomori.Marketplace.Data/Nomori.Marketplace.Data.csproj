@@ -1,6 +1,13 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <PackageReference Include="FluentMigrator" Version="8.0.1" />
+    <PackageReference Include="FluentMigrator.Runner.SqlServer" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Nomori.Marketplace.Core\Nomori.Marketplace.Core.csproj" />
   </ItemGroup>
 

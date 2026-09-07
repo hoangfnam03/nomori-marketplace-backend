@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Nomori.Marketplace.Api.Controllers;
 using Nomori.Marketplace.Services.ApplicationInfo;
 

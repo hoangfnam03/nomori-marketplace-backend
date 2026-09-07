@@ -1,4 +1,4 @@
-﻿using Nomori.Marketplace.Services.ApplicationInfo;
+using Nomori.Marketplace.Services.ApplicationInfo;
 
 namespace Nomori.Marketplace.Services.Tests;
 

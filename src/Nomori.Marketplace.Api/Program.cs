@@ -1,8 +1,10 @@
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
-using Microsoft.Extensions.Options;
 using Nomori.Marketplace.Api.Configuration;
 using Nomori.Marketplace.Api.Health;
 using Nomori.Marketplace.Api.Middleware;
+using Nomori.Marketplace.Core.Configuration;
+using Nomori.Marketplace.Data.Configuration;
+using Nomori.Marketplace.Web.Framework.Security;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -24,6 +26,8 @@ builder.Services.AddOptions<CorsOptions>()
 
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
+builder.Services.AddNomoriData(builder.Configuration);
+builder.Services.AddNomoriSecurity(builder.Configuration);
 builder.Services.AddSingleton<Nomori.Marketplace.Services.ApplicationInfo.IApplicationInfoService, Nomori.Marketplace.Services.ApplicationInfo.ApplicationInfoService>();
 builder.Services.AddNomoriHealthChecks();
 builder.Services.AddCors(options =>
@@ -47,6 +51,7 @@ app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseHttpLogging();
 app.UseHttpsRedirection();
 app.UseCors("Frontend");
+app.UseNomoriSecurity();
 app.MapControllers();
 app.MapHealthChecks("/health/live", new HealthCheckOptions
 {

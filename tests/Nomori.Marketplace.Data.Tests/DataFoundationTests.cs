@@ -1,10 +1,10 @@
 namespace Nomori.Marketplace.Data.Tests;
 
-public sealed class FoundationTests
+public sealed class DataFoundationTests
 {
     [Fact]
     public void DataTestAssemblyIsAvailable()
     {
-        Assert.NotNull(typeof(FoundationTests).Assembly);
+        Assert.NotNull(typeof(DataFoundationTests).Assembly);
     }
 }
