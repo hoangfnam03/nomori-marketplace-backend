@@ -39,6 +39,16 @@ GET /health/ready
 
 The Phase 2 database configuration is intentionally optional until the SQL Server migration phase. Set `Database__ConnectionString` through user secrets or environment variables; do not commit a real connection string.
 
+## Database migration
+
+Nomori uses FluentMigrator rather than EF Core Code First. Run the dedicated migrator after configuring SQL Server:
+
+```powershell
+dotnet run --project src/Nomori.Marketplace.DbMigrator -- migrate
+```
+
+See `docs/database-guidelines.md` for the local SQL Server and SSMS workflow. The API does not run schema migrations automatically at startup.
+
 ## Validate
 
 ```powershell
