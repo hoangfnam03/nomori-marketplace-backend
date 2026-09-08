@@ -2,6 +2,8 @@ using Nomori.Marketplace.Core.Customers;
 using Nomori.Marketplace.Core.Domain.Customers;
 using Nomori.Marketplace.Core.Time;
 using Nomori.Marketplace.Services.Authentication;
+using Microsoft.Extensions.Options;
+using Nomori.Marketplace.Core.Security;
 
 namespace Nomori.Marketplace.Services.Tests;
 
@@ -35,7 +37,7 @@ public sealed class AuthenticationServiceTests
     }
 
     private static AuthenticationService CreateService(InMemoryCustomerIdentityStore store) =>
-        new(store, new PasswordHasher(), new FixedClock());
+        new(store, new PasswordHasher(), new FixedClock(), Options.Create(new SecurityOptions()));
 
     private sealed class FixedClock : IClock
     {
@@ -65,5 +67,20 @@ public sealed class AuthenticationServiceTests
             customer = value;
             return Task.CompletedTask;
         }
+
+        public Task AddPasswordAsync(CustomerPassword password, CancellationToken cancellationToken)
+        {
+            Password = password;
+            return Task.CompletedTask;
+        }
+
+        public Task CreateRecoveryTokenAsync(int customerId, string tokenHash, DateTime expiresOnUtc, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task<(int CustomerId, string TokenHash, DateTime ExpiresOnUtc, bool Used)?> FindRecoveryTokenAsync(string tokenHash, CancellationToken cancellationToken) => Task.FromResult<(int, string, DateTime, bool)?>(null);
+
+        public Task MarkRecoveryTokenUsedAsync(string tokenHash, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task<IReadOnlySet<string>> GetPermissionCodesAsync(int customerId, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlySet<string>>(new HashSet<string>(StringComparer.OrdinalIgnoreCase));
     }
 }

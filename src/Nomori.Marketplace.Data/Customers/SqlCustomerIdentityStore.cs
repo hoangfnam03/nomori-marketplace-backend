@@ -96,6 +96,64 @@ public sealed class SqlCustomerIdentityStore(IOptions<DatabaseOptions> databaseO
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    public async Task AddPasswordAsync(CustomerPassword password, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "INSERT INTO CustomerPassword (CustomerId, Password, PasswordFormatId, PasswordSalt, CreatedOnUtc) VALUES (@CustomerId, @Password, @PasswordFormatId, @PasswordSalt, @CreatedOnUtc)";
+        command.Parameters.AddWithValue("@CustomerId", password.CustomerId);
+        command.Parameters.AddWithValue("@Password", password.Password);
+        command.Parameters.AddWithValue("@PasswordFormatId", (int)password.PasswordFormat);
+        command.Parameters.AddWithValue("@PasswordSalt", (object?)password.PasswordSalt ?? DBNull.Value);
+        command.Parameters.AddWithValue("@CreatedOnUtc", password.CreatedOnUtc);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task CreateRecoveryTokenAsync(int customerId, string tokenHash, DateTime expiresOnUtc, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "INSERT INTO PasswordRecoveryToken (CustomerId, TokenHash, ExpiresOnUtc, CreatedOnUtc) VALUES (@CustomerId, @TokenHash, @ExpiresOnUtc, SYSUTCDATETIME())";
+        command.Parameters.AddWithValue("@CustomerId", customerId);
+        command.Parameters.AddWithValue("@TokenHash", tokenHash);
+        command.Parameters.AddWithValue("@ExpiresOnUtc", expiresOnUtc);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<(int CustomerId, string TokenHash, DateTime ExpiresOnUtc, bool Used)?> FindRecoveryTokenAsync(string tokenHash, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT CustomerId, TokenHash, ExpiresOnUtc, Used FROM PasswordRecoveryToken WHERE TokenHash = @TokenHash";
+        command.Parameters.AddWithValue("@TokenHash", tokenHash);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken)
+            ? (reader.GetInt32(0), reader.GetString(1), reader.GetDateTime(2), reader.GetBoolean(3))
+            : null;
+    }
+
+    public async Task MarkRecoveryTokenUsedAsync(string tokenHash, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE PasswordRecoveryToken SET Used = 1 WHERE TokenHash = @TokenHash AND Used = 0";
+        command.Parameters.AddWithValue("@TokenHash", tokenHash);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlySet<string>> GetPermissionCodesAsync(int customerId, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT DISTINCT p.SystemName FROM PermissionRecord p INNER JOIN PermissionRecordCustomerRoleMapping prm ON prm.PermissionRecordId = p.Id INNER JOIN CustomerCustomerRoleMapping crm ON crm.CustomerRoleId = prm.CustomerRoleId WHERE crm.CustomerId = @CustomerId";
+        command.Parameters.AddWithValue("@CustomerId", customerId);
+        var permissions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            permissions.Add(reader.GetString(0));
+        return permissions;
+    }
+
     private async Task<SqlConnection> OpenConnectionAsync(CancellationToken cancellationToken)
     {
         var connection = new SqlConnection(databaseOptions.Value.ConnectionString);
