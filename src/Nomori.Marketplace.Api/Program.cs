@@ -5,6 +5,8 @@ using Nomori.Marketplace.Api.Middleware;
 using Nomori.Marketplace.Core.Configuration;
 using Nomori.Marketplace.Data.Configuration;
 using Nomori.Marketplace.Web.Framework.Security;
+using Nomori.Marketplace.Services.Authentication;
+using Nomori.Marketplace.Core.Time;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -28,6 +30,9 @@ builder.Services.AddControllers();
 builder.Services.AddOpenApi();
 builder.Services.AddNomoriData(builder.Configuration);
 builder.Services.AddNomoriSecurity(builder.Configuration);
+builder.Services.AddSingleton<IClock, SystemClock>();
+builder.Services.AddScoped<IPasswordHasher, PasswordHasher>();
+builder.Services.AddScoped<IAuthenticationService, AuthenticationService>();
 builder.Services.AddSingleton<Nomori.Marketplace.Services.ApplicationInfo.IApplicationInfoService, Nomori.Marketplace.Services.ApplicationInfo.ApplicationInfoService>();
 builder.Services.AddNomoriHealthChecks();
 builder.Services.AddCors(options =>
