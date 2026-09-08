@@ -41,6 +41,9 @@ Do not commit production credentials or real connection strings.
 - Copy/adapt only the tables required by the current module from nopCommerce. Do not copy the full nopCommerce schema or raw upgrade SQL.
 - Preserve the Nomori namespace and table naming conventions; do not keep `Nop` prefixes in new objects.
 
-## Current foundation migration
+## Current migrations
 
-`FoundationMigration` creates `NomoriSystemMetadata`, a small system table used to verify the migration pipeline. Customer/Auth tables belong to the Auth module migration and will be added after this foundation is verified.
+- `FoundationMigration` creates `NomoriSystemMetadata`, a small system table used to verify the migration pipeline.
+- `AuthenticationIdentityMigration` creates `Customer`, `CustomerPassword`, `CustomerRole` and `CustomerCustomerRoleMapping` with foreign keys, unique indexes and password history ordering.
+
+Permission records, customer profile fields, addresses, MFA and external authentication remain separate slices and are not included in the minimal Auth identity schema.
