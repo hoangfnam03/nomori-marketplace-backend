@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Nomori.Marketplace.Core.Security;
 using Nomori.Marketplace.Core.Domain.Customers;
 
@@ -12,7 +13,7 @@ namespace Nomori.Marketplace.Web.Framework.Security;
 
 public static class NomoriSecurityExtensions
 {
-    public static IServiceCollection AddNomoriSecurity(this IServiceCollection services, IConfiguration configuration)
+    public static IServiceCollection AddNomoriSecurity(this IServiceCollection services, IConfiguration configuration, IHostEnvironment environment)
     {
         services.AddOptions<SecurityOptions>()
             .Bind(configuration.GetSection(SecurityOptions.SectionName));
@@ -31,7 +32,9 @@ public static class NomoriSecurityExtensions
                 var securityOptions = configuration.GetSection(SecurityOptions.SectionName).Get<SecurityOptions>() ?? new SecurityOptions();
                 options.Cookie.Name = securityOptions.CookieName;
                 options.Cookie.HttpOnly = true;
-                options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+                options.Cookie.SecurePolicy = environment.IsDevelopment()
+                    ? CookieSecurePolicy.None
+                    : CookieSecurePolicy.Always;
                 options.LoginPath = securityOptions.LoginPath;
                 options.AccessDeniedPath = securityOptions.AccessDeniedPath;
                 options.Events.OnRedirectToLogin = context =>
