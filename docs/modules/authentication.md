@@ -2,7 +2,7 @@
 
 ## Status
 
-Backend MVP implemented. Angular integration, email delivery, MFA and external login are deferred.
+Backend MVP implemented. Angular integration is in progress; password-recovery email delivery is implemented through SMTP. MFA and external login are deferred.
 
 ## Business flow
 
@@ -11,6 +11,7 @@ Backend MVP implemented. Angular integration, email delivery, MFA and external l
 3. Login validates account state and password, updates login metadata and issues an HttpOnly cookie.
 4. Session reads the authenticated customer identity from the cookie claims; logout clears the cookie.
 5. Password change and one-time recovery reset create new password records; failed logins use configurable lockout thresholds.
+6. Password recovery stores only a hash of the one-time token and sends a reset link through the configured `IEmailSender`.
 
 ## Database
 
@@ -42,6 +43,33 @@ Indexes and constraints include unique customer email/guid, unique role system n
 
 Credentials are not returned or logged. Login failures use a generic `auth.invalid_credentials` error. Cookie authentication is configured in Web Framework.
 State-changing endpoints require the `X-CSRF-TOKEN` header paired with the CSRF cookie. Auth endpoints use a fixed-window IP rate limit.
+
+### Email delivery
+
+Nomori follows nopCommerce's separation between the email abstraction and SMTP implementation:
+
+- `IEmailSender` is the application abstraction.
+- `SmtpBuilder` creates and authenticates a MailKit SMTP client.
+- `SmtpEmailSender` builds the MIME message and sends it.
+
+Configure the `Email` section in deployment secrets or environment variables. For example:
+
+```text
+Email__Enabled=true
+Email__SmtpHost=smtp.example.com
+Email__SmtpPort=587
+Email__Username=no-reply@example.com
+Email__Password=<secret>
+Email__FromAddress=no-reply@example.com
+Email__FromName=Nomori Marketplace
+Email__UseSsl=false
+Email__UseStartTls=true
+Email__FrontendBaseUrl=https://marketplace.example.com
+```
+
+For Gmail SMTP, use `smtp.gmail.com:587` with `UseSsl=false` and `UseStartTls=true`. `UseSsl=true` is intended for implicit TLS connections such as port 465. `UseStartTls=false` should only be used with a local SMTP capture server.
+
+Development keeps email disabled and returns the token in the development response. To test actual delivery locally, run an SMTP capture server such as Mailpit, set `Email:Enabled` to `true`, use its SMTP port, and open the reset link from the captured message.
 
 ## Tests and validation
 
@@ -181,7 +209,7 @@ Content-Type: application/json
 }
 ```
 
-Expected in `Development`: `200 OK` with a `token` field. Copy that token immediately; it expires after 30 minutes.
+Expected in `Development`: `200 OK` with a `token` field. Copy that token immediately; it expires after 30 minutes. When email delivery is enabled, the same request also sends a reset link to the customer email address.
 
 Reset the password with the token:
 
@@ -224,7 +252,6 @@ Expected: `204 No Content`, the authentication cookie is cleared, and a subseque
 
 ## Deferred work
 
-- Email delivery for recovery instructions
 - Fine-grained permission attributes/policies on future module endpoints
 - Email verification, MFA, OTP and external authentication
 - Angular auth facade/forms/guards

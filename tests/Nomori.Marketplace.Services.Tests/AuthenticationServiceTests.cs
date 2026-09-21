@@ -4,6 +4,7 @@ using Nomori.Marketplace.Core.Time;
 using Nomori.Marketplace.Services.Authentication;
 using Microsoft.Extensions.Options;
 using Nomori.Marketplace.Core.Security;
+using Nomori.Marketplace.Core.Email;
 
 namespace Nomori.Marketplace.Services.Tests;
 
@@ -36,8 +37,49 @@ public sealed class AuthenticationServiceTests
         Assert.Equal(CustomerIdentityErrors.InvalidCredentials, result.ErrorCode);
     }
 
-    private static AuthenticationService CreateService(InMemoryCustomerIdentityStore store) =>
-        new(store, new PasswordHasher(), new FixedClock(), Options.Create(new SecurityOptions()));
+    [Fact]
+    public async Task PasswordRecoverySendsResetLinkWhenEmailIsEnabled()
+    {
+        var store = new InMemoryCustomerIdentityStore();
+        await CreateService(store).RegisterAsync(
+            new RegisterCustomerCommand("user@example.test", "Password!123"), CancellationToken.None);
+        var sender = new CapturingEmailSender();
+        var service = CreateService(store, sender, new EmailOptions
+        {
+            Enabled = true,
+            FrontendBaseUrl = "https://marketplace.example.test"
+        });
+
+        var token = await service.CreatePasswordRecoveryTokenAsync("USER@example.test", CancellationToken.None);
+
+        Assert.NotNull(token);
+        Assert.NotNull(sender.Message);
+        Assert.Equal("user@example.test", sender.Message!.ToAddress);
+        Assert.Contains($"/auth/reset-password?token={Uri.EscapeDataString(token!)}", sender.Message.HtmlBody);
+    }
+
+    private static AuthenticationService CreateService(
+        InMemoryCustomerIdentityStore store,
+        IEmailSender? emailSender = null,
+        EmailOptions? emailOptions = null) =>
+        new(store, new PasswordHasher(), new FixedClock(), Options.Create(new SecurityOptions()),
+            emailSender ?? new NoopEmailSender(), Options.Create(emailOptions ?? new EmailOptions()));
+
+    private sealed class NoopEmailSender : IEmailSender
+    {
+        public Task SendEmailAsync(EmailMessage message, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class CapturingEmailSender : IEmailSender
+    {
+        public EmailMessage? Message { get; private set; }
+
+        public Task SendEmailAsync(EmailMessage message, CancellationToken cancellationToken)
+        {
+            Message = message;
+            return Task.CompletedTask;
+        }
+    }
 
     private sealed class FixedClock : IClock
     {
