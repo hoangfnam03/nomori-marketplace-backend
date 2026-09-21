@@ -5,6 +5,12 @@ using Nomori.Marketplace.Api.Middleware;
 using Nomori.Marketplace.Core.Configuration;
 using Nomori.Marketplace.Data.Configuration;
 using Nomori.Marketplace.Web.Framework.Security;
+using Nomori.Marketplace.Services.Authentication;
+using Nomori.Marketplace.Core.Time;
+using Nomori.Marketplace.Core.Security;
+using Nomori.Marketplace.Services.Security;
+using Microsoft.OpenApi;
+using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -13,6 +19,22 @@ builder.Services.AddHttpLogging(options =>
 {
     options.LoggingFields = Microsoft.AspNetCore.HttpLogging.HttpLoggingFields.RequestProperties
         | Microsoft.AspNetCore.HttpLogging.HttpLoggingFields.Duration;
+});
+builder.Services.AddAntiforgery(options =>
+{
+    options.HeaderName = "X-CSRF-TOKEN";
+    options.Cookie.Name = "Nomori.Csrf";
+    options.Cookie.HttpOnly = false;
+    options.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
+        ? CookieSecurePolicy.None
+        : CookieSecurePolicy.Always;
+});
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("auth", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 20, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
 });
 
 builder.Services.AddOptions<ApplicationOptions>()
@@ -24,10 +46,59 @@ builder.Services.AddOptions<DatabaseOptions>()
 builder.Services.AddOptions<CorsOptions>()
     .Bind(builder.Configuration.GetSection(CorsOptions.SectionName));
 
-builder.Services.AddControllers();
-builder.Services.AddOpenApi();
+builder.Services.AddControllersWithViews();
+builder.Services.AddOpenApi(options =>
+{
+    options.AddDocumentTransformer((document, _, _) =>
+    {
+        document.Components ??= new OpenApiComponents();
+        document.Components.SecuritySchemes ??= new Dictionary<string, IOpenApiSecurityScheme>();
+        document.Components.SecuritySchemes["csrfToken"] = new OpenApiSecurityScheme
+        {
+            Type = SecuritySchemeType.ApiKey,
+            Name = "X-CSRF-TOKEN",
+            In = ParameterLocation.Header,
+            Description = "Enter the token returned by GET /api/v1/auth/csrf. The Nomori.Csrf cookie is also required."
+        };
+
+        var csrfPaths = new HashSet<string>
+        {
+            "/api/v1/auth/register",
+            "/api/v1/auth/login",
+            "/api/v1/auth/logout",
+            "/api/v1/auth/password/change",
+            "/api/v1/auth/password/reset"
+        };
+        foreach (var (path, pathItem) in document.Paths)
+        {
+            if (!csrfPaths.Contains(path))
+                continue;
+
+            if (pathItem.Operations is null)
+                continue;
+
+            foreach (var operation in pathItem.Operations.Values)
+            {
+                operation.Parameters ??= [];
+                operation.Parameters.Add(new OpenApiParameter
+                {
+                    Name = "X-CSRF-TOKEN",
+                    In = ParameterLocation.Header,
+                    Required = true,
+                    Description = "Token returned by GET /api/v1/auth/csrf. The Nomori.Csrf cookie is also required."
+                });
+            }
+        }
+
+        return Task.CompletedTask;
+    });
+});
 builder.Services.AddNomoriData(builder.Configuration);
-builder.Services.AddNomoriSecurity(builder.Configuration);
+builder.Services.AddNomoriSecurity(builder.Configuration, builder.Environment);
+builder.Services.AddSingleton<IClock, SystemClock>();
+builder.Services.AddScoped<IPasswordHasher, PasswordHasher>();
+builder.Services.AddScoped<IAuthenticationService, AuthenticationService>();
+builder.Services.AddScoped<IPermissionService, PermissionService>();
 builder.Services.AddSingleton<Nomori.Marketplace.Services.ApplicationInfo.IApplicationInfoService, Nomori.Marketplace.Services.ApplicationInfo.ApplicationInfoService>();
 builder.Services.AddNomoriHealthChecks();
 builder.Services.AddCors(options =>
@@ -45,12 +116,17 @@ var app = builder.Build();
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
+    app.UseSwaggerUI(options =>
+    {
+        options.SwaggerEndpoint("/openapi/v1.json", "Nomori Marketplace API v1");
+    });
 }
 
 app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseHttpLogging();
 app.UseHttpsRedirection();
 app.UseCors("Frontend");
+app.UseRateLimiter();
 app.UseNomoriSecurity();
 app.MapControllers();
 app.MapHealthChecks("/health/live", new HealthCheckOptions

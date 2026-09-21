@@ -14,4 +14,10 @@ public sealed class SecurityOptions
     public string LoginPath { get; init; } = "/api/v1/auth/login";
 
     public string AccessDeniedPath { get; init; } = "/api/v1/auth/forbidden";
+
+    public int MaxFailedLoginAttempts { get; init; } = 5;
+
+    public int LockoutMinutes { get; init; } = 15;
+
+    public int RecoveryTokenLifetimeMinutes { get; init; } = 30;
 }

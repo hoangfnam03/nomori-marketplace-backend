@@ -11,3 +11,10 @@ public interface ICurrentUser
 
     string? Email { get; }
 }
+
+public interface IAuthenticationSession
+{
+    Task SignInAsync(Domain.Customers.Customer customer, bool rememberMe, CancellationToken cancellationToken);
+
+    Task SignOutAsync(CancellationToken cancellationToken);
+}
