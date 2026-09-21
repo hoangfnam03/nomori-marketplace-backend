@@ -11,6 +11,7 @@ using Nomori.Marketplace.Core.Customers;
 using Nomori.Marketplace.Core.Security;
 using Nomori.Marketplace.Core.Email;
 using Nomori.Marketplace.Services.Security;
+using Nomori.Marketplace.Services.Customers;
 using Nomori.Marketplace.Services.Email;
 using Microsoft.OpenApi;
 using System.Threading.RateLimiting;
@@ -79,7 +80,9 @@ builder.Services.AddOpenApi(options =>
             "/api/v1/auth/otp/setup",
             "/api/v1/auth/otp/enable",
             "/api/v1/auth/otp/disable",
-            "/api/v1/admin/authorization/customers/{customerId}/roles"
+            "/api/v1/admin/authorization/customers/{customerId}/roles",
+            "/api/v1/customer/profile"
+            ,"/api/v1/customer/addresses", "/api/v1/customer/attributes", "/api/v1/customer/email-change/request"
         };
         foreach (var (path, pathItem) in document.Paths)
         {
@@ -119,6 +122,8 @@ builder.Services.AddScoped<IEmailSender, SmtpEmailSender>();
 builder.Services.AddScoped<IPermissionService, PermissionService>();
 builder.Services.AddScoped<IAuthorizationManagementService, AuthorizationManagementService>();
 builder.Services.AddScoped<IAuditLogService, AuditLogService>();
+builder.Services.AddScoped<ICustomerProfileService, CustomerProfileService>();
+builder.Services.AddScoped<ICustomerAccountDataService, CustomerAccountDataService>();
 builder.Services.AddSingleton<Nomori.Marketplace.Services.ApplicationInfo.IApplicationInfoService, Nomori.Marketplace.Services.ApplicationInfo.ApplicationInfoService>();
 builder.Services.AddNomoriHealthChecks();
 builder.Services.AddCors(options =>

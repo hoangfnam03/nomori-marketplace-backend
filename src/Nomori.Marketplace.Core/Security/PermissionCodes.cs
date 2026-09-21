@@ -16,4 +16,12 @@ public static class PermissionCodes
     public const string AdminRolesManage = "admin.roles.manage";
 
     public const string AdminAuditRead = "admin.audit.read";
+
+    public const string CustomerProfileRead = "customer.profile.read";
+
+    public const string CustomerProfileManage = "customer.profile.manage";
+
+    public const string CustomerAddressManage = "customer.address.manage";
+    public const string CustomerAttributesManage = "customer.attributes.manage";
+    public const string CustomerEmailChange = "customer.email.change";
 }

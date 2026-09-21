@@ -17,6 +17,8 @@ public static class DatabaseRegistrationExtensions
         services.AddOptions<DatabaseOptions>()
             .Bind(configuration.GetSection(DatabaseOptions.SectionName));
         services.AddScoped<ICustomerIdentityStore, SqlCustomerIdentityStore>();
+        services.AddScoped<ICustomerProfileStore, SqlCustomerProfileStore>();
+        services.AddScoped<ICustomerAccountDataStore, SqlCustomerAccountDataStore>();
         services.AddScoped<IEmailVerificationStore, SqlEmailVerificationStore>();
         services.AddScoped<IEmailOtpStore, SqlEmailOtpStore>();
         services.AddScoped<IAuthorizationStore, SqlAuthorizationStore>();

@@ -290,13 +290,17 @@ npm run typecheck
 npm run build
 ```
 
+## 7. Customer/Profile smoke test
+
+After migration `202609210003`, verify and login as a customer, then open `/customer/profile` or call `GET /api/v1/customer/profile`. Update with `PUT /api/v1/customer/profile` and the CSRF header. Valid data returns `200`; invalid gender/date/phone returns `400` field errors; anonymous access returns `401`; a successful update creates `customer.profile_updated`. The full UI/API test flow and the M04 scope audit are in `docs/modules/customer-profile.md`.
+
 Nếu build lại xuất hiện lỗi prerender với API relative URL `/api/v1/auth/session`, kiểm tra cấu hình SSR/API base URL và đảm bảo đang dùng code `AuthFacade` có server guard; bản hiện tại đã tránh request session trong prerender.
 
-## 7. Những phần chưa thuộc MVP này
+## 8. Những phần chưa thuộc MVP này
 
 - Resource-level/store-level ACL.
 
-## 8. Email verification
+## 9. Email verification
 
 Registration creates an unverified customer and sends a one-time verification link. Login is rejected with `403 auth.email_not_verified` until the link is used. In Development, when email delivery is disabled, the `201` response includes `verificationToken` for local testing.
 
@@ -310,7 +314,7 @@ Expected: `204 No Content`. Reusing or expiring the token returns `400 auth.emai
 
 Resend with `POST /api/v1/auth/email/verification/send` and the email in the JSON body. Production responses are generic. For real delivery set `Email:Enabled=true` and configure SMTP; for local testing use Mailpit and open the captured link.
 
-## 9. Email OTP
+## 10. Email OTP
 
 Email OTP is opt-in per customer. The default rules are six digits, 10-minute expiry, five failed attempts and a 60-second resend delay. OTP values are never stored in plaintext.
 
@@ -328,7 +332,7 @@ The next password login returns `202 Accepted` with `otpRequired: true`. Verify 
 
 Expected: `204 No Content` and an authentication cookie. Wrong, expired and locked codes return `auth.otp_invalid`, `auth.otp_expired` and `auth.otp_locked`. Angular uses `/auth/login-otp`; account controls are on `/auth/account`. Disable with `POST /api/v1/auth/otp/disable`.
 
-## 10. Audit log
+## 11. Audit log
 
 `AuditLog` stores UTC time, actor/target customer IDs, event name, IP address and safe JSON details. Passwords, OTP values and raw tokens are excluded. Events include registration, login success/failure, logout, password recovery/reset/change, email verification, OTP, and role replacement.
 
@@ -338,7 +342,7 @@ Administrators with `admin.audit.read` can inspect recent entries:
 GET /api/v1/admin/authorization/audit-logs?take=100
 ```
 
-## 11. Validation commands
+## 12. Validation commands
 
 ```powershell
 dotnet build src/Nomori.Marketplace.Api/Nomori.Marketplace.Api.csproj

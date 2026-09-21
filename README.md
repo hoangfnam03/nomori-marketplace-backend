@@ -4,6 +4,8 @@ Backend foundation for Nomori Marketplace. This repository targets .NET 10 and i
 
 Authentication and Authorization manual test guide: `docs/auth-authorization-test-guide.md`.
 
+Customer/Profile module: `docs/modules/customer-profile.md`.
+
 ## Prerequisites
 
 - .NET SDK `10.0.100` or a compatible feature band allowed by `global.json`
