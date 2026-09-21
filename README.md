@@ -2,6 +2,8 @@
 
 Backend foundation for Nomori Marketplace. This repository targets .NET 10 and is being rebuilt incrementally from nopCommerce conventions.
 
+Authentication and Authorization manual test guide: `docs/auth-authorization-test-guide.md`.
+
 ## Prerequisites
 
 - .NET SDK `10.0.100` or a compatible feature band allowed by `global.json`

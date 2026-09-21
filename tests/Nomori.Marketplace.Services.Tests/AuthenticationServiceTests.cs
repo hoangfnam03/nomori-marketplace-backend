@@ -38,6 +38,33 @@ public sealed class AuthenticationServiceTests
     }
 
     [Fact]
+    public async Task RegisterRejectsPasswordThatDoesNotMeetPolicy()
+    {
+        var result = await CreateService(new InMemoryCustomerIdentityStore())
+            .RegisterAsync(new RegisterCustomerCommand("user@example.test", "password"), CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(CustomerIdentityErrors.PasswordPolicy, result.ErrorCode);
+    }
+
+    [Fact]
+    public async Task ChangePasswordRequiresReLoginAndRejectsPasswordReuse()
+    {
+        var store = new InMemoryCustomerIdentityStore();
+        var service = CreateService(store);
+        await service.RegisterAsync(new RegisterCustomerCommand("user@example.test", "Password!123"), CancellationToken.None);
+
+        var changed = await service.ChangePasswordAsync(
+            new ChangePasswordCommand(1, "Password!123", "Password!456"), CancellationToken.None);
+        var reused = await service.ChangePasswordAsync(
+            new ChangePasswordCommand(1, "Password!456", "Password!123"), CancellationToken.None);
+
+        Assert.Null(changed);
+        Assert.True(store.Customer!.RequireReLogin);
+        Assert.Equal(CustomerIdentityErrors.PasswordRecentlyUsed, reused);
+    }
+
+    [Fact]
     public async Task PasswordRecoverySendsResetLinkWhenEmailIsEnabled()
     {
         var store = new InMemoryCustomerIdentityStore();
@@ -62,7 +89,7 @@ public sealed class AuthenticationServiceTests
         InMemoryCustomerIdentityStore store,
         IEmailSender? emailSender = null,
         EmailOptions? emailOptions = null) =>
-        new(store, new PasswordHasher(), new FixedClock(), Options.Create(new SecurityOptions()),
+        new(store, new PasswordHasher(), new PasswordPolicy(Options.Create(new SecurityOptions())), new FixedClock(), Options.Create(new SecurityOptions()),
             emailSender ?? new NoopEmailSender(), Options.Create(emailOptions ?? new EmailOptions()));
 
     private sealed class NoopEmailSender : IEmailSender
@@ -89,18 +116,23 @@ public sealed class AuthenticationServiceTests
     private sealed class InMemoryCustomerIdentityStore : ICustomerIdentityStore
     {
         private Customer? customer;
-        public CustomerPassword? Password { get; private set; }
+        private readonly List<CustomerPassword> passwords = [];
+        public Customer? Customer => customer;
+        public CustomerPassword? Password => passwords.FirstOrDefault();
 
         public Task<Customer?> FindByEmailAsync(string email, CancellationToken cancellationToken) => Task.FromResult(customer?.Email == email ? customer : null);
         public Task<Customer?> FindByIdAsync(int id, CancellationToken cancellationToken) => Task.FromResult(customer?.Id == id ? customer : null);
         public Task<CustomerPassword?> GetLatestPasswordAsync(int customerId, CancellationToken cancellationToken) => Task.FromResult(Password);
+
+        public Task<IReadOnlyList<CustomerPassword>> GetPasswordHistoryAsync(int customerId, int take, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<CustomerPassword>>(passwords.Take(take).ToArray());
 
         public Task<int> CreateCustomerAsync(Customer value, CustomerPassword password, CancellationToken cancellationToken)
         {
             value.Id = 1;
             customer = value;
             password.CustomerId = value.Id;
-            Password = password;
+            passwords.Insert(0, password);
             return Task.FromResult(value.Id);
         }
 
@@ -112,7 +144,14 @@ public sealed class AuthenticationServiceTests
 
         public Task AddPasswordAsync(CustomerPassword password, CancellationToken cancellationToken)
         {
-            Password = password;
+            passwords.Insert(0, password);
+            return Task.CompletedTask;
+        }
+
+        public Task ChangePasswordAsync(Customer value, CustomerPassword password, CancellationToken cancellationToken)
+        {
+            customer = value;
+            passwords.Insert(0, password);
             return Task.CompletedTask;
         }
 
@@ -121,6 +160,12 @@ public sealed class AuthenticationServiceTests
         public Task<(int CustomerId, string TokenHash, DateTime ExpiresOnUtc, bool Used)?> FindRecoveryTokenAsync(string tokenHash, CancellationToken cancellationToken) => Task.FromResult<(int, string, DateTime, bool)?>(null);
 
         public Task MarkRecoveryTokenUsedAsync(string tokenHash, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task<bool> ResetPasswordWithRecoveryTokenAsync(string tokenHash, DateTime nowUtc, CustomerPassword password, CancellationToken cancellationToken)
+        {
+            passwords.Insert(0, password);
+            return Task.FromResult(true);
+        }
 
         public Task<IReadOnlySet<string>> GetPermissionCodesAsync(int customerId, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlySet<string>>(new HashSet<string>(StringComparer.OrdinalIgnoreCase));

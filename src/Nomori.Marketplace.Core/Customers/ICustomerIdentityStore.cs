@@ -10,17 +10,23 @@ public interface ICustomerIdentityStore
 
     Task<CustomerPassword?> GetLatestPasswordAsync(int customerId, CancellationToken cancellationToken);
 
+    Task<IReadOnlyList<CustomerPassword>> GetPasswordHistoryAsync(int customerId, int take, CancellationToken cancellationToken);
+
     Task<int> CreateCustomerAsync(Customer customer, CustomerPassword password, CancellationToken cancellationToken);
 
     Task UpdateCustomerAsync(Customer customer, CancellationToken cancellationToken);
 
     Task AddPasswordAsync(CustomerPassword password, CancellationToken cancellationToken);
 
+    Task ChangePasswordAsync(Customer customer, CustomerPassword password, CancellationToken cancellationToken);
+
     Task CreateRecoveryTokenAsync(int customerId, string tokenHash, DateTime expiresOnUtc, CancellationToken cancellationToken);
 
     Task<(int CustomerId, string TokenHash, DateTime ExpiresOnUtc, bool Used)?> FindRecoveryTokenAsync(string tokenHash, CancellationToken cancellationToken);
 
     Task MarkRecoveryTokenUsedAsync(string tokenHash, CancellationToken cancellationToken);
+
+    Task<bool> ResetPasswordWithRecoveryTokenAsync(string tokenHash, DateTime nowUtc, CustomerPassword password, CancellationToken cancellationToken);
 
     Task<IReadOnlySet<string>> GetPermissionCodesAsync(int customerId, CancellationToken cancellationToken);
 }

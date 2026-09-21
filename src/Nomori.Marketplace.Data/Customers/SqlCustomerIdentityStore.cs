@@ -12,7 +12,7 @@ public sealed class SqlCustomerIdentityStore(IOptions<DatabaseOptions> databaseO
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT Id, CustomerGuid, Email, Username, Active, Deleted, FailedLoginAttempts, CannotLoginUntilDateUtc, RequireReLogin, CreatedOnUtc, LastLoginDateUtc FROM Customer WHERE Email = @Email";
+        command.CommandText = "SELECT Id, CustomerGuid, Email, Username, EmailVerified, EmailVerifiedOnUtc, EmailOtpEnabled, Active, Deleted, FailedLoginAttempts, CannotLoginUntilDateUtc, RequireReLogin, CreatedOnUtc, LastLoginDateUtc FROM Customer WHERE Email = @Email";
         command.Parameters.AddWithValue("@Email", email);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? ReadCustomer(reader) : null;
@@ -22,7 +22,7 @@ public sealed class SqlCustomerIdentityStore(IOptions<DatabaseOptions> databaseO
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT Id, CustomerGuid, Email, Username, Active, Deleted, FailedLoginAttempts, CannotLoginUntilDateUtc, RequireReLogin, CreatedOnUtc, LastLoginDateUtc FROM Customer WHERE Id = @Id";
+        command.CommandText = "SELECT Id, CustomerGuid, Email, Username, EmailVerified, EmailVerifiedOnUtc, EmailOtpEnabled, Active, Deleted, FailedLoginAttempts, CannotLoginUntilDateUtc, RequireReLogin, CreatedOnUtc, LastLoginDateUtc FROM Customer WHERE Id = @Id";
         command.Parameters.AddWithValue("@Id", id);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? ReadCustomer(reader) : null;
@@ -46,16 +46,43 @@ public sealed class SqlCustomerIdentityStore(IOptions<DatabaseOptions> databaseO
         };
     }
 
+    public async Task<IReadOnlyList<CustomerPassword>> GetPasswordHistoryAsync(int customerId, int take, CancellationToken cancellationToken)
+    {
+        if (take <= 0)
+            return [];
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT TOP (@Take) Id, CustomerId, Password, PasswordFormatId, PasswordSalt, CreatedOnUtc FROM CustomerPassword WHERE CustomerId = @CustomerId ORDER BY CreatedOnUtc DESC, Id DESC";
+        command.Parameters.AddWithValue("@Take", take);
+        command.Parameters.AddWithValue("@CustomerId", customerId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var passwords = new List<CustomerPassword>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            passwords.Add(new CustomerPassword
+            {
+                Id = reader.GetInt32(0), CustomerId = reader.GetInt32(1), Password = reader.GetString(2),
+                PasswordFormat = (PasswordFormat)reader.GetInt32(3), PasswordSalt = reader.IsDBNull(4) ? null : reader.GetString(4),
+                CreatedOnUtc = reader.GetDateTime(5)
+            });
+        }
+
+        return passwords;
+    }
+
     public async Task<int> CreateCustomerAsync(Customer customer, CustomerPassword password, CancellationToken cancellationToken)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await using var customerCommand = connection.CreateCommand();
         customerCommand.Transaction = (SqlTransaction)transaction;
-        customerCommand.CommandText = "INSERT INTO Customer (CustomerGuid, Email, Username, Active, Deleted, FailedLoginAttempts, RequireReLogin, CreatedOnUtc) OUTPUT INSERTED.Id VALUES (@CustomerGuid, @Email, @Username, @Active, @Deleted, @FailedLoginAttempts, @RequireReLogin, @CreatedOnUtc)";
+        customerCommand.CommandText = "INSERT INTO Customer (CustomerGuid, Email, Username, EmailVerified, EmailOtpEnabled, Active, Deleted, FailedLoginAttempts, RequireReLogin, CreatedOnUtc) OUTPUT INSERTED.Id VALUES (@CustomerGuid, @Email, @Username, @EmailVerified, @EmailOtpEnabled, @Active, @Deleted, @FailedLoginAttempts, @RequireReLogin, @CreatedOnUtc)";
         customerCommand.Parameters.AddWithValue("@CustomerGuid", customer.CustomerGuid);
         customerCommand.Parameters.AddWithValue("@Email", customer.Email);
         customerCommand.Parameters.AddWithValue("@Username", (object?)customer.Username ?? DBNull.Value);
+        customerCommand.Parameters.AddWithValue("@EmailVerified", customer.EmailVerified);
+        customerCommand.Parameters.AddWithValue("@EmailOtpEnabled", customer.EmailOtpEnabled);
         customerCommand.Parameters.AddWithValue("@Active", customer.Active);
         customerCommand.Parameters.AddWithValue("@Deleted", customer.Deleted);
         customerCommand.Parameters.AddWithValue("@FailedLoginAttempts", customer.FailedLoginAttempts);
@@ -87,7 +114,10 @@ public sealed class SqlCustomerIdentityStore(IOptions<DatabaseOptions> databaseO
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandText = "UPDATE Customer SET FailedLoginAttempts = @FailedLoginAttempts, CannotLoginUntilDateUtc = @CannotLoginUntilDateUtc, RequireReLogin = @RequireReLogin, LastLoginDateUtc = @LastLoginDateUtc WHERE Id = @Id";
+        command.CommandText = "UPDATE Customer SET EmailVerified = @EmailVerified, EmailVerifiedOnUtc = @EmailVerifiedOnUtc, EmailOtpEnabled = @EmailOtpEnabled, FailedLoginAttempts = @FailedLoginAttempts, CannotLoginUntilDateUtc = @CannotLoginUntilDateUtc, RequireReLogin = @RequireReLogin, LastLoginDateUtc = @LastLoginDateUtc WHERE Id = @Id";
+        command.Parameters.AddWithValue("@EmailVerified", customer.EmailVerified);
+        command.Parameters.AddWithValue("@EmailVerifiedOnUtc", (object?)customer.EmailVerifiedOnUtc ?? DBNull.Value);
+        command.Parameters.AddWithValue("@EmailOtpEnabled", customer.EmailOtpEnabled);
         command.Parameters.AddWithValue("@FailedLoginAttempts", customer.FailedLoginAttempts);
         command.Parameters.AddWithValue("@CannotLoginUntilDateUtc", (object?)customer.CannotLoginUntilDateUtc ?? DBNull.Value);
         command.Parameters.AddWithValue("@RequireReLogin", customer.RequireReLogin);
@@ -141,6 +171,69 @@ public sealed class SqlCustomerIdentityStore(IOptions<DatabaseOptions> databaseO
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    public async Task ChangePasswordAsync(Customer customer, CustomerPassword password, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
+
+        await using var passwordCommand = connection.CreateCommand();
+        passwordCommand.Transaction = transaction;
+        passwordCommand.CommandText = "INSERT INTO CustomerPassword (CustomerId, Password, PasswordFormatId, PasswordSalt, CreatedOnUtc) VALUES (@CustomerId, @Password, @PasswordFormatId, @PasswordSalt, @CreatedOnUtc)";
+        passwordCommand.Parameters.AddWithValue("@CustomerId", customer.Id);
+        passwordCommand.Parameters.AddWithValue("@Password", password.Password);
+        passwordCommand.Parameters.AddWithValue("@PasswordFormatId", (int)password.PasswordFormat);
+        passwordCommand.Parameters.AddWithValue("@PasswordSalt", (object?)password.PasswordSalt ?? DBNull.Value);
+        passwordCommand.Parameters.AddWithValue("@CreatedOnUtc", password.CreatedOnUtc);
+        await passwordCommand.ExecuteNonQueryAsync(cancellationToken);
+
+        await using var customerCommand = connection.CreateCommand();
+        customerCommand.Transaction = transaction;
+        customerCommand.CommandText = "UPDATE Customer SET RequireReLogin = @RequireReLogin WHERE Id = @Id";
+        customerCommand.Parameters.AddWithValue("@RequireReLogin", customer.RequireReLogin);
+        customerCommand.Parameters.AddWithValue("@Id", customer.Id);
+        await customerCommand.ExecuteNonQueryAsync(cancellationToken);
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task<bool> ResetPasswordWithRecoveryTokenAsync(string tokenHash, DateTime nowUtc, CustomerPassword password, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
+
+        await using var consumeCommand = connection.CreateCommand();
+        consumeCommand.Transaction = transaction;
+        consumeCommand.CommandText = "UPDATE PasswordRecoveryToken SET Used = 1 OUTPUT INSERTED.CustomerId WHERE TokenHash = @TokenHash AND Used = 0 AND ExpiresOnUtc > @NowUtc";
+        consumeCommand.Parameters.AddWithValue("@TokenHash", tokenHash);
+        consumeCommand.Parameters.AddWithValue("@NowUtc", nowUtc);
+        var customerIdValue = await consumeCommand.ExecuteScalarAsync(cancellationToken);
+        if (customerIdValue is null)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return false;
+        }
+
+        var customerId = (int)customerIdValue;
+        await using var passwordCommand = connection.CreateCommand();
+        passwordCommand.Transaction = transaction;
+        passwordCommand.CommandText = "INSERT INTO CustomerPassword (CustomerId, Password, PasswordFormatId, PasswordSalt, CreatedOnUtc) VALUES (@CustomerId, @Password, @PasswordFormatId, @PasswordSalt, @CreatedOnUtc)";
+        passwordCommand.Parameters.AddWithValue("@CustomerId", customerId);
+        passwordCommand.Parameters.AddWithValue("@Password", password.Password);
+        passwordCommand.Parameters.AddWithValue("@PasswordFormatId", (int)password.PasswordFormat);
+        passwordCommand.Parameters.AddWithValue("@PasswordSalt", (object?)password.PasswordSalt ?? DBNull.Value);
+        passwordCommand.Parameters.AddWithValue("@CreatedOnUtc", password.CreatedOnUtc);
+        await passwordCommand.ExecuteNonQueryAsync(cancellationToken);
+
+        await using var customerCommand = connection.CreateCommand();
+        customerCommand.Transaction = transaction;
+        customerCommand.CommandText = "UPDATE Customer SET RequireReLogin = 1 WHERE Id = @CustomerId";
+        customerCommand.Parameters.AddWithValue("@CustomerId", customerId);
+        await customerCommand.ExecuteNonQueryAsync(cancellationToken);
+
+        await transaction.CommitAsync(cancellationToken);
+        return true;
+    }
+
     public async Task<IReadOnlySet<string>> GetPermissionCodesAsync(int customerId, CancellationToken cancellationToken)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
@@ -164,8 +257,10 @@ public sealed class SqlCustomerIdentityStore(IOptions<DatabaseOptions> databaseO
     private static Customer ReadCustomer(SqlDataReader reader) => new()
     {
         Id = reader.GetInt32(0), CustomerGuid = reader.GetGuid(1), Email = reader.GetString(2),
-        Username = reader.IsDBNull(3) ? null : reader.GetString(3), Active = reader.GetBoolean(4), Deleted = reader.GetBoolean(5),
-        FailedLoginAttempts = reader.GetInt32(6), CannotLoginUntilDateUtc = reader.IsDBNull(7) ? null : reader.GetDateTime(7),
-        RequireReLogin = reader.GetBoolean(8), CreatedOnUtc = reader.GetDateTime(9), LastLoginDateUtc = reader.IsDBNull(10) ? null : reader.GetDateTime(10)
+        Username = reader.IsDBNull(3) ? null : reader.GetString(3), EmailVerified = reader.GetBoolean(4),
+        EmailVerifiedOnUtc = reader.IsDBNull(5) ? null : reader.GetDateTime(5), EmailOtpEnabled = reader.GetBoolean(6),
+        Active = reader.GetBoolean(7), Deleted = reader.GetBoolean(8), FailedLoginAttempts = reader.GetInt32(9),
+        CannotLoginUntilDateUtc = reader.IsDBNull(10) ? null : reader.GetDateTime(10), RequireReLogin = reader.GetBoolean(11),
+        CreatedOnUtc = reader.GetDateTime(12), LastLoginDateUtc = reader.IsDBNull(13) ? null : reader.GetDateTime(13)
     };
 }

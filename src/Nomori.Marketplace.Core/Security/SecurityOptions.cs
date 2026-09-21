@@ -20,4 +20,20 @@ public sealed class SecurityOptions
     public int LockoutMinutes { get; init; } = 15;
 
     public int RecoveryTokenLifetimeMinutes { get; init; } = 30;
+
+    public int MinimumPasswordLength { get; init; } = 12;
+
+    public int PasswordHistoryLimit { get; init; } = 5;
+
+    public int SessionLifetimeMinutes { get; init; } = 60;
+
+    public int RememberMeLifetimeDays { get; init; } = 30;
+
+    public int EmailVerificationTokenLifetimeHours { get; init; } = 24;
+
+    public int EmailOtpLifetimeMinutes { get; init; } = 10;
+
+    public int EmailOtpMaxAttempts { get; init; } = 5;
+
+    public int EmailOtpResendDelaySeconds { get; init; } = 60;
 }
