@@ -85,6 +85,33 @@ public sealed class AuthenticationServiceTests
         Assert.Contains($"/auth/reset-password?token={Uri.EscapeDataString(token!)}", sender.Message.HtmlBody);
     }
 
+    [Fact]
+    public async Task CurrentUserValidatorAllowsCustomerWithoutLockoutDate()
+    {
+        var store = new InMemoryCustomerIdentityStore();
+        await CreateService(store).RegisterAsync(
+            new RegisterCustomerCommand("user@example.test", "Password!123"), CancellationToken.None);
+
+        var isValid = await new CurrentUserValidator(store, new FixedClock())
+            .IsValidAsync(1, CancellationToken.None);
+
+        Assert.True(isValid);
+    }
+
+    [Fact]
+    public async Task CurrentUserValidatorRejectsCustomerDuringLockout()
+    {
+        var store = new InMemoryCustomerIdentityStore();
+        await CreateService(store).RegisterAsync(
+            new RegisterCustomerCommand("user@example.test", "Password!123"), CancellationToken.None);
+        store.Customer!.CannotLoginUntilDateUtc = new DateTime(2026, 1, 1, 0, 1, 0, DateTimeKind.Utc);
+
+        var isValid = await new CurrentUserValidator(store, new FixedClock())
+            .IsValidAsync(1, CancellationToken.None);
+
+        Assert.False(isValid);
+    }
+
     private static AuthenticationService CreateService(
         InMemoryCustomerIdentityStore store,
         IEmailSender? emailSender = null,

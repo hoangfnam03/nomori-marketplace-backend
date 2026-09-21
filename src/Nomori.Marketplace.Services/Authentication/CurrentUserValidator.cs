@@ -15,6 +15,7 @@ public sealed class CurrentUserValidator(
             && customer.Active
             && !customer.Deleted
             && !customer.RequireReLogin
-            && customer.CannotLoginUntilDateUtc <= clock.UtcNow;
+            && (customer.CannotLoginUntilDateUtc is null
+                || customer.CannotLoginUntilDateUtc <= clock.UtcNow);
     }
 }
