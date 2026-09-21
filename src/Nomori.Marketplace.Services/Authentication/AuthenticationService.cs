@@ -3,8 +3,10 @@ using Nomori.Marketplace.Core.Domain.Customers;
 using Nomori.Marketplace.Core.Time;
 using Microsoft.Extensions.Options;
 using Nomori.Marketplace.Core.Security;
+using Nomori.Marketplace.Core.Email;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Encodings.Web;
 
 namespace Nomori.Marketplace.Services.Authentication;
 
@@ -38,7 +40,9 @@ public sealed class AuthenticationService(
     ICustomerIdentityStore customerStore,
     IPasswordHasher passwordHasher,
     IClock clock,
-    IOptions<SecurityOptions> securityOptions) : IAuthenticationService
+    IOptions<SecurityOptions> securityOptions,
+    IEmailSender emailSender,
+    IOptions<EmailOptions> emailOptions) : IAuthenticationService
 {
     public async Task<AuthenticationResult> RegisterAsync(RegisterCustomerCommand command, CancellationToken cancellationToken)
     {
@@ -118,6 +122,22 @@ public sealed class AuthenticationService(
         var tokenHash = HashToken(token);
         await customerStore.CreateRecoveryTokenAsync(customer.Id, tokenHash,
             clock.UtcNow.AddMinutes(securityOptions.Value.RecoveryTokenLifetimeMinutes), cancellationToken);
+
+        if (emailOptions.Value.Enabled)
+        {
+            var resetLink = BuildPasswordResetLink(token);
+            var encodedResetLink = HtmlEncoder.Default.Encode(resetLink);
+            await emailSender.SendEmailAsync(
+                new EmailMessage(
+                    customer.Email,
+                    emailOptions.Value.PasswordRecoverySubject,
+                    $"<p>We received a request to reset your Nomori Marketplace password.</p>" +
+                    $"<p><a href=\"{encodedResetLink}\">Reset your password</a></p>" +
+                    $"<p>This link expires in {securityOptions.Value.RecoveryTokenLifetimeMinutes} minutes and can only be used once.</p>",
+                    $"Reset your Nomori Marketplace password: {resetLink}"),
+                cancellationToken);
+        }
+
         return token;
     }
 
@@ -139,4 +159,13 @@ public sealed class AuthenticationService(
     }
 
     private static string HashToken(string token) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
+
+    private string BuildPasswordResetLink(string token)
+    {
+        var frontendBaseUrl = emailOptions.Value.FrontendBaseUrl.TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(frontendBaseUrl))
+            throw new InvalidOperationException("Email:FrontendBaseUrl must be configured when email delivery is enabled.");
+
+        return $"{frontendBaseUrl}/auth/reset-password?token={Uri.EscapeDataString(token)}";
+    }
 }

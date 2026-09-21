@@ -8,7 +8,9 @@ using Nomori.Marketplace.Web.Framework.Security;
 using Nomori.Marketplace.Services.Authentication;
 using Nomori.Marketplace.Core.Time;
 using Nomori.Marketplace.Core.Security;
+using Nomori.Marketplace.Core.Email;
 using Nomori.Marketplace.Services.Security;
+using Nomori.Marketplace.Services.Email;
 using Microsoft.OpenApi;
 using System.Threading.RateLimiting;
 
@@ -45,6 +47,8 @@ builder.Services.AddOptions<DatabaseOptions>()
     .Bind(builder.Configuration.GetSection(DatabaseOptions.SectionName));
 builder.Services.AddOptions<CorsOptions>()
     .Bind(builder.Configuration.GetSection(CorsOptions.SectionName));
+builder.Services.AddOptions<EmailOptions>()
+    .Bind(builder.Configuration.GetSection(EmailOptions.SectionName));
 
 builder.Services.AddControllersWithViews();
 builder.Services.AddOpenApi(options =>
@@ -98,6 +102,8 @@ builder.Services.AddNomoriSecurity(builder.Configuration, builder.Environment);
 builder.Services.AddSingleton<IClock, SystemClock>();
 builder.Services.AddScoped<IPasswordHasher, PasswordHasher>();
 builder.Services.AddScoped<IAuthenticationService, AuthenticationService>();
+builder.Services.AddScoped<ISmtpBuilder, SmtpBuilder>();
+builder.Services.AddScoped<IEmailSender, SmtpEmailSender>();
 builder.Services.AddScoped<IPermissionService, PermissionService>();
 builder.Services.AddSingleton<Nomori.Marketplace.Services.ApplicationInfo.IApplicationInfoService, Nomori.Marketplace.Services.ApplicationInfo.ApplicationInfoService>();
 builder.Services.AddNomoriHealthChecks();
