@@ -10,6 +10,12 @@ public sealed class Customer : BaseEntity
 
     public string? Username { get; set; }
 
+    public bool EmailVerified { get; set; }
+
+    public DateTime? EmailVerifiedOnUtc { get; set; }
+
+    public bool EmailOtpEnabled { get; set; }
+
     public bool Active { get; set; } = true;
 
     public bool Deleted { get; set; }

@@ -2,7 +2,7 @@
 
 ## Status
 
-Backend MVP implemented. Angular integration is in progress; password-recovery email delivery is implemented through SMTP. MFA and external login are deferred.
+Backend and Angular MVP implemented. Cookie sessions are revalidated against customer state, password policy/history are enforced, email verification and email OTP are available, password recovery email delivery is implemented through SMTP, and security events are persisted to the Nomori audit log. External login is deferred.
 
 ## Business flow
 
@@ -10,8 +10,11 @@ Backend MVP implemented. Angular integration is in progress; password-recovery e
 2. The customer is assigned to the seeded `Registered` role.
 3. Login validates account state and password, updates login metadata and issues an HttpOnly cookie.
 4. Session reads the authenticated customer identity from the cookie claims; logout clears the cookie.
-5. Password change and one-time recovery reset create new password records; failed logins use configurable lockout thresholds.
+5. Password change and one-time recovery reset create new password records, reject recent password reuse and invalidate existing sessions; failed logins use configurable lockout thresholds.
 6. Password recovery stores only a hash of the one-time token and sends a reset link through the configured `IEmailSender`.
+7. Registration sends a one-time email verification link. Login is blocked until verification succeeds. The verification token is hashed at rest and expires after 24 hours by default.
+8. Email OTP is opt-in per customer. A six-digit code is hashed at rest, expires after 10 minutes, allows five attempts and can be resent after 60 seconds.
+9. Authentication, verification, OTP, password and role-security events are written to `AuditLog`; secrets are never written to audit details.
 
 ## Database
 
@@ -26,6 +29,8 @@ Migrations:
 - `202609080003 SeedAuthenticationRolesMigration`
 - `202609080004 PasswordRecoveryMigration`
 - `202609080005 PermissionMigration`
+- `202609210001 AuthorizationPermissionMigration`
+- `202609210002 EmailVerificationOtpAuditMigration`
 
 Indexes and constraints include unique customer email/guid, unique role system name, password history index, customer-role composite key and foreign keys.
 
@@ -40,9 +45,18 @@ Indexes and constraints include unique customer email/guid, unique role system n
 - `POST /api/v1/auth/password/change`
 - `POST /api/v1/auth/password/forgot`
 - `POST /api/v1/auth/password/reset`
+- `GET /api/v1/auth/password/policy`
+- `POST /api/v1/auth/email/verification/send`
+- `GET /api/v1/auth/email/verify?token=...`
+- `POST /api/v1/auth/login/otp/verify`
+- `POST /api/v1/auth/otp/setup`
+- `POST /api/v1/auth/otp/enable`
+- `POST /api/v1/auth/otp/disable`
 
 Credentials are not returned or logged. Login failures use a generic `auth.invalid_credentials` error. Cookie authentication is configured in Web Framework.
-State-changing endpoints require the `X-CSRF-TOKEN` header paired with the CSRF cookie. Auth endpoints use a fixed-window IP rate limit.
+State-changing endpoints, including password recovery requests, require the `X-CSRF-TOKEN` header paired with the CSRF cookie. Auth endpoints use a fixed-window IP rate limit.
+
+Cookie sessions are rejected when the customer is inactive/deleted, locked or marked `RequireReLogin`. Session lifetime and remember-me lifetime are configurable under `Authentication`.
 
 ### Email delivery
 
@@ -69,7 +83,7 @@ Email__FrontendBaseUrl=https://marketplace.example.com
 
 For Gmail SMTP, use `smtp.gmail.com:587` with `UseSsl=false` and `UseStartTls=true`. `UseSsl=true` is intended for implicit TLS connections such as port 465. `UseStartTls=false` should only be used with a local SMTP capture server.
 
-Development keeps email disabled and returns the token in the development response. To test actual delivery locally, run an SMTP capture server such as Mailpit, set `Email:Enabled` to `true`, use its SMTP port, and open the reset link from the captured message.
+Development can return verification, recovery and OTP values in the development response when email delivery is disabled. To test actual delivery locally, run an SMTP capture server such as Mailpit, set `Email:Enabled` to `true`, use its SMTP port, and open the captured verification/reset link or copy the captured OTP.
 
 ## Tests and validation
 
@@ -203,6 +217,7 @@ First request a recovery token:
 ```http
 POST /api/v1/auth/password/forgot
 Content-Type: application/json
+X-CSRF-TOKEN: <csrf-token>
 
 {
 	"email": "qa.auth@example.test"
@@ -252,6 +267,7 @@ Expected: `204 No Content`, the authentication cookie is cleared, and a subseque
 
 ## Deferred work
 
-- Fine-grained permission attributes/policies on future module endpoints
-- Email verification, MFA, OTP and external authentication
-- Angular auth facade/forms/guards
+- Feature-specific permission catalog entries are owned by each future module; the MVP authorization policy boundary is documented in `authorization.md`.
+- External authentication.
+- Resource-level/store-level authorization and distributed permission caching.
+- Generated TypeScript client from OpenAPI.

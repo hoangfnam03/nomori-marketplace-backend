@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using Nomori.Marketplace.Core.Security;
 using Nomori.Marketplace.Core.Domain.Customers;
 
@@ -20,6 +21,9 @@ public static class NomoriSecurityExtensions
         services.AddHttpContextAccessor();
         services.AddScoped<ICurrentUser, HttpCurrentUser>();
         services.AddScoped<IAuthenticationSession, HttpAuthenticationSession>();
+        services.AddScoped<NomoriCookieValidationEvents>();
+        services.AddSingleton<IAuthorizationPolicyProvider, PermissionAuthorizationPolicyProvider>();
+        services.AddScoped<IAuthorizationHandler, PermissionAuthorizationHandler>();
         services.AddDataProtection();
         services.AddAuthentication(options =>
             {
@@ -32,21 +36,16 @@ public static class NomoriSecurityExtensions
                 var securityOptions = configuration.GetSection(SecurityOptions.SectionName).Get<SecurityOptions>() ?? new SecurityOptions();
                 options.Cookie.Name = securityOptions.CookieName;
                 options.Cookie.HttpOnly = true;
+                options.Cookie.IsEssential = true;
+                options.Cookie.SameSite = SameSiteMode.Lax;
                 options.Cookie.SecurePolicy = environment.IsDevelopment()
                     ? CookieSecurePolicy.None
                     : CookieSecurePolicy.Always;
+                options.ExpireTimeSpan = TimeSpan.FromMinutes(securityOptions.SessionLifetimeMinutes);
+                options.SlidingExpiration = true;
+                options.EventsType = typeof(NomoriCookieValidationEvents);
                 options.LoginPath = securityOptions.LoginPath;
                 options.AccessDeniedPath = securityOptions.AccessDeniedPath;
-                options.Events.OnRedirectToLogin = context =>
-                {
-                    context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                    return Task.CompletedTask;
-                };
-                options.Events.OnRedirectToAccessDenied = context =>
-                {
-                    context.Response.StatusCode = StatusCodes.Status403Forbidden;
-                    return Task.CompletedTask;
-                };
             });
         services.AddAuthorization();
 
@@ -69,7 +68,9 @@ public static class NomoriSecurityExtensions
         public string? Email => httpContextAccessor.HttpContext?.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value;
     }
 
-    private sealed class HttpAuthenticationSession(IHttpContextAccessor httpContextAccessor) : IAuthenticationSession
+    private sealed class HttpAuthenticationSession(
+        IHttpContextAccessor httpContextAccessor,
+        IOptions<SecurityOptions> securityOptions) : IAuthenticationSession
     {
         public async Task SignInAsync(Customer customer, bool rememberMe, CancellationToken cancellationToken)
         {
@@ -82,7 +83,10 @@ public static class NomoriSecurityExtensions
             await httpContextAccessor.HttpContext!.SignInAsync("NomoriCookie", new System.Security.Claims.ClaimsPrincipal(identity), new AuthenticationProperties
             {
                 IsPersistent = rememberMe,
-                IssuedUtc = DateTimeOffset.UtcNow
+                IssuedUtc = DateTimeOffset.UtcNow,
+                ExpiresUtc = DateTimeOffset.UtcNow.Add(rememberMe
+                    ? TimeSpan.FromDays(securityOptions.Value.RememberMeLifetimeDays)
+                    : TimeSpan.FromMinutes(securityOptions.Value.SessionLifetimeMinutes))
             });
         }
 

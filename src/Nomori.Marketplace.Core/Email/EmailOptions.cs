@@ -25,4 +25,8 @@ public sealed class EmailOptions
     public string FrontendBaseUrl { get; init; } = string.Empty;
 
     public string PasswordRecoverySubject { get; init; } = "Reset your Nomori Marketplace password";
+
+    public string EmailVerificationSubject { get; init; } = "Verify your Nomori Marketplace email";
+
+    public string EmailOtpSubject { get; init; } = "Your Nomori Marketplace verification code";
 }

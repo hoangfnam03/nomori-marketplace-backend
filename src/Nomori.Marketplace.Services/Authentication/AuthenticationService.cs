@@ -39,6 +39,7 @@ public interface IAuthenticationService
 public sealed class AuthenticationService(
     ICustomerIdentityStore customerStore,
     IPasswordHasher passwordHasher,
+    IPasswordPolicy passwordPolicy,
     IClock clock,
     IOptions<SecurityOptions> securityOptions,
     IEmailSender emailSender,
@@ -49,6 +50,9 @@ public sealed class AuthenticationService(
         var email = command.Email.Trim().ToLowerInvariant();
         if (await customerStore.FindByEmailAsync(email, cancellationToken) is not null)
             return new AuthenticationResult(null, CustomerIdentityErrors.EmailAlreadyExists);
+
+        if (passwordPolicy.Validate(command.Password).Count > 0)
+            return new AuthenticationResult(null, CustomerIdentityErrors.PasswordPolicy);
 
         var passwordResult = passwordHasher.HashPassword(command.Password);
         var customer = new Customer { Email = email, CreatedOnUtc = clock.UtcNow };
@@ -87,8 +91,12 @@ public sealed class AuthenticationService(
             return new AuthenticationResult(null, CustomerIdentityErrors.InvalidCredentials);
         }
 
+        if (!customer.EmailVerified)
+            return new AuthenticationResult(null, CustomerIdentityErrors.EmailNotVerified);
+
         customer.FailedLoginAttempts = 0;
         customer.CannotLoginUntilDateUtc = null;
+        customer.RequireReLogin = false;
         customer.LastLoginDateUtc = clock.UtcNow;
         await customerStore.UpdateCustomerAsync(customer, cancellationToken);
         return new AuthenticationResult(customer, null);
@@ -101,14 +109,22 @@ public sealed class AuthenticationService(
         if (customer is null || currentPassword is null || !passwordHasher.Verify(command.CurrentPassword, currentPassword))
             return CustomerIdentityErrors.InvalidCredentials;
 
+        if (passwordPolicy.Validate(command.NewPassword).Count > 0)
+            return CustomerIdentityErrors.PasswordPolicy;
+
+        var passwordHistory = await customerStore.GetPasswordHistoryAsync(
+            customer.Id, securityOptions.Value.PasswordHistoryLimit, cancellationToken);
+        if (passwordHistory.Any(previous => passwordHasher.Verify(command.NewPassword, previous)))
+            return CustomerIdentityErrors.PasswordRecentlyUsed;
+
         var hashed = passwordHasher.HashPassword(command.NewPassword);
-        await customerStore.AddPasswordAsync(new CustomerPassword
+        var passwordRecord = new CustomerPassword
         {
             CustomerId = customer.Id, Password = hashed.Hash, PasswordSalt = hashed.Salt,
             CreatedOnUtc = clock.UtcNow
-        }, cancellationToken);
+        };
         customer.RequireReLogin = true;
-        await customerStore.UpdateCustomerAsync(customer, cancellationToken);
+        await customerStore.ChangePasswordAsync(customer, passwordRecord, cancellationToken);
         return null;
     }
 
@@ -148,14 +164,24 @@ public sealed class AuthenticationService(
         if (token is null || token.Value.Used || token.Value.ExpiresOnUtc <= clock.UtcNow)
             return CustomerIdentityErrors.InvalidCredentials;
 
+        var passwordErrors = passwordPolicy.Validate(command.NewPassword);
+        if (passwordErrors.Count > 0)
+            return CustomerIdentityErrors.PasswordPolicy;
+
+        var passwordHistory = await customerStore.GetPasswordHistoryAsync(
+            token.Value.CustomerId, securityOptions.Value.PasswordHistoryLimit, cancellationToken);
+        if (passwordHistory.Any(previous => passwordHasher.Verify(command.NewPassword, previous)))
+            return CustomerIdentityErrors.PasswordRecentlyUsed;
+
         var hashed = passwordHasher.HashPassword(command.NewPassword);
-        await customerStore.AddPasswordAsync(new CustomerPassword
+        var password = new CustomerPassword
         {
             CustomerId = token.Value.CustomerId, Password = hashed.Hash, PasswordSalt = hashed.Salt,
             CreatedOnUtc = clock.UtcNow
-        }, cancellationToken);
-        await customerStore.MarkRecoveryTokenUsedAsync(tokenHash, cancellationToken);
-        return null;
+        };
+        return await customerStore.ResetPasswordWithRecoveryTokenAsync(tokenHash, clock.UtcNow, password, cancellationToken)
+            ? null
+            : CustomerIdentityErrors.InvalidCredentials;
     }
 
     private static string HashToken(string token) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));

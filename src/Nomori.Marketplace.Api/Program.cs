@@ -7,6 +7,7 @@ using Nomori.Marketplace.Data.Configuration;
 using Nomori.Marketplace.Web.Framework.Security;
 using Nomori.Marketplace.Services.Authentication;
 using Nomori.Marketplace.Core.Time;
+using Nomori.Marketplace.Core.Customers;
 using Nomori.Marketplace.Core.Security;
 using Nomori.Marketplace.Core.Email;
 using Nomori.Marketplace.Services.Security;
@@ -71,7 +72,14 @@ builder.Services.AddOpenApi(options =>
             "/api/v1/auth/login",
             "/api/v1/auth/logout",
             "/api/v1/auth/password/change",
-            "/api/v1/auth/password/reset"
+            "/api/v1/auth/password/forgot",
+            "/api/v1/auth/password/reset",
+            "/api/v1/auth/email/verification/send",
+            "/api/v1/auth/login/otp/verify",
+            "/api/v1/auth/otp/setup",
+            "/api/v1/auth/otp/enable",
+            "/api/v1/auth/otp/disable",
+            "/api/v1/admin/authorization/customers/{customerId}/roles"
         };
         foreach (var (path, pathItem) in document.Paths)
         {
@@ -101,10 +109,16 @@ builder.Services.AddNomoriData(builder.Configuration);
 builder.Services.AddNomoriSecurity(builder.Configuration, builder.Environment);
 builder.Services.AddSingleton<IClock, SystemClock>();
 builder.Services.AddScoped<IPasswordHasher, PasswordHasher>();
+builder.Services.AddScoped<IPasswordPolicy, PasswordPolicy>();
 builder.Services.AddScoped<IAuthenticationService, AuthenticationService>();
+builder.Services.AddScoped<IEmailVerificationService, EmailVerificationService>();
+builder.Services.AddScoped<IEmailOtpService, EmailOtpService>();
+builder.Services.AddScoped<ICurrentUserValidator, CurrentUserValidator>();
 builder.Services.AddScoped<ISmtpBuilder, SmtpBuilder>();
 builder.Services.AddScoped<IEmailSender, SmtpEmailSender>();
 builder.Services.AddScoped<IPermissionService, PermissionService>();
+builder.Services.AddScoped<IAuthorizationManagementService, AuthorizationManagementService>();
+builder.Services.AddScoped<IAuditLogService, AuditLogService>();
 builder.Services.AddSingleton<Nomori.Marketplace.Services.ApplicationInfo.IApplicationInfoService, Nomori.Marketplace.Services.ApplicationInfo.ApplicationInfoService>();
 builder.Services.AddNomoriHealthChecks();
 builder.Services.AddCors(options =>

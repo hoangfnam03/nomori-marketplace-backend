@@ -12,6 +12,11 @@ public interface ICurrentUser
     string? Email { get; }
 }
 
+public interface ICurrentUserValidator
+{
+    Task<bool> IsValidAsync(int customerId, CancellationToken cancellationToken);
+}
+
 public interface IAuthenticationSession
 {
     Task SignInAsync(Domain.Customers.Customer customer, bool rememberMe, CancellationToken cancellationToken);
