@@ -3,10 +3,14 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Nomori.Marketplace.Core.Configuration;
+using Nomori.Marketplace.Core.Catalog;
 using Nomori.Marketplace.Core.Customers;
 using Nomori.Marketplace.Core.Security;
+using Nomori.Marketplace.Core.Vendors;
+using Nomori.Marketplace.Data.Catalog;
 using Nomori.Marketplace.Data.Customers;
 using Nomori.Marketplace.Data.Security;
+using Nomori.Marketplace.Data.Vendors;
 
 namespace Nomori.Marketplace.Data.Configuration;
 
@@ -23,6 +27,10 @@ public static class DatabaseRegistrationExtensions
         services.AddScoped<IEmailOtpStore, SqlEmailOtpStore>();
         services.AddScoped<IAuthorizationStore, SqlAuthorizationStore>();
         services.AddScoped<IAuditLogStore, SqlAuditLogStore>();
+        services.AddScoped<ICategoryStore, SqlCategoryStore>();
+        services.AddScoped<IManufacturerStore, SqlManufacturerStore>();
+        services.AddScoped<IProductStore, SqlProductStore>();
+        services.AddScoped<IVendorStore, SqlVendorStore>();
 
         var databaseOptions = configuration.GetSection(DatabaseOptions.SectionName).Get<DatabaseOptions>() ?? new DatabaseOptions();
         if (!string.Equals(databaseOptions.Provider, "SqlServer", StringComparison.OrdinalIgnoreCase))

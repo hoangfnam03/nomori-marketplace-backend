@@ -24,4 +24,9 @@ public static class PermissionCodes
     public const string CustomerAddressManage = "customer.address.manage";
     public const string CustomerAttributesManage = "customer.attributes.manage";
     public const string CustomerEmailChange = "customer.email.change";
+
+    public const string CatalogManage = "catalog.manage";
+
+    public const string VendorManage = "vendor.manage";
+    public const string VendorPortal = "vendor.portal";
 }
