@@ -131,6 +131,8 @@ builder.Services.AddScoped<ICustomerAccountDataService, CustomerAccountDataServi
 builder.Services.AddScoped<ICategoryService, CategoryService>();
 builder.Services.AddScoped<IManufacturerService, ManufacturerService>();
 builder.Services.AddScoped<IProductService, ProductService>();
+builder.Services.AddScoped<IProductAttributeService, ProductAttributeService>();
+builder.Services.AddScoped<ISpecificationAttributeService, SpecificationAttributeService>();
 builder.Services.AddScoped<IVendorService, VendorService>();
 builder.Services.AddSingleton<Nomori.Marketplace.Services.ApplicationInfo.IApplicationInfoService, Nomori.Marketplace.Services.ApplicationInfo.ApplicationInfoService>();
 builder.Services.AddNomoriHealthChecks();
