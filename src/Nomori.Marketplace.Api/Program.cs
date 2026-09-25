@@ -11,6 +11,10 @@ using Nomori.Marketplace.Core.Customers;
 using Nomori.Marketplace.Core.Security;
 using Nomori.Marketplace.Core.Email;
 using Nomori.Marketplace.Services.Security;
+using Nomori.Marketplace.Core.Catalog;
+using Nomori.Marketplace.Core.Vendors;
+using Nomori.Marketplace.Services.Catalog;
+using Nomori.Marketplace.Services.Vendors;
 using Nomori.Marketplace.Services.Customers;
 using Nomori.Marketplace.Services.Email;
 using Microsoft.OpenApi;
@@ -124,6 +128,10 @@ builder.Services.AddScoped<IAuthorizationManagementService, AuthorizationManagem
 builder.Services.AddScoped<IAuditLogService, AuditLogService>();
 builder.Services.AddScoped<ICustomerProfileService, CustomerProfileService>();
 builder.Services.AddScoped<ICustomerAccountDataService, CustomerAccountDataService>();
+builder.Services.AddScoped<ICategoryService, CategoryService>();
+builder.Services.AddScoped<IManufacturerService, ManufacturerService>();
+builder.Services.AddScoped<IProductService, ProductService>();
+builder.Services.AddScoped<IVendorService, VendorService>();
 builder.Services.AddSingleton<Nomori.Marketplace.Services.ApplicationInfo.IApplicationInfoService, Nomori.Marketplace.Services.ApplicationInfo.ApplicationInfoService>();
 builder.Services.AddNomoriHealthChecks();
 builder.Services.AddCors(options =>
