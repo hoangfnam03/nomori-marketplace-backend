@@ -7,6 +7,7 @@
 | **Cập nhật** | 2026-09-26 |
 | **Thiết kế kỹ thuật** | [vendors.vi.md](vendors.vi.md) / [vendors.md](vendors.md) |
 | **Thiết kế API** | [vendors-api.md](vendors-api.md) |
+| **Module tiếp theo** | [Cài đặt shop](vendor-shop-settings-prd.md) → [Sản phẩm vendor](vendor-products-prd.md) → [Đơn hàng vendor](vendor-orders-prd.md) → [Đối soát và hoa hồng](vendor-settlement-prd.md) |
 
 ---
 
