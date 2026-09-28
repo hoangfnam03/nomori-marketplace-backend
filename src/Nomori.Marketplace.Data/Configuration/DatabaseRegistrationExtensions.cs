@@ -1,9 +1,8 @@
 using FluentMigrator.Runner;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Options;
-using Nomori.Marketplace.Core.Configuration;
 using Nomori.Marketplace.Core.Catalog;
+using Nomori.Marketplace.Core.Configuration;
 using Nomori.Marketplace.Core.Customers;
 using Nomori.Marketplace.Core.Security;
 using Nomori.Marketplace.Core.Vendors;

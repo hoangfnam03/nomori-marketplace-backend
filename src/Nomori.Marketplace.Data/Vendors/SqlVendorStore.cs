@@ -1,6 +1,5 @@
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Options;
-using Nomori.Marketplace.Core.Catalog;
 using Nomori.Marketplace.Core.Configuration;
 using Nomori.Marketplace.Core.Vendors;
 

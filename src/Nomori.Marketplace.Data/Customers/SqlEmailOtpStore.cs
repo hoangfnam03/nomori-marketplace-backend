@@ -1,8 +1,8 @@
+using System.Security.Cryptography;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Options;
 using Nomori.Marketplace.Core.Configuration;
 using Nomori.Marketplace.Core.Customers;
-using System.Security.Cryptography;
 
 namespace Nomori.Marketplace.Data.Customers;
 

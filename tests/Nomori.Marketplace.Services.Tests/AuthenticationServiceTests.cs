@@ -1,10 +1,10 @@
+using Microsoft.Extensions.Options;
 using Nomori.Marketplace.Core.Customers;
 using Nomori.Marketplace.Core.Domain.Customers;
+using Nomori.Marketplace.Core.Email;
+using Nomori.Marketplace.Core.Security;
 using Nomori.Marketplace.Core.Time;
 using Nomori.Marketplace.Services.Authentication;
-using Microsoft.Extensions.Options;
-using Nomori.Marketplace.Core.Security;
-using Nomori.Marketplace.Core.Email;
 
 namespace Nomori.Marketplace.Services.Tests;
 

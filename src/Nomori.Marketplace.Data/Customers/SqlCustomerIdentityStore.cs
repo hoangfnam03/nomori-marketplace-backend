@@ -40,8 +40,11 @@ public sealed class SqlCustomerIdentityStore(IOptions<DatabaseOptions> databaseO
 
         return new CustomerPassword
         {
-            Id = reader.GetInt32(0), CustomerId = reader.GetInt32(1), Password = reader.GetString(2),
-            PasswordFormat = (PasswordFormat)reader.GetInt32(3), PasswordSalt = reader.IsDBNull(4) ? null : reader.GetString(4),
+            Id = reader.GetInt32(0),
+            CustomerId = reader.GetInt32(1),
+            Password = reader.GetString(2),
+            PasswordFormat = (PasswordFormat)reader.GetInt32(3),
+            PasswordSalt = reader.IsDBNull(4) ? null : reader.GetString(4),
             CreatedOnUtc = reader.GetDateTime(5)
         };
     }
@@ -62,8 +65,11 @@ public sealed class SqlCustomerIdentityStore(IOptions<DatabaseOptions> databaseO
         {
             passwords.Add(new CustomerPassword
             {
-                Id = reader.GetInt32(0), CustomerId = reader.GetInt32(1), Password = reader.GetString(2),
-                PasswordFormat = (PasswordFormat)reader.GetInt32(3), PasswordSalt = reader.IsDBNull(4) ? null : reader.GetString(4),
+                Id = reader.GetInt32(0),
+                CustomerId = reader.GetInt32(1),
+                Password = reader.GetString(2),
+                PasswordFormat = (PasswordFormat)reader.GetInt32(3),
+                PasswordSalt = reader.IsDBNull(4) ? null : reader.GetString(4),
                 CreatedOnUtc = reader.GetDateTime(5)
             });
         }
@@ -256,11 +262,19 @@ public sealed class SqlCustomerIdentityStore(IOptions<DatabaseOptions> databaseO
 
     private static Customer ReadCustomer(SqlDataReader reader) => new()
     {
-        Id = reader.GetInt32(0), CustomerGuid = reader.GetGuid(1), Email = reader.GetString(2),
-        Username = reader.IsDBNull(3) ? null : reader.GetString(3), EmailVerified = reader.GetBoolean(4),
-        EmailVerifiedOnUtc = reader.IsDBNull(5) ? null : reader.GetDateTime(5), EmailOtpEnabled = reader.GetBoolean(6),
-        Active = reader.GetBoolean(7), Deleted = reader.GetBoolean(8), FailedLoginAttempts = reader.GetInt32(9),
-        CannotLoginUntilDateUtc = reader.IsDBNull(10) ? null : reader.GetDateTime(10), RequireReLogin = reader.GetBoolean(11),
-        CreatedOnUtc = reader.GetDateTime(12), LastLoginDateUtc = reader.IsDBNull(13) ? null : reader.GetDateTime(13)
+        Id = reader.GetInt32(0),
+        CustomerGuid = reader.GetGuid(1),
+        Email = reader.GetString(2),
+        Username = reader.IsDBNull(3) ? null : reader.GetString(3),
+        EmailVerified = reader.GetBoolean(4),
+        EmailVerifiedOnUtc = reader.IsDBNull(5) ? null : reader.GetDateTime(5),
+        EmailOtpEnabled = reader.GetBoolean(6),
+        Active = reader.GetBoolean(7),
+        Deleted = reader.GetBoolean(8),
+        FailedLoginAttempts = reader.GetInt32(9),
+        CannotLoginUntilDateUtc = reader.IsDBNull(10) ? null : reader.GetDateTime(10),
+        RequireReLogin = reader.GetBoolean(11),
+        CreatedOnUtc = reader.GetDateTime(12),
+        LastLoginDateUtc = reader.IsDBNull(13) ? null : reader.GetDateTime(13)
     };
 }

@@ -1,12 +1,12 @@
-using Nomori.Marketplace.Core.Customers;
-using Nomori.Marketplace.Core.Domain.Customers;
-using Nomori.Marketplace.Core.Time;
-using Microsoft.Extensions.Options;
-using Nomori.Marketplace.Core.Security;
-using Nomori.Marketplace.Core.Email;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
+using Microsoft.Extensions.Options;
+using Nomori.Marketplace.Core.Customers;
+using Nomori.Marketplace.Core.Domain.Customers;
+using Nomori.Marketplace.Core.Email;
+using Nomori.Marketplace.Core.Security;
+using Nomori.Marketplace.Core.Time;
 
 namespace Nomori.Marketplace.Services.Authentication;
 
@@ -120,7 +120,9 @@ public sealed class AuthenticationService(
         var hashed = passwordHasher.HashPassword(command.NewPassword);
         var passwordRecord = new CustomerPassword
         {
-            CustomerId = customer.Id, Password = hashed.Hash, PasswordSalt = hashed.Salt,
+            CustomerId = customer.Id,
+            Password = hashed.Hash,
+            PasswordSalt = hashed.Salt,
             CreatedOnUtc = clock.UtcNow
         };
         customer.RequireReLogin = true;
@@ -176,7 +178,9 @@ public sealed class AuthenticationService(
         var hashed = passwordHasher.HashPassword(command.NewPassword);
         var password = new CustomerPassword
         {
-            CustomerId = token.Value.CustomerId, Password = hashed.Hash, PasswordSalt = hashed.Salt,
+            CustomerId = token.Value.CustomerId,
+            Password = hashed.Hash,
+            PasswordSalt = hashed.Salt,
             CreatedOnUtc = clock.UtcNow
         };
         return await customerStore.ResetPasswordWithRecoveryTokenAsync(tokenHash, clock.UtcNow, password, cancellationToken)
