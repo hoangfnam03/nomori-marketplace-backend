@@ -1,5 +1,3 @@
-using Nomori.Marketplace.Core.Domain;
-
 namespace Nomori.Marketplace.Core.Domain.Customers;
 
 public sealed class Customer : BaseEntity

@@ -32,12 +32,22 @@ public sealed class ProductAttributePublicController(IProductAttributeService se
             attribute = new { m.Attribute.Id, m.Attribute.Name },
             values = m.Values.Select(v => new
             {
-                v.Id, v.Name, v.ColorSquaresRgb, v.PriceAdjustment, v.IsPreSelected, v.DisplayOrder
+                v.Id,
+                v.Name,
+                v.ColorSquaresRgb,
+                v.PriceAdjustment,
+                v.IsPreSelected,
+                v.DisplayOrder
             })
         }),
         combinations = d.Combinations.Select(c => new
         {
-            c.Id, c.AttributesJson, c.StockQuantity, c.AllowOutOfStockOrders, c.Sku, c.OverriddenPrice
+            c.Id,
+            c.AttributesJson,
+            c.StockQuantity,
+            c.AllowOutOfStockOrders,
+            c.Sku,
+            c.OverriddenPrice
         })
     };
 }

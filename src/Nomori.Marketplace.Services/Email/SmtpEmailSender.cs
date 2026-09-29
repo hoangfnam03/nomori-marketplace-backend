@@ -1,4 +1,3 @@
-using MailKit.Net.Smtp;
 using Microsoft.Extensions.Options;
 using MimeKit;
 using Nomori.Marketplace.Core.Email;

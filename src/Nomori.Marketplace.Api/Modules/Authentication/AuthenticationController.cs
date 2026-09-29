@@ -1,13 +1,13 @@
-using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Antiforgery;
-using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.Options;
 using Nomori.Marketplace.Core.Customers;
 using Nomori.Marketplace.Core.Email;
 using Nomori.Marketplace.Core.Security;
 using Nomori.Marketplace.Services.Authentication;
 using Nomori.Marketplace.Web.Framework.Security;
-using Microsoft.Extensions.Options;
 
 namespace Nomori.Marketplace.Api.Modules.Authentication;
 
