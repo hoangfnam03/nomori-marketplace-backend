@@ -49,7 +49,7 @@ public sealed class CatalogController(
             request.CategoryId, request.ManufacturerId,
             request.MinPrice, request.MaxPrice,
             request.Search, request.Sort,
-            Published: true);
+            Published: true, VendorId: request.VendorId, OnlyActiveShops: true);
         var result = await productService.GetListAsync(query, cancellationToken);
         return Ok(ToPagedResponse(result, ToProductResponse));
     }
@@ -58,7 +58,8 @@ public sealed class CatalogController(
     public async Task<IActionResult> GetProduct(int id, CancellationToken cancellationToken)
     {
         var detail = await productService.GetDetailAsync(id, cancellationToken);
-        if (detail is null || !detail.Product.Published) return NotFound();
+        // Products of deactivated or deleted shops are not public.
+        if (detail is null || !detail.Product.Published || !detail.Product.VendorActive) return NotFound();
         return Ok(new ProductDetailResponse(
             ToProductResponse(detail.Product),
             detail.Product.FullDescription,
@@ -94,7 +95,7 @@ public sealed class CatalogController(
         new(node.Id, node.Name, node.ParentCategoryId, node.DisplayOrder, node.Children.Select(ToTreeNodeResponse).ToList());
 
     private static ProductResponse ToProductResponse(Product p) =>
-        new(p.Id, p.Name, p.ShortDescription, p.Price, p.OldPrice, p.StockQuantity, p.ShowOnHomepage, p.DisplayOrder, p.CreatedOnUtc);
+        new(p.Id, p.Name, p.ShortDescription, p.Price, p.OldPrice, p.StockQuantity, p.ShowOnHomepage, p.DisplayOrder, p.CreatedOnUtc, p.VendorId, p.VendorName);
 
     private static ManufacturerResponse ToManufacturerResponse(Manufacturer m) =>
         new(m.Id, m.Name, m.Description, m.PictureId, m.DisplayOrder);
@@ -105,7 +106,8 @@ public sealed record ProductListRequest(
     int? CategoryId = null, int? ManufacturerId = null,
     decimal? MinPrice = null, decimal? MaxPrice = null,
     string? Search = null,
-    ProductSortOrder Sort = ProductSortOrder.DisplayOrder);
+    ProductSortOrder Sort = ProductSortOrder.DisplayOrder,
+    int? VendorId = null);
 
 public sealed record CatalogPagedResponse<T>(
     IReadOnlyList<T> Items,
@@ -126,7 +128,8 @@ public sealed record CategoryTreeNodeResponse(
 public sealed record ProductResponse(
     int Id, string Name, string? ShortDescription,
     decimal Price, decimal OldPrice, int StockQuantity,
-    bool ShowOnHomepage, int DisplayOrder, DateTime CreatedOnUtc);
+    bool ShowOnHomepage, int DisplayOrder, DateTime CreatedOnUtc,
+    int VendorId, string? VendorName);
 
 public sealed record ProductDetailResponse(
     ProductResponse Product, string? FullDescription,

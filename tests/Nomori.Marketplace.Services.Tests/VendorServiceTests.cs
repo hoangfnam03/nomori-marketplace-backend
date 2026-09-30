@@ -12,7 +12,9 @@ public sealed class VendorServiceTests
         var audit = new RecordingAuditLog();
         var service = new VendorService(store, new FakeMediaStore(), audit, new TestClock());
 
-        Assert.True(await service.DeleteAsync(5, 1, CancellationToken.None));
+        store.Vendors.Add(new Vendor { Id = 5, Name = "Shop" });
+
+        Assert.True((await service.DeleteAsync(5, 1, CancellationToken.None)).Succeeded);
 
         Assert.Equal(2, audit.Entries.Count(e => e.Event == "vendor.member_removed"));
         Assert.Equal([10, 11], audit.Entries.Select(e => e.TargetCustomerId!.Value).ToArray());
@@ -24,7 +26,9 @@ public sealed class VendorServiceTests
         var store = new FakeVendorStore { FormerMembers = null };
         var audit = new RecordingAuditLog();
 
-        Assert.False(await new VendorService(store, new FakeMediaStore(), audit, new TestClock()).DeleteAsync(5, 1, CancellationToken.None));
+        var result = await new VendorService(store, new FakeMediaStore(), audit, new TestClock()).DeleteAsync(5, 1, CancellationToken.None);
+
+        Assert.Equal(VendorErrors.NotFound, result.ErrorCode);
         Assert.Empty(audit.Entries);
     }
 

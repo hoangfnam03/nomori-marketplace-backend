@@ -83,6 +83,7 @@ internal sealed class FakeVendorStore : IVendorStore
         Task.FromResult(Vendors.FirstOrDefault(v => v.Id == id && !v.Deleted));
 
     public Task<Vendor?> GetByCustomerIdAsync(int customerId, CancellationToken cancellationToken) => throw new NotSupportedException();
+    public Task<Vendor?> GetPlatformShopAsync(CancellationToken cancellationToken) => Task.FromResult(Vendors.FirstOrDefault(v => v.IsPlatformShop && !v.Deleted));
     public Task<(IReadOnlyList<Vendor> Items, int TotalCount)> GetPagedAsync(VendorQuery query, CancellationToken cancellationToken) => throw new NotSupportedException();
     public Task UpdateAsync(Vendor vendor, CancellationToken cancellationToken) => Task.CompletedTask;
 

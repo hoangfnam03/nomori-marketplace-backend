@@ -8,7 +8,7 @@ namespace Nomori.Marketplace.Data.Vendors;
 public sealed class SqlVendorStore(IOptions<DatabaseOptions> options) : IVendorStore
 {
     private const string SelectColumns =
-        "Id, Name, Email, Description, PictureId, AddressId, AdminComment, Active, Deleted, DisplayOrder, CreatedOnUtc, UpdatedOnUtc";
+        "Id, Name, Email, Description, PictureId, AddressId, AdminComment, Active, Deleted, DisplayOrder, CreatedOnUtc, UpdatedOnUtc, IsPlatformShop";
 
     public async Task<Vendor?> GetAsync(int id, CancellationToken cancellationToken)
     {
@@ -26,12 +26,21 @@ public sealed class SqlVendorStore(IOptions<DatabaseOptions> options) : IVendorS
         await using var cmd = connection.CreateCommand();
         cmd.CommandText = """
             SELECT v.Id, v.Name, v.Email, v.Description, v.PictureId, v.AddressId,
-                   v.AdminComment, v.Active, v.Deleted, v.DisplayOrder, v.CreatedOnUtc, v.UpdatedOnUtc
+                   v.AdminComment, v.Active, v.Deleted, v.DisplayOrder, v.CreatedOnUtc, v.UpdatedOnUtc, v.IsPlatformShop
             FROM Vendor v
             INNER JOIN Customer c ON c.VendorId = v.Id
             WHERE c.Id = @CustomerId AND v.Deleted = 0
             """;
         cmd.Parameters.AddWithValue("@CustomerId", customerId);
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadVendor(reader) : null;
+    }
+
+    public async Task<Vendor?> GetPlatformShopAsync(CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = $"SELECT {SelectColumns} FROM Vendor WHERE IsPlatformShop = 1 AND Deleted = 0";
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? ReadVendor(reader) : null;
     }
@@ -82,7 +91,7 @@ public sealed class SqlVendorStore(IOptions<DatabaseOptions> options) : IVendorS
 
         await using var deleteCmd = connection.CreateCommand();
         deleteCmd.Transaction = transaction;
-        deleteCmd.CommandText = "UPDATE Vendor SET Deleted = 1, UpdatedOnUtc = @NowUtc WHERE Id = @Id AND Deleted = 0";
+        deleteCmd.CommandText = "UPDATE Vendor SET Deleted = 1, UpdatedOnUtc = @NowUtc WHERE Id = @Id AND Deleted = 0 AND IsPlatformShop = 0";
         deleteCmd.Parameters.AddWithValue("@Id", id);
         deleteCmd.Parameters.AddWithValue("@NowUtc", nowUtc);
         if (await deleteCmd.ExecuteNonQueryAsync(cancellationToken) == 0)
@@ -220,6 +229,7 @@ public sealed class SqlVendorStore(IOptions<DatabaseOptions> options) : IVendorS
         Deleted = r.GetBoolean(8),
         DisplayOrder = r.GetInt32(9),
         CreatedOnUtc = r.GetDateTime(10),
-        UpdatedOnUtc = r.GetDateTime(11)
+        UpdatedOnUtc = r.GetDateTime(11),
+        IsPlatformShop = r.GetBoolean(12)
     };
 }

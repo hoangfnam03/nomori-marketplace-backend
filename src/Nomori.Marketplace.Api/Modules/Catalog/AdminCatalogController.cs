@@ -85,9 +85,11 @@ public sealed class AdminCatalogController(
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 50,
         [FromQuery] string? search = null,
+        [FromQuery] int? vendorId = null,
         CancellationToken cancellationToken = default)
     {
-        var result = await productService.GetListAsync(new ProductQuery(page, pageSize, Search: search), cancellationToken);
+        var result = await productService.GetListAsync(
+            new ProductQuery(Math.Max(page, 1), Math.Clamp(pageSize, 1, MaxPageSize), Search: search, VendorId: vendorId), cancellationToken);
         return Ok(ToPagedResponse(result, ToAdminProductResponse));
     }
 
@@ -111,9 +113,8 @@ public sealed class AdminCatalogController(
             request.Price, request.OldPrice, request.StockQuantity,
             request.Published, request.VendorId, request.ShowOnHomepage, request.DisplayOrder,
             request.CategoryIds ?? [], request.ManufacturerIds ?? []),
-            cancellationToken);
-        if (!result.Succeeded)
-            return BadRequest(new ValidationProblemDetails(result.Errors.ToDictionary(e => e.Key, e => e.Value)));
+            ActorId(), cancellationToken);
+        if (!result.Succeeded) return this.ToFailure(result);
         return CreatedAtAction(nameof(GetProduct), new { id = result.Value!.Id }, ToAdminProductResponse(result.Value));
     }
 
@@ -126,16 +127,27 @@ public sealed class AdminCatalogController(
             request.Price, request.OldPrice, request.StockQuantity,
             request.Published, request.VendorId, request.ShowOnHomepage, request.DisplayOrder,
             request.CategoryIds ?? [], request.ManufacturerIds ?? []),
-            cancellationToken);
-        if (!result.Succeeded)
-            return BadRequest(new ValidationProblemDetails(result.Errors.ToDictionary(e => e.Key, e => e.Value)));
+            ActorId(), cancellationToken);
+        if (!result.Succeeded) return this.ToFailure(result);
         return Ok(ToAdminProductResponse(result.Value!));
+    }
+
+    /// <summary>Moves a product to another shop. The only way to change a product's owner.</summary>
+    [HttpPost("products/{id:int}/transfer")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> TransferProduct(int id, TransferProductRequest request, CancellationToken cancellationToken)
+    {
+        var result = await productService.TransferAsync(id, request.VendorId, ActorId(), cancellationToken);
+        return result.Succeeded ? Ok(ToAdminProductResponse(result.Value!)) : this.ToFailure(result);
     }
 
     [HttpDelete("products/{id:int}")]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> DeleteProduct(int id, CancellationToken cancellationToken) =>
-        await productService.DeleteAsync(id, cancellationToken) ? NoContent() : NotFound();
+    public async Task<IActionResult> DeleteProduct(int id, CancellationToken cancellationToken)
+    {
+        var result = await productService.DeleteAsync(id, ActorId(), cancellationToken);
+        return result.Succeeded ? NoContent() : this.ToFailure(result);
+    }
 
     // ---- Manufacturers ----
 
@@ -192,6 +204,8 @@ public sealed class AdminCatalogController(
 
     // ---- Helpers ----
 
+    private int ActorId() => int.TryParse(currentUser.Subject, out var customerId) ? customerId : 0;
+
     // Audit entries carry ids only, never names or descriptions.
     private Task AuditAsync(string eventName, string entityType, int entityId, object? details, CancellationToken cancellationToken) =>
         auditLog.WriteAsync(eventName, int.TryParse(currentUser.Subject, out var customerId) ? customerId : null,
@@ -210,7 +224,7 @@ public sealed class AdminCatalogController(
         new(c.Id, c.Name, c.Description, c.ParentCategoryId, c.PictureId, c.ShowOnHomepage, c.Published, c.RestrictFromVendors, c.DisplayOrder, c.CreatedOnUtc, c.UpdatedOnUtc);
 
     private static AdminProductResponse ToAdminProductResponse(Product p) =>
-        new(p.Id, p.Name, p.ShortDescription, p.FullDescription, p.Price, p.OldPrice, p.StockQuantity, p.Published, p.VendorId, p.ShowOnHomepage, p.DisplayOrder, p.CreatedOnUtc, p.UpdatedOnUtc);
+        new(p.Id, p.Name, p.ShortDescription, p.FullDescription, p.Price, p.OldPrice, p.StockQuantity, p.Published, p.VendorId, p.VendorName, p.ShowOnHomepage, p.DisplayOrder, p.CreatedOnUtc, p.UpdatedOnUtc);
 
     private static AdminManufacturerResponse ToAdminManufacturerResponse(Manufacturer m) =>
         new(m.Id, m.Name, m.Description, m.PictureId, m.Published, m.DisplayOrder, m.CreatedOnUtc, m.UpdatedOnUtc);
@@ -262,8 +276,10 @@ public sealed record AdminCategoryTreeNodeResponse(
 public sealed record AdminProductResponse(
     int Id, string Name, string? ShortDescription, string? FullDescription,
     decimal Price, decimal OldPrice, int StockQuantity,
-    bool Published, int? VendorId, bool ShowOnHomepage, int DisplayOrder,
+    bool Published, int VendorId, string? VendorName, bool ShowOnHomepage, int DisplayOrder,
     DateTime CreatedOnUtc, DateTime UpdatedOnUtc);
+
+public sealed record TransferProductRequest(int VendorId);
 
 public sealed record AdminProductDetailResponse(
     AdminProductResponse Product,

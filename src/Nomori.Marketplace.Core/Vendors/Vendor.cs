@@ -11,6 +11,10 @@ public sealed class Vendor
     public string? AdminComment { get; set; }
     public bool Active { get; set; }
     public bool Deleted { get; set; }
+
+    /// <summary>The single Nomori-owned shop that owns platform products. It cannot be deleted or deactivated.</summary>
+    public bool IsPlatformShop { get; set; }
+
     public int DisplayOrder { get; set; }
     public DateTime CreatedOnUtc { get; set; }
     public DateTime UpdatedOnUtc { get; set; }
@@ -72,6 +76,7 @@ public interface IVendorStore
 {
     Task<Vendor?> GetAsync(int id, CancellationToken cancellationToken);
     Task<Vendor?> GetByCustomerIdAsync(int customerId, CancellationToken cancellationToken);
+    Task<Vendor?> GetPlatformShopAsync(CancellationToken cancellationToken);
     Task<(IReadOnlyList<Vendor> Items, int TotalCount)> GetPagedAsync(VendorQuery query, CancellationToken cancellationToken);
     Task UpdateAsync(Vendor vendor, CancellationToken cancellationToken);
 
@@ -93,7 +98,8 @@ public interface IVendorService
     Task<Vendor?> GetCurrentVendorAsync(int customerId, CancellationToken cancellationToken);
     Task<Catalog.PagedResult<Vendor>> GetListAsync(VendorQuery query, CancellationToken cancellationToken);
     Task<VendorResult<Vendor>> UpdateAsync(UpdateVendorCommand command, CancellationToken cancellationToken);
-    Task<bool> DeleteAsync(int id, int actorCustomerId, CancellationToken cancellationToken);
+    Task<VendorResult<bool>> DeleteAsync(int id, int actorCustomerId, CancellationToken cancellationToken);
+    Task<Vendor?> GetPlatformShopAsync(CancellationToken cancellationToken);
 
     // Notes
     Task<Catalog.PagedResult<VendorNote>> GetNotesAsync(int vendorId, int page, int pageSize, CancellationToken cancellationToken);

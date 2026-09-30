@@ -2,7 +2,7 @@
 
 Tài liệu theo dõi (trace) tiến độ so với `nopCommerce/docs/nomori-complete-feature-map.md`. Cập nhật mỗi khi xong hoặc hoãn một slice.
 
-- **Cập nhật lần cuối:** 2026-10-02
+- **Cập nhật lần cuối:** 2026-10-03
 - **Quy ước:** mỗi slice có tài liệu thiết kế trong `docs/modules/` (mục 7 của feature map). Code chỉ sinh sau khi có tài liệu.
 - **Trạng thái:** `Xong` (backend + Angular), `Một phần` (còn slice con chưa làm), `Hoãn` (có quyết định), `Chưa làm`.
 - **Lưu ý về kiểm chứng:** tất cả slice đều có unit test cho service và migration. Các store SQL và luồng HTTP/Angular **chưa có test tự động**, cần test tay theo guide trong tài liệu từng module.
@@ -20,8 +20,8 @@ Tài liệu theo dõi (trace) tiến độ so với `nopCommerce/docs/nomori-com
 | F06 | Multi-store | **Hoãn** | | Quyết định 2026-10-01: sàn một domain, làm khi cần nhiều domain/brand |
 | F07 | Localization, tiền tệ, đơn vị, múi giờ | Chưa làm | | Cần trước F14 (giá) |
 | F08 | Media | Một phần | `modules/f08a-media.md` | **F08-A xong, đã merge** (ảnh, upload có kiểm soát). Còn F08-B (thumbnail, quét), F08-C (file riêng tư, download) |
-| F09 | Taxonomy toàn sàn, manufacturer | Một phần | `modules/f09a-taxonomy.md` | **F09-A xong** (chờ test tay và merge): toàn vẹn cây, luật xóa, cờ `RestrictFromVendors`, validator chọn danh mục cho seller, ràng buộc DB. Còn slug/SEO (F24), template và lọc (F13), localization (F07) |
-| F10 | Sản phẩm, quyền sở hữu | Một phần | | Product CRUD đã có. `VendorId` còn nullable, **F10-A** (ShopId bắt buộc, kiểm soát quyền) chưa làm |
+| F09 | Taxonomy toàn sàn, manufacturer | Một phần | `modules/f09a-taxonomy.md` | **F09-A xong, đã merge**: toàn vẹn cây, luật xóa, cờ `RestrictFromVendors`, validator chọn danh mục cho seller, ràng buộc DB. Còn slug/SEO (F24), template và lọc (F13), localization (F07) |
+| F10 | Sản phẩm, quyền sở hữu | Một phần | `modules/f10a-product-ownership.md` | **F10-A xong** (chờ test tay và merge): `VendorId` bắt buộc, shop của nền tảng, API sản phẩm cho seller (404 với sản phẩm shop khác), chuyển shop bởi admin, ẩn sản phẩm của shop bị tắt. Còn F10-B (vòng đời, admin ẩn, duyệt), F10-C (mô tả HTML, copy, liên quan) |
 | F11 | Biến thể, thuộc tính, thông số | Một phần | | Product attribute và specification attribute đã có. Chưa có: tổ hợp biến thể, ảnh sản phẩm, tier price |
 | F12 | Tồn kho | Chưa làm | | Cần ledger/reservation trước khi làm giỏ hàng |
 | F13 | Tìm kiếm, lọc | Chưa làm | | |
@@ -34,6 +34,7 @@ Tài liệu theo dõi (trace) tiến độ so với `nopCommerce/docs/nomori-com
 | 2026-10-01 | F06 (multi-store) hoãn. Hệ thống một domain | F07, F23, F24 thiết kế theo một cửa hàng |
 | 2026-10-01 | Các slice nhỏ của F05 (shop settings và các slice sau) làm sau, ưu tiên nền tảng dùng chung trước | Media, taxonomy, product ownership đi trước |
 | 2026-09-26 | Vendor chỉ được tạo qua đơn đăng ký đã duyệt. Mỗi tài khoản thuộc tối đa một shop. Mọi thành viên ngang quyền | `modules/vendors.md` |
+| 2026-10-03 | Mỗi sản phẩm thuộc đúng một shop. Sản phẩm của nền tảng thuộc shop "Nomori Official" (`Vendor.IsPlatformShop`), không dùng 0 hoặc null. Chủ sở hữu chỉ đổi qua thao tác chuyển shop của admin. Route seller là `/vendors/{id}/products`, người ngoài shop nhận 404 | `modules/f10a-product-ownership.md` |
 | 2026-10-02 | Taxonomy do nền tảng sở hữu. Seller chỉ đọc và chọn, không có quyền ghi. Hạn chế theo từng category qua `RestrictFromVendors` (theo nopCommerce). Không làm allow-list theo từng shop | `modules/f09a-taxonomy.md` |
 | 2026-10-01 | Media lưu trong SQL Server sau interface `IMediaStore`. Ảnh công khai. Kiểm tra bằng chữ ký file, không tin content-type. Không nhận SVG | `modules/f08a-media.md` |
 
@@ -42,10 +43,10 @@ Tài liệu theo dõi (trace) tiến độ so với `nopCommerce/docs/nomori-com
 Theo mục 6 của feature map (M05 recovery plan):
 
 1. ~~F08-A Media~~ (xong, đã merge)
-2. ~~F09-A Taxonomy toàn sàn~~ (xong, chờ test tay và merge)
-3. **F10-A** Sở hữu sản phẩm: `ShopId` bắt buộc, kiểm soát quyền ở mọi endpoint của người bán, dùng ảnh `product` (F08-A) và `ITaxonomyService.ValidateSelectionAsync(..., Seller)` (F09-A).
-4. F10-B Duyệt và xuất bản sản phẩm.
-5. F11-A/B Ảnh sản phẩm, biến thể.
+2. ~~F09-A Taxonomy toàn sàn~~ (xong, đã merge)
+3. ~~F10-A Sở hữu sản phẩm~~ (xong, chờ test tay và merge)
+4. **F10-B** Vòng đời sản phẩm: 4 trạng thái (nháp, đang bán, ngừng bán, bị admin ẩn), admin ẩn kèm lý do và email, yêu cầu xem lại. Xem `modules/vendor-products-prd.md`.
+5. F11-A/B Ảnh sản phẩm (dùng ảnh `product` của F08-A, điều kiện "có ít nhất 1 ảnh" để đăng bán), biến thể.
 6. F12-A Tồn kho, F13-A Tìm kiếm.
 7. F07 (phần tiền tệ, đơn vị, múi giờ) trước F14.
 8. Quay lại F05: `vendor-shop-settings`, `vendor-products`, `vendor-orders`, `vendor-settlement`.
@@ -59,7 +60,8 @@ Theo mục 6 của feature map (M05 recovery plan):
 | Ghi chú nội bộ của vendor có API nhưng chưa có giao diện | `modules/vendors.md` | F05 |
 | Thông báo cho admin khi có đơn đăng ký mới | `modules/vendors.md` | F22 |
 | `extractError` ở trang admin catalog trước đây không đọc `fieldErrors` (đã sửa ở F08-A) | | |
-| Form sửa sản phẩm của admin không gửi `vendorId`, nên lưu sản phẩm đang có shop sẽ xóa liên kết shop. Sửa trong F10-A (ShopId bắt buộc) | `admin-catalog.page.ts`, `ProductService.UpdateAsync` | F10-A |
+| Email liên hệ của shop nền tảng là giá trị giữ chỗ `platform@nomori.local`, admin cần sửa sau khi migrate | `modules/f10a-product-ownership.md` | Vận hành |
+| Trang admin catalog chưa có bộ lọc sản phẩm theo shop (API đã hỗ trợ `vendorId`) | `admin-catalog.page.ts` | F10-B |
 | Xem sản phẩm công khai theo category chưa gồm category con, chưa cache | `modules/f09a-taxonomy.md` | F13 |
 | Test tích hợp API (`Api.Tests`) rất ít; không có test E2E | | F26/F29 |
 
@@ -69,4 +71,5 @@ Theo mục 6 của feature map (M05 recovery plan):
 |---|---|---|
 | 2026-09-30 | `feat/vendor/upload-spec-vendors` | F05: đăng ký shop, thành viên shop (BE + FE). Đã merge vào `main`/`master` |
 | 2026-10-01 | `feat/media/foundation` | F08-A: upload và phân phối ảnh, gắn vào category, manufacturer, vendor (BE + FE). Đã merge |
-| 2026-10-02 | `feat/taxonomy/foundation` | F09-A: toàn vẹn cây danh mục, luật xóa, hạn chế seller, validator chọn danh mục, ràng buộc DB, audit (BE + FE) |
+| 2026-10-02 | `feat/taxonomy/foundation` | F09-A: toàn vẹn cây danh mục, luật xóa, hạn chế seller, validator chọn danh mục, ràng buộc DB, audit (BE + FE). Đã merge |
+| 2026-10-03 | `feat/product-ownership/foundation` | F10-A: sở hữu sản phẩm, shop nền tảng, API sản phẩm cho seller, chuyển shop, ẩn sản phẩm của shop bị tắt (BE + FE). **Sửa lỗi:** form sửa sản phẩm của admin làm mất liên kết shop. Nâng ngưỡng cảnh báo CSS của Angular lên 6 kB (lỗi 8 kB) vì nhiều trang admin đã vượt 3 kB |

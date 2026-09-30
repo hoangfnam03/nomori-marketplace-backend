@@ -98,7 +98,7 @@ builder.Services.AddOpenApi(options =>
             "/api/v1/admin/authorization/customers/{customerId}/roles",
             "/api/v1/customer/profile"
             ,"/api/v1/customer/addresses", "/api/v1/customer/attributes", "/api/v1/customer/email-change/request"
-            ,"/api/v1/media", "/api/v1/media/{id}", "/api/v1/vendor-applications", "/api/v1/vendor-applications/{id}", "/api/v1/vendor-applications/{id}/status",
+            ,"/api/v1/media", "/api/v1/media/{id}", "/api/v1/vendors/{vendorId}/products", "/api/v1/vendors/{vendorId}/products/{id}", "/api/v1/admin/catalog/products/{id}/transfer", "/api/v1/vendor-applications", "/api/v1/vendor-applications/{id}", "/api/v1/vendor-applications/{id}/status",
             "/api/v1/vendors/{id}", "/api/v1/vendors/{id}/members", "/api/v1/vendors/{id}/members/{customerId}",
             "/api/v1/vendors/{id}/members/{customerId}/setup-email", "/api/v1/vendors/{id}/notes", "/api/v1/vendors/{id}/notes/{noteId}"
         };

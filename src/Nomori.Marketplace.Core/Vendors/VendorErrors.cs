@@ -15,6 +15,8 @@ public static class VendorErrors
     public const string ApplicationNotPending = "vendor_application.not_pending";
     public const string ApplicantAlreadyVendor = "vendor_application.applicant_already_vendor";
 
+    public const string PlatformShop = "vendor.platform_shop";
+
     public const string MemberEmailAlreadyExists = "vendor_member.email_already_exists";
     public const string MemberLimitReached = "vendor_member.limit_reached";
     public const string MemberAlreadyActive = "vendor_member.already_active";
