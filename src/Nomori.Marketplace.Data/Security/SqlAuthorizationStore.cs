@@ -77,7 +77,10 @@ public sealed class SqlAuthorizationStore(IOptions<DatabaseOptions> databaseOpti
 
     private static CustomerRole ReadRole(SqlDataReader reader) => new()
     {
-        Id = reader.GetInt32(0), Name = reader.GetString(1), SystemName = reader.GetString(2),
-        Active = reader.GetBoolean(3), IsSystemRole = reader.GetBoolean(4)
+        Id = reader.GetInt32(0),
+        Name = reader.GetString(1),
+        SystemName = reader.GetString(2),
+        Active = reader.GetBoolean(3),
+        IsSystemRole = reader.GetBoolean(4)
     };
 }

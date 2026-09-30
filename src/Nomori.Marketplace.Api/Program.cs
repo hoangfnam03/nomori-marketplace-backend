@@ -1,24 +1,24 @@
+using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.OpenApi;
 using Nomori.Marketplace.Api.Configuration;
 using Nomori.Marketplace.Api.Health;
 using Nomori.Marketplace.Api.Middleware;
-using Nomori.Marketplace.Core.Configuration;
-using Nomori.Marketplace.Data.Configuration;
-using Nomori.Marketplace.Web.Framework.Security;
-using Nomori.Marketplace.Services.Authentication;
-using Nomori.Marketplace.Core.Time;
-using Nomori.Marketplace.Core.Customers;
-using Nomori.Marketplace.Core.Security;
-using Nomori.Marketplace.Core.Email;
-using Nomori.Marketplace.Services.Security;
 using Nomori.Marketplace.Core.Catalog;
+using Nomori.Marketplace.Core.Configuration;
+using Nomori.Marketplace.Core.Customers;
+using Nomori.Marketplace.Core.Email;
+using Nomori.Marketplace.Core.Security;
+using Nomori.Marketplace.Core.Time;
 using Nomori.Marketplace.Core.Vendors;
+using Nomori.Marketplace.Data.Configuration;
+using Nomori.Marketplace.Services.Authentication;
 using Nomori.Marketplace.Services.Catalog;
-using Nomori.Marketplace.Services.Vendors;
 using Nomori.Marketplace.Services.Customers;
 using Nomori.Marketplace.Services.Email;
-using Microsoft.OpenApi;
-using System.Threading.RateLimiting;
+using Nomori.Marketplace.Services.Security;
+using Nomori.Marketplace.Services.Vendors;
+using Nomori.Marketplace.Web.Framework.Security;
 
 var builder = WebApplication.CreateBuilder(args);
 

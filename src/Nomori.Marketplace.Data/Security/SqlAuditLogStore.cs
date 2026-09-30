@@ -35,13 +35,15 @@ public sealed class SqlAuditLogStore(IOptions<DatabaseOptions> databaseOptions) 
         {
             entries.Add(new AuditLog
             {
-                Id = reader.GetInt32(0), EventName = reader.GetString(1),
+                Id = reader.GetInt32(0),
+                EventName = reader.GetString(1),
                 CustomerId = reader.IsDBNull(2) ? null : reader.GetInt32(2),
                 TargetCustomerId = reader.IsDBNull(3) ? null : reader.GetInt32(3),
                 EntityType = reader.IsDBNull(4) ? null : reader.GetString(4),
                 EntityId = reader.IsDBNull(5) ? null : reader.GetInt32(5),
                 IpAddress = reader.IsDBNull(6) ? null : reader.GetString(6),
-                DetailsJson = reader.IsDBNull(7) ? null : reader.GetString(7), CreatedOnUtc = reader.GetDateTime(8)
+                DetailsJson = reader.IsDBNull(7) ? null : reader.GetString(7),
+                CreatedOnUtc = reader.GetDateTime(8)
             });
         }
         return entries;

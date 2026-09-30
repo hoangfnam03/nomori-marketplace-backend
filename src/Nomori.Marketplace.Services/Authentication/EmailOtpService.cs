@@ -1,7 +1,7 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
-using System.Globalization;
 using Microsoft.Extensions.Options;
 using Nomori.Marketplace.Core.Customers;
 using Nomori.Marketplace.Core.Email;
