@@ -232,8 +232,10 @@ public sealed class SqlCustomerIdentityStore(IOptions<DatabaseOptions> databaseO
 
         await using var customerCommand = connection.CreateCommand();
         customerCommand.Transaction = transaction;
-        customerCommand.CommandText = "UPDATE Customer SET RequireReLogin = 1 WHERE Id = @CustomerId";
+        // Using the emailed link proves the person owns the inbox, so the email also becomes verified.
+        customerCommand.CommandText = "UPDATE Customer SET RequireReLogin = 1, EmailVerifiedOnUtc = CASE WHEN EmailVerified = 0 THEN @NowUtc ELSE EmailVerifiedOnUtc END, EmailVerified = 1 WHERE Id = @CustomerId";
         customerCommand.Parameters.AddWithValue("@CustomerId", customerId);
+        customerCommand.Parameters.AddWithValue("@NowUtc", nowUtc);
         await customerCommand.ExecuteNonQueryAsync(cancellationToken);
 
         await transaction.CommitAsync(cancellationToken);

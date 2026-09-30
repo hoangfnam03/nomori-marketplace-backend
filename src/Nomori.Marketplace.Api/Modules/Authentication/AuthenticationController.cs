@@ -6,6 +6,7 @@ using Microsoft.Extensions.Options;
 using Nomori.Marketplace.Core.Customers;
 using Nomori.Marketplace.Core.Email;
 using Nomori.Marketplace.Core.Security;
+using Nomori.Marketplace.Core.Vendors;
 using Nomori.Marketplace.Services.Authentication;
 using Nomori.Marketplace.Web.Framework.Security;
 
@@ -26,6 +27,7 @@ public sealed class AuthenticationController(
     IEmailVerificationService emailVerificationService,
     IEmailOtpService emailOtpService,
     IAuditLogService auditLog,
+    IVendorStore vendorStore,
     IOptions<EmailOptions> emailOptions) : ControllerBase
 {
     [HttpGet("csrf")]
@@ -114,10 +116,11 @@ public sealed class AuthenticationController(
     public async Task<IActionResult> Session(CancellationToken cancellationToken)
     {
         if (!currentUser.IsAuthenticated || !int.TryParse(currentUser.Subject, out var customerId))
-            return Ok(new SessionResponse(false, null, null, null, null));
+            return Ok(new SessionResponse(false, null, null, null, null, null));
 
         var customer = await identityStore.FindByIdAsync(customerId, cancellationToken);
-        return Ok(new SessionResponse(true, customerId, currentUser.Email, customer?.EmailVerified, customer?.EmailOtpEnabled));
+        var vendor = await vendorStore.GetByCustomerIdAsync(customerId, cancellationToken);
+        return Ok(new SessionResponse(true, customerId, currentUser.Email, customer?.EmailVerified, customer?.EmailOtpEnabled, vendor?.Id));
     }
 
     [HttpGet("permissions")]
@@ -311,7 +314,7 @@ public sealed record RegisterRequest(string Email, string Password);
 
 public sealed record LoginRequest(string Email, string Password, bool RememberMe = false);
 
-public sealed record SessionResponse(bool IsAuthenticated, int? CustomerId, string? Email, bool? EmailVerified, bool? EmailOtpEnabled);
+public sealed record SessionResponse(bool IsAuthenticated, int? CustomerId, string? Email, bool? EmailVerified, bool? EmailOtpEnabled, int? VendorId);
 
 public sealed record RegistrationResponse(int CustomerId, string Email, bool EmailVerified, string? VerificationToken);
 

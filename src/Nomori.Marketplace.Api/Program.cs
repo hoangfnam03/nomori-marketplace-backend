@@ -19,6 +19,7 @@ using Nomori.Marketplace.Services.Email;
 using Nomori.Marketplace.Services.Security;
 using Nomori.Marketplace.Services.Vendors;
 using Nomori.Marketplace.Web.Framework.Security;
+using Nomori.Marketplace.Web.Framework.Vendors;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -55,6 +56,10 @@ builder.Services.AddOptions<CorsOptions>()
     .Bind(builder.Configuration.GetSection(CorsOptions.SectionName));
 builder.Services.AddOptions<EmailOptions>()
     .Bind(builder.Configuration.GetSection(EmailOptions.SectionName));
+builder.Services.AddOptions<VendorOptions>()
+    .Bind(builder.Configuration.GetSection(VendorOptions.SectionName))
+    .Validate(options => options.MaxMembersPerVendor >= 1, "Vendor:MaxMembersPerVendor must be at least 1.")
+    .ValidateOnStart();
 
 builder.Services.AddControllersWithViews();
 builder.Services.AddOpenApi(options =>
@@ -87,6 +92,9 @@ builder.Services.AddOpenApi(options =>
             "/api/v1/admin/authorization/customers/{customerId}/roles",
             "/api/v1/customer/profile"
             ,"/api/v1/customer/addresses", "/api/v1/customer/attributes", "/api/v1/customer/email-change/request"
+            ,"/api/v1/vendor-applications", "/api/v1/vendor-applications/{id}", "/api/v1/vendor-applications/{id}/status",
+            "/api/v1/vendors/{id}", "/api/v1/vendors/{id}/members", "/api/v1/vendors/{id}/members/{customerId}",
+            "/api/v1/vendors/{id}/members/{customerId}/setup-email", "/api/v1/vendors/{id}/notes", "/api/v1/vendors/{id}/notes/{noteId}"
         };
         foreach (var (path, pathItem) in document.Paths)
         {
@@ -134,6 +142,9 @@ builder.Services.AddScoped<IProductService, ProductService>();
 builder.Services.AddScoped<IProductAttributeService, ProductAttributeService>();
 builder.Services.AddScoped<ISpecificationAttributeService, SpecificationAttributeService>();
 builder.Services.AddScoped<IVendorService, VendorService>();
+builder.Services.AddScoped<IVendorApplicationService, VendorApplicationService>();
+builder.Services.AddScoped<IVendorMemberService, VendorMemberService>();
+builder.Services.AddScoped<IVendorAccessContext, VendorAccessContext>();
 builder.Services.AddSingleton<Nomori.Marketplace.Services.ApplicationInfo.IApplicationInfoService, Nomori.Marketplace.Services.ApplicationInfo.ApplicationInfoService>();
 builder.Services.AddNomoriHealthChecks();
 builder.Services.AddCors(options =>

@@ -29,4 +29,10 @@ public sealed class EmailOptions
     public string EmailVerificationSubject { get; init; } = "Verify your Nomori Marketplace email";
 
     public string EmailOtpSubject { get; init; } = "Your Nomori Marketplace verification code";
+
+    public string VendorApplicationApprovedSubject { get; init; } = "Your Nomori Marketplace shop application was approved";
+
+    public string VendorApplicationRejectedSubject { get; init; } = "Your Nomori Marketplace shop application was not approved";
+
+    public string VendorMemberSetupSubject { get; init; } = "You have been added to a shop on Nomori Marketplace";
 }

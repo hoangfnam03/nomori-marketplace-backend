@@ -24,19 +24,15 @@ public sealed class VendorNote
     public DateTime CreatedOnUtc { get; set; }
 }
 
+/// <param name="IncludeInactiveVendorId">
+/// When <paramref name="Active"/> is <c>true</c>, also returns this vendor even if it is inactive (a member's own shop).
+/// </param>
 public sealed record VendorQuery(
     int Page = 1,
     int PageSize = 20,
     string? Search = null,
-    bool? Active = null);
-
-public sealed record CreateVendorCommand(
-    string Name,
-    string Email,
-    string? Description,
-    string? AdminComment,
-    bool Active,
-    int DisplayOrder);
+    bool? Active = null,
+    int? IncludeInactiveVendorId = null);
 
 public sealed record UpdateVendorCommand(
     int Id,
@@ -47,21 +43,28 @@ public sealed record UpdateVendorCommand(
     bool Active,
     int DisplayOrder);
 
-public sealed record VendorResult<T>(T? Value, IReadOnlyDictionary<string, string[]> Errors)
+/// <summary>
+/// Outcome of a vendor operation. <see cref="Errors"/> are field validation errors (400);
+/// <see cref="ErrorCode"/> is a <see cref="VendorErrors"/> code (403, 404 or 409).
+/// </summary>
+public sealed record VendorResult<T>(T? Value, IReadOnlyDictionary<string, string[]> Errors, string? ErrorCode = null)
 {
-    public bool Succeeded => Errors.Count == 0;
+    public bool Succeeded => Errors.Count == 0 && ErrorCode is null;
 }
 
 public static class VendorResult
 {
-    public static VendorResult<T> Success<T>(T value) =>
-        new(value, new Dictionary<string, string[]>());
+    private static readonly IReadOnlyDictionary<string, string[]> NoErrors = new Dictionary<string, string[]>();
+
+    public static VendorResult<T> Success<T>(T value) => new(value, NoErrors);
 
     public static VendorResult<T> Failure<T>(string field, string message) =>
         new(default, new Dictionary<string, string[]> { [field] = [message] });
 
     public static VendorResult<T> Failure<T>(IReadOnlyDictionary<string, string[]> errors) =>
         new(default, errors);
+
+    public static VendorResult<T> Error<T>(string errorCode) => new(default, NoErrors, errorCode);
 }
 
 public interface IVendorStore
@@ -69,30 +72,30 @@ public interface IVendorStore
     Task<Vendor?> GetAsync(int id, CancellationToken cancellationToken);
     Task<Vendor?> GetByCustomerIdAsync(int customerId, CancellationToken cancellationToken);
     Task<(IReadOnlyList<Vendor> Items, int TotalCount)> GetPagedAsync(VendorQuery query, CancellationToken cancellationToken);
-    Task<int> InsertAsync(Vendor vendor, CancellationToken cancellationToken);
     Task UpdateAsync(Vendor vendor, CancellationToken cancellationToken);
-    Task DeleteAsync(int id, CancellationToken cancellationToken);
-    Task SetCustomerVendorAsync(int customerId, int? vendorId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Soft-deletes the vendor and, in the same transaction, unlinks every member, removes their Vendors role
+    /// and sets RequireReLogin. Returns the former member ids, or null when the vendor does not exist.
+    /// </summary>
+    Task<IReadOnlyList<int>?> DeleteAsync(int id, DateTime nowUtc, CancellationToken cancellationToken);
 
     // Notes
     Task<(IReadOnlyList<VendorNote> Items, int TotalCount)> GetNotesPagedAsync(int vendorId, int page, int pageSize, CancellationToken cancellationToken);
     Task<int> InsertNoteAsync(VendorNote note, CancellationToken cancellationToken);
-    Task<bool> DeleteNoteAsync(int id, CancellationToken cancellationToken);
+    Task<bool> DeleteNoteAsync(int vendorId, int noteId, CancellationToken cancellationToken);
 }
 
 public interface IVendorService
 {
     Task<Vendor?> GetAsync(int id, CancellationToken cancellationToken);
     Task<Vendor?> GetCurrentVendorAsync(int customerId, CancellationToken cancellationToken);
-    Task<Core.Catalog.PagedResult<Vendor>> GetListAsync(VendorQuery query, CancellationToken cancellationToken);
-    Task<VendorResult<Vendor>> CreateAsync(CreateVendorCommand command, CancellationToken cancellationToken);
+    Task<Catalog.PagedResult<Vendor>> GetListAsync(VendorQuery query, CancellationToken cancellationToken);
     Task<VendorResult<Vendor>> UpdateAsync(UpdateVendorCommand command, CancellationToken cancellationToken);
-    Task<bool> DeleteAsync(int id, CancellationToken cancellationToken);
-    Task<bool> AssignCustomerAsync(int vendorId, int customerId, CancellationToken cancellationToken);
-    Task UnassignCustomerAsync(int customerId, CancellationToken cancellationToken);
+    Task<bool> DeleteAsync(int id, int actorCustomerId, CancellationToken cancellationToken);
 
     // Notes
-    Task<Core.Catalog.PagedResult<VendorNote>> GetNotesAsync(int vendorId, int page, int pageSize, CancellationToken cancellationToken);
+    Task<Catalog.PagedResult<VendorNote>> GetNotesAsync(int vendorId, int page, int pageSize, CancellationToken cancellationToken);
     Task<VendorNote> AddNoteAsync(int vendorId, string note, CancellationToken cancellationToken);
-    Task<bool> DeleteNoteAsync(int id, CancellationToken cancellationToken);
+    Task<bool> DeleteNoteAsync(int vendorId, int noteId, CancellationToken cancellationToken);
 }

@@ -36,4 +36,6 @@ public sealed class SecurityOptions
     public int EmailOtpMaxAttempts { get; init; } = 5;
 
     public int EmailOtpResendDelaySeconds { get; init; } = 60;
+
+    public int VendorMemberSetupTokenLifetimeHours { get; init; } = 72;
 }
