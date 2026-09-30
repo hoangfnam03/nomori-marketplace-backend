@@ -144,6 +144,7 @@ builder.Services.AddScoped<ICustomerProfileService, CustomerProfileService>();
 builder.Services.AddScoped<ICustomerAccountDataService, CustomerAccountDataService>();
 builder.Services.AddScoped<ICategoryService, CategoryService>();
 builder.Services.AddScoped<IManufacturerService, ManufacturerService>();
+builder.Services.AddScoped<ITaxonomyService, TaxonomyService>();
 builder.Services.AddScoped<IProductService, ProductService>();
 builder.Services.AddScoped<IProductAttributeService, ProductAttributeService>();
 builder.Services.AddScoped<ISpecificationAttributeService, SpecificationAttributeService>();

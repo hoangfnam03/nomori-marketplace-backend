@@ -106,42 +106,36 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    public async Task SetCategoriesAsync(int productId, int[] categoryIds, CancellationToken cancellationToken)
+    public Task SetCategoriesAsync(int productId, int[] categoryIds, CancellationToken cancellationToken) =>
+        ReplaceMappingsAsync("ProductCategory", "CategoryId", productId, categoryIds, cancellationToken);
+
+    public Task SetManufacturersAsync(int productId, int[] manufacturerIds, CancellationToken cancellationToken) =>
+        ReplaceMappingsAsync("ProductManufacturer", "ManufacturerId", productId, manufacturerIds, cancellationToken);
+
+    /// <summary>Replaces all mappings of one product in a single transaction. Table and column names are constants, never user input.</summary>
+    private async Task ReplaceMappingsAsync(string table, string column, int productId, int[] ids, CancellationToken cancellationToken)
     {
         await using var connection = await OpenAsync(cancellationToken);
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
+
         await using var deleteCmd = connection.CreateCommand();
-        deleteCmd.CommandText = "DELETE FROM ProductCategory WHERE ProductId = @ProductId";
+        deleteCmd.Transaction = transaction;
+        deleteCmd.CommandText = $"DELETE FROM {table} WHERE ProductId = @ProductId";
         deleteCmd.Parameters.AddWithValue("@ProductId", productId);
         await deleteCmd.ExecuteNonQueryAsync(cancellationToken);
 
-        for (var i = 0; i < categoryIds.Length; i++)
+        for (var i = 0; i < ids.Length; i++)
         {
             await using var insertCmd = connection.CreateCommand();
-            insertCmd.CommandText = "INSERT INTO ProductCategory (ProductId, CategoryId, IsFeaturedProduct, DisplayOrder) VALUES (@ProductId, @CategoryId, 0, @DisplayOrder)";
+            insertCmd.Transaction = transaction;
+            insertCmd.CommandText = $"INSERT INTO {table} (ProductId, {column}, IsFeaturedProduct, DisplayOrder) VALUES (@ProductId, @Id, 0, @DisplayOrder)";
             insertCmd.Parameters.AddWithValue("@ProductId", productId);
-            insertCmd.Parameters.AddWithValue("@CategoryId", categoryIds[i]);
+            insertCmd.Parameters.AddWithValue("@Id", ids[i]);
             insertCmd.Parameters.AddWithValue("@DisplayOrder", i);
             await insertCmd.ExecuteNonQueryAsync(cancellationToken);
         }
-    }
 
-    public async Task SetManufacturersAsync(int productId, int[] manufacturerIds, CancellationToken cancellationToken)
-    {
-        await using var connection = await OpenAsync(cancellationToken);
-        await using var deleteCmd = connection.CreateCommand();
-        deleteCmd.CommandText = "DELETE FROM ProductManufacturer WHERE ProductId = @ProductId";
-        deleteCmd.Parameters.AddWithValue("@ProductId", productId);
-        await deleteCmd.ExecuteNonQueryAsync(cancellationToken);
-
-        for (var i = 0; i < manufacturerIds.Length; i++)
-        {
-            await using var insertCmd = connection.CreateCommand();
-            insertCmd.CommandText = "INSERT INTO ProductManufacturer (ProductId, ManufacturerId, IsFeaturedProduct, DisplayOrder) VALUES (@ProductId, @ManufacturerId, 0, @DisplayOrder)";
-            insertCmd.Parameters.AddWithValue("@ProductId", productId);
-            insertCmd.Parameters.AddWithValue("@ManufacturerId", manufacturerIds[i]);
-            insertCmd.Parameters.AddWithValue("@DisplayOrder", i);
-            await insertCmd.ExecuteNonQueryAsync(cancellationToken);
-        }
+        await transaction.CommitAsync(cancellationToken);
     }
 
     private async Task<SqlConnection> OpenAsync(CancellationToken cancellationToken)

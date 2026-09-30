@@ -13,8 +13,12 @@ namespace Nomori.Marketplace.Api.Modules.Catalog;
 public sealed class AdminCatalogController(
     ICategoryService categoryService,
     IProductService productService,
-    IManufacturerService manufacturerService) : ControllerBase
+    IManufacturerService manufacturerService,
+    IAuditLogService auditLog,
+    ICurrentUser currentUser) : ControllerBase
 {
+    private const int MaxPageSize = 100;
+
     // ---- Categories ----
 
     [HttpGet("categories")]
@@ -23,9 +27,13 @@ public sealed class AdminCatalogController(
         [FromQuery] int pageSize = 50,
         CancellationToken cancellationToken = default)
     {
-        var result = await categoryService.GetListAsync(new CategoryQuery(page, pageSize), cancellationToken);
+        var result = await categoryService.GetListAsync(new CategoryQuery(Math.Max(page, 1), Math.Clamp(pageSize, 1, MaxPageSize)), cancellationToken);
         return Ok(ToPagedResponse(result, ToAdminCategoryResponse));
     }
+
+    [HttpGet("categories/tree")]
+    public async Task<IActionResult> GetCategoryTree(CancellationToken cancellationToken) =>
+        Ok((await categoryService.GetAdminTreeAsync(cancellationToken)).Select(ToAdminTreeNode));
 
     [HttpGet("categories/{id:int}")]
     public async Task<IActionResult> GetCategory(int id, CancellationToken cancellationToken)
@@ -40,10 +48,10 @@ public sealed class AdminCatalogController(
     {
         var result = await categoryService.CreateAsync(new CreateCategoryCommand(
             request.Name, request.Description, request.ParentCategoryId,
-            request.PictureId, request.ShowOnHomepage, request.Published, request.DisplayOrder),
+            request.PictureId, request.ShowOnHomepage, request.Published, request.DisplayOrder, request.RestrictFromVendors),
             cancellationToken);
-        if (!result.Succeeded)
-            return BadRequest(new ValidationProblemDetails(result.Errors.ToDictionary(e => e.Key, e => e.Value)));
+        if (!result.Succeeded) return this.ToFailure(result);
+        await AuditAsync("catalog.category_created", "Category", result.Value!.Id, null, cancellationToken);
         return CreatedAtAction(nameof(GetCategory), new { id = result.Value!.Id }, ToAdminCategoryResponse(result.Value));
     }
 
@@ -53,17 +61,22 @@ public sealed class AdminCatalogController(
     {
         var result = await categoryService.UpdateAsync(new UpdateCategoryCommand(
             id, request.Name, request.Description, request.ParentCategoryId,
-            request.PictureId, request.ShowOnHomepage, request.Published, request.DisplayOrder),
+            request.PictureId, request.ShowOnHomepage, request.Published, request.DisplayOrder, request.RestrictFromVendors),
             cancellationToken);
-        if (!result.Succeeded)
-            return BadRequest(new ValidationProblemDetails(result.Errors.ToDictionary(e => e.Key, e => e.Value)));
+        if (!result.Succeeded) return this.ToFailure(result);
+        await AuditAsync("catalog.category_updated", "Category", id, null, cancellationToken);
         return Ok(ToAdminCategoryResponse(result.Value!));
     }
 
     [HttpDelete("categories/{id:int}")]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> DeleteCategory(int id, CancellationToken cancellationToken) =>
-        await categoryService.DeleteAsync(id, cancellationToken) ? NoContent() : NotFound();
+    public async Task<IActionResult> DeleteCategory(int id, CancellationToken cancellationToken)
+    {
+        var result = await categoryService.DeleteAsync(id, cancellationToken);
+        if (!result.Succeeded) return this.ToFailure(result);
+        await AuditAsync("catalog.category_deleted", "Category", id, null, cancellationToken);
+        return NoContent();
+    }
 
     // ---- Products ----
 
@@ -132,7 +145,7 @@ public sealed class AdminCatalogController(
         [FromQuery] int pageSize = 50,
         CancellationToken cancellationToken = default)
     {
-        var result = await manufacturerService.GetListAsync(new ManufacturerQuery(page, pageSize), cancellationToken);
+        var result = await manufacturerService.GetListAsync(new ManufacturerQuery(Math.Max(page, 1), Math.Clamp(pageSize, 1, MaxPageSize)), cancellationToken);
         return Ok(ToPagedResponse(result, ToAdminManufacturerResponse));
     }
 
@@ -150,8 +163,8 @@ public sealed class AdminCatalogController(
         var result = await manufacturerService.CreateAsync(new CreateManufacturerCommand(
             request.Name, request.Description, request.PictureId, request.Published, request.DisplayOrder),
             cancellationToken);
-        if (!result.Succeeded)
-            return BadRequest(new ValidationProblemDetails(result.Errors.ToDictionary(e => e.Key, e => e.Value)));
+        if (!result.Succeeded) return this.ToFailure(result);
+        await AuditAsync("catalog.manufacturer_created", "Manufacturer", result.Value!.Id, null, cancellationToken);
         return CreatedAtAction(nameof(GetManufacturer), new { id = result.Value!.Id }, ToAdminManufacturerResponse(result.Value));
     }
 
@@ -162,15 +175,31 @@ public sealed class AdminCatalogController(
         var result = await manufacturerService.UpdateAsync(new UpdateManufacturerCommand(
             id, request.Name, request.Description, request.PictureId, request.Published, request.DisplayOrder),
             cancellationToken);
-        if (!result.Succeeded)
-            return BadRequest(new ValidationProblemDetails(result.Errors.ToDictionary(e => e.Key, e => e.Value)));
+        if (!result.Succeeded) return this.ToFailure(result);
+        await AuditAsync("catalog.manufacturer_updated", "Manufacturer", id, null, cancellationToken);
         return Ok(ToAdminManufacturerResponse(result.Value!));
     }
 
     [HttpDelete("manufacturers/{id:int}")]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> DeleteManufacturer(int id, CancellationToken cancellationToken) =>
-        await manufacturerService.DeleteAsync(id, cancellationToken) ? NoContent() : NotFound();
+    public async Task<IActionResult> DeleteManufacturer(int id, CancellationToken cancellationToken)
+    {
+        var result = await manufacturerService.DeleteAsync(id, cancellationToken);
+        if (!result.Succeeded) return this.ToFailure(result);
+        await AuditAsync("catalog.manufacturer_deleted", "Manufacturer", id, null, cancellationToken);
+        return NoContent();
+    }
+
+    // ---- Helpers ----
+
+    // Audit entries carry ids only, never names or descriptions.
+    private Task AuditAsync(string eventName, string entityType, int entityId, object? details, CancellationToken cancellationToken) =>
+        auditLog.WriteAsync(eventName, int.TryParse(currentUser.Subject, out var customerId) ? customerId : null,
+            entityType: entityType, entityId: entityId, details: details, cancellationToken: cancellationToken);
+
+    private static AdminCategoryTreeNodeResponse ToAdminTreeNode(CategoryTreeNode n) =>
+        new(n.Id, n.Name, n.ParentCategoryId, n.DisplayOrder, n.Published, n.RestrictFromVendors,
+            n.Children.Select(ToAdminTreeNode).ToList());
 
     // ---- Mapping helpers ----
 
@@ -178,7 +207,7 @@ public sealed class AdminCatalogController(
         new(result.Items.Select(mapper).ToList(), result.TotalCount, result.Page, result.PageSize, result.TotalPages);
 
     private static AdminCategoryResponse ToAdminCategoryResponse(Category c) =>
-        new(c.Id, c.Name, c.Description, c.ParentCategoryId, c.PictureId, c.ShowOnHomepage, c.Published, c.DisplayOrder, c.CreatedOnUtc, c.UpdatedOnUtc);
+        new(c.Id, c.Name, c.Description, c.ParentCategoryId, c.PictureId, c.ShowOnHomepage, c.Published, c.RestrictFromVendors, c.DisplayOrder, c.CreatedOnUtc, c.UpdatedOnUtc);
 
     private static AdminProductResponse ToAdminProductResponse(Product p) =>
         new(p.Id, p.Name, p.ShortDescription, p.FullDescription, p.Price, p.OldPrice, p.StockQuantity, p.Published, p.VendorId, p.ShowOnHomepage, p.DisplayOrder, p.CreatedOnUtc, p.UpdatedOnUtc);
@@ -195,7 +224,8 @@ public sealed record SaveCategoryRequest(
     int PictureId = 0,
     bool ShowOnHomepage = false,
     bool Published = true,
-    int DisplayOrder = 0);
+    int DisplayOrder = 0,
+    bool RestrictFromVendors = false);
 
 public sealed record SaveProductRequest(
     string Name,
@@ -222,8 +252,12 @@ public sealed record SaveManufacturerRequest(
 public sealed record AdminCategoryResponse(
     int Id, string Name, string? Description,
     int ParentCategoryId, int PictureId,
-    bool ShowOnHomepage, bool Published, int DisplayOrder,
+    bool ShowOnHomepage, bool Published, bool RestrictFromVendors, int DisplayOrder,
     DateTime CreatedOnUtc, DateTime UpdatedOnUtc);
+
+public sealed record AdminCategoryTreeNodeResponse(
+    int Id, string Name, int ParentCategoryId, int DisplayOrder, bool Published, bool RestrictFromVendors,
+    IReadOnlyList<AdminCategoryTreeNodeResponse> Children);
 
 public sealed record AdminProductResponse(
     int Id, string Name, string? ShortDescription, string? FullDescription,

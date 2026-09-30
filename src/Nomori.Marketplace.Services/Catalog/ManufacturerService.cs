@@ -1,7 +1,7 @@
 using Nomori.Marketplace.Core.Catalog;
 using Nomori.Marketplace.Core.Media;
-using Nomori.Marketplace.Services.Media;
 using Nomori.Marketplace.Core.Time;
+using Nomori.Marketplace.Services.Media;
 
 namespace Nomori.Marketplace.Services.Catalog;
 
@@ -19,6 +19,8 @@ public sealed class ManufacturerService(IManufacturerStore manufacturerStore, IM
     public async Task<CatalogResult<Manufacturer>> CreateAsync(CreateManufacturerCommand command, CancellationToken cancellationToken)
     {
         var errors = ValidateName(command.Name);
+        if (!errors.ContainsKey("name") && await manufacturerStore.NameExistsAsync(command.Name.Trim(), null, cancellationToken))
+            errors["name"] = ["A manufacturer with this name already exists."];
         await MediaAttachment.ValidateAsync(mediaStore, command.PictureId, MediaPurpose.Manufacturer, null, errors, cancellationToken);
         if (errors.Count > 0) return CatalogResult.Failure<Manufacturer>(errors);
 
@@ -40,9 +42,14 @@ public sealed class ManufacturerService(IManufacturerStore manufacturerStore, IM
     public async Task<CatalogResult<Manufacturer>> UpdateAsync(UpdateManufacturerCommand command, CancellationToken cancellationToken)
     {
         var existing = await manufacturerStore.GetAsync(command.Id, cancellationToken);
-        if (existing is null) return CatalogResult.Failure<Manufacturer>("id", "Manufacturer not found.");
+        if (existing is null) return CatalogResult.Error<Manufacturer>(CatalogErrors.NotFound);
 
         var errors = ValidateName(command.Name);
+        // Legacy duplicates are tolerated until the name actually changes.
+        if (!errors.ContainsKey("name")
+            && !string.Equals(command.Name.Trim(), existing.Name, StringComparison.OrdinalIgnoreCase)
+            && await manufacturerStore.NameExistsAsync(command.Name.Trim(), existing.Id, cancellationToken))
+            errors["name"] = ["A manufacturer with this name already exists."];
         if (command.PictureId != existing.PictureId)
             await MediaAttachment.ValidateAsync(mediaStore, command.PictureId, MediaPurpose.Manufacturer, null, errors, cancellationToken);
         if (errors.Count > 0) return CatalogResult.Failure<Manufacturer>(errors);
@@ -57,19 +64,22 @@ public sealed class ManufacturerService(IManufacturerStore manufacturerStore, IM
         return CatalogResult.Success(existing);
     }
 
-    public async Task<bool> DeleteAsync(int id, CancellationToken cancellationToken)
+    public async Task<CatalogResult<bool>> DeleteAsync(int id, CancellationToken cancellationToken)
     {
         var existing = await manufacturerStore.GetAsync(id, cancellationToken);
-        if (existing is null) return false;
+        if (existing is null) return CatalogResult.Error<bool>(CatalogErrors.NotFound);
+        if (await manufacturerStore.CountProductsAsync(id, cancellationToken) > 0)
+            return CatalogResult.Error<bool>(CatalogErrors.ManufacturerInUse);
+
         await manufacturerStore.DeleteAsync(id, cancellationToken);
-        return true;
+        return CatalogResult.Success(true);
     }
 
-    private static Dictionary<string, string[]> ValidateName(string name)
+    private static Dictionary<string, string[]> ValidateName(string? name)
     {
         var errors = new Dictionary<string, string[]>();
         if (string.IsNullOrWhiteSpace(name)) errors["name"] = ["Manufacturer name is required."];
-        else if (name.Length > 400) errors["name"] = ["Manufacturer name cannot exceed 400 characters."];
+        else if (name.Trim().Length > 400) errors["name"] = ["Manufacturer name cannot exceed 400 characters."];
         return errors;
     }
 

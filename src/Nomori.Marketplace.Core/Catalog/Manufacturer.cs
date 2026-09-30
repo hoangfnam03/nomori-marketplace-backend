@@ -17,6 +17,14 @@ public interface IManufacturerStore
 {
     Task<Manufacturer?> GetAsync(int id, CancellationToken cancellationToken);
     Task<(IReadOnlyList<Manufacturer> Items, int TotalCount)> GetPagedAsync(ManufacturerQuery query, CancellationToken cancellationToken);
+    Task<IReadOnlyList<Manufacturer>> GetByIdsAsync(IReadOnlyCollection<int> ids, CancellationToken cancellationToken);
+
+    /// <summary>Non-deleted products mapped to the manufacturer.</summary>
+    Task<int> CountProductsAsync(int id, CancellationToken cancellationToken);
+
+    /// <summary>Case-insensitive name check against non-deleted manufacturers.</summary>
+    Task<bool> NameExistsAsync(string name, int? excludeId, CancellationToken cancellationToken);
+
     Task<int> InsertAsync(Manufacturer manufacturer, CancellationToken cancellationToken);
     Task UpdateAsync(Manufacturer manufacturer, CancellationToken cancellationToken);
     Task DeleteAsync(int id, CancellationToken cancellationToken);
@@ -28,5 +36,5 @@ public interface IManufacturerService
     Task<PagedResult<Manufacturer>> GetListAsync(ManufacturerQuery query, CancellationToken cancellationToken);
     Task<CatalogResult<Manufacturer>> CreateAsync(CreateManufacturerCommand command, CancellationToken cancellationToken);
     Task<CatalogResult<Manufacturer>> UpdateAsync(UpdateManufacturerCommand command, CancellationToken cancellationToken);
-    Task<bool> DeleteAsync(int id, CancellationToken cancellationToken);
+    Task<CatalogResult<bool>> DeleteAsync(int id, CancellationToken cancellationToken);
 }
