@@ -32,6 +32,8 @@ public static class DatabaseRegistrationExtensions
         services.AddScoped<IProductAttributeStore, SqlProductAttributeStore>();
         services.AddScoped<ISpecificationAttributeStore, SqlSpecificationAttributeStore>();
         services.AddScoped<IVendorStore, SqlVendorStore>();
+        services.AddScoped<IVendorApplicationStore, SqlVendorApplicationStore>();
+        services.AddScoped<IVendorMemberStore, SqlVendorMemberStore>();
 
         var databaseOptions = configuration.GetSection(DatabaseOptions.SectionName).Get<DatabaseOptions>() ?? new DatabaseOptions();
         if (!string.Equals(databaseOptions.Provider, "SqlServer", StringComparison.OrdinalIgnoreCase))

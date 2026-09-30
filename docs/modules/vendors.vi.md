@@ -5,16 +5,16 @@
 
 ## Trạng thái
 
-**Phần quản lý vendor đã có code. Phần vendor tự đăng ký và phần tài khoản thành viên của shop mới được thiết kế, chưa có code.**
+**Backend đã có code cho cả ba phần (quản lý vendor, đơn đăng ký vendor, thành viên vendor). Angular cho phần 2 và 3 chưa làm.**
 
 | Phần | Backend | Angular | Ghi chú |
 |---|---|---|---|
 | Entity vendor, admin CRUD, ghi chú | Xong | Xong (`/admin/vendors`) | Migration `202609250002`. Chức năng admin **tạo** vendor bị bỏ trong module này (quyết định D) |
 | Admin liên kết tài khoản đã có với vendor | Xong | Xong | **Bị bỏ** trong module này (quyết định 9) |
 | Danh sách và chi tiết vendor công khai | Xong | Xong (`/storefront/vendors`) | Chỉ vendor đang hoạt động, chưa bị xóa |
-| Vendor portal: xem thông tin vendor của mình | Xong (`GET /vendor/portal`) | Chưa làm | `vendor.portal` chưa gắn với role nào |
-| **Đơn đăng ký vendor (tự đăng ký)** | Đã thiết kế | Đã thiết kế | Phần 2 |
-| **Thành viên vendor (tài khoản của shop)** | Đã thiết kế | Đã thiết kế | Phần 3 |
+| Vendor portal: xem thông tin vendor của mình | Backend xong (`GET /vendors/{vendorId}`, `vendorId` lấy từ `GET /auth/session`) | Chưa làm | Migration `202609260001` gắn `vendor.portal` cho role `Vendors` |
+| **Đơn đăng ký vendor (tự đăng ký)** | Xong | Chưa làm | Phần 2. Endpoint 1–5 trong [vendors-api.md](vendors-api.md) |
+| **Thành viên vendor (tài khoản của shop)** | Xong | Chưa làm | Phần 3. Endpoint 10–13 trong [vendors-api.md](vendors-api.md) |
 
 Để sau, ngoài phạm vi module này: vendor tự quản lý sản phẩm, đơn hàng và đối soát của vendor, ảnh và địa chỉ vendor, upload giấy tờ, cấu hình hoa hồng, phân quyền khác nhau giữa các thành viên.
 

@@ -5,16 +5,16 @@
 
 ## Status
 
-**Vendor management is implemented. Vendor self-registration and vendor member accounts are designed but not implemented.**
+**Backend is implemented for all three parts (vendor management, vendor application, vendor members). Angular for parts 2 and 3 is not started.**
 
 | Slice | Backend | Angular | Notes |
 |---|---|---|---|
 | Vendor entity, admin CRUD, notes | Done | Done (`/admin/vendors`) | Migration `202609250002`. Admin **create** is removed by this module (decision D) |
 | Link existing customer account to vendor (admin) | Done | Done | **Removed** by this module (decision 9) |
 | Public vendor list/detail | Done | Done (`/storefront/vendors`) | Only active, non-deleted vendors |
-| Vendor portal: own vendor info | Done (`GET /vendor/portal`) | Not started | `vendor.portal` is not mapped to any role yet |
-| **Vendor application (self-registration)** | Designed | Designed | Part 2 |
-| **Vendor members (shop accounts)** | Designed | Designed | Part 3 |
+| Vendor portal: own vendor info | Backend done (`GET /vendors/{vendorId}` with `vendorId` from `GET /auth/session`) | Not started | `vendor.portal` is granted to role `Vendors` by migration `202609260001` |
+| **Vendor application (self-registration)** | Done | Not started | Part 2. Endpoints 1–5 of [vendors-api.md](vendors-api.md) |
+| **Vendor members (shop accounts)** | Done | Not started | Part 3. Endpoints 10–13 of [vendors-api.md](vendors-api.md) |
 
 Deferred beyond this module: vendor product management, vendor orders/payouts, vendor pictures and addresses, document uploads, commission settings, different permissions per member.
 

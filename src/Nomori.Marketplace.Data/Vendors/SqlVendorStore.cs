@@ -59,19 +59,6 @@ public sealed class SqlVendorStore(IOptions<DatabaseOptions> options) : IVendorS
         return (items, totalCount);
     }
 
-    public async Task<int> InsertAsync(Vendor vendor, CancellationToken cancellationToken)
-    {
-        await using var connection = await OpenAsync(cancellationToken);
-        await using var cmd = connection.CreateCommand();
-        cmd.CommandText = """
-            INSERT INTO Vendor (Name, Email, Description, PictureId, AddressId, AdminComment, Active, Deleted, DisplayOrder, CreatedOnUtc, UpdatedOnUtc)
-            OUTPUT INSERTED.Id
-            VALUES (@Name, @Email, @Description, @PictureId, @AddressId, @AdminComment, @Active, 0, @DisplayOrder, @CreatedOnUtc, @UpdatedOnUtc)
-            """;
-        AddWriteParams(cmd, vendor);
-        return (int)(await cmd.ExecuteScalarAsync(cancellationToken))!;
-    }
-
     public async Task UpdateAsync(Vendor vendor, CancellationToken cancellationToken)
     {
         await using var connection = await OpenAsync(cancellationToken);
@@ -88,23 +75,47 @@ public sealed class SqlVendorStore(IOptions<DatabaseOptions> options) : IVendorS
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    public async Task DeleteAsync(int id, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<int>?> DeleteAsync(int id, DateTime nowUtc, CancellationToken cancellationToken)
     {
         await using var connection = await OpenAsync(cancellationToken);
-        await using var cmd = connection.CreateCommand();
-        cmd.CommandText = "UPDATE Vendor SET Deleted = 1 WHERE Id = @Id";
-        cmd.Parameters.AddWithValue("@Id", id);
-        await cmd.ExecuteNonQueryAsync(cancellationToken);
-    }
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
 
-    public async Task SetCustomerVendorAsync(int customerId, int? vendorId, CancellationToken cancellationToken)
-    {
-        await using var connection = await OpenAsync(cancellationToken);
-        await using var cmd = connection.CreateCommand();
-        cmd.CommandText = "UPDATE Customer SET VendorId = @VendorId WHERE Id = @CustomerId";
-        cmd.Parameters.AddWithValue("@VendorId", (object?)vendorId ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@CustomerId", customerId);
-        await cmd.ExecuteNonQueryAsync(cancellationToken);
+        await using var deleteCmd = connection.CreateCommand();
+        deleteCmd.Transaction = transaction;
+        deleteCmd.CommandText = "UPDATE Vendor SET Deleted = 1, UpdatedOnUtc = @NowUtc WHERE Id = @Id AND Deleted = 0";
+        deleteCmd.Parameters.AddWithValue("@Id", id);
+        deleteCmd.Parameters.AddWithValue("@NowUtc", nowUtc);
+        if (await deleteCmd.ExecuteNonQueryAsync(cancellationToken) == 0)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return null;
+        }
+
+        var memberIds = new List<int>();
+        await using (var listCmd = connection.CreateCommand())
+        {
+            listCmd.Transaction = transaction;
+            listCmd.CommandText = "SELECT Id FROM Customer WHERE VendorId = @Id";
+            listCmd.Parameters.AddWithValue("@Id", id);
+            await using var reader = await listCmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken)) memberIds.Add(reader.GetInt32(0));
+        }
+
+        await using var unlinkCmd = connection.CreateCommand();
+        unlinkCmd.Transaction = transaction;
+        unlinkCmd.CommandText = """
+            DELETE m FROM CustomerCustomerRoleMapping m
+            INNER JOIN CustomerRole r ON r.Id = m.CustomerRoleId
+            INNER JOIN Customer c ON c.Id = m.CustomerId
+            WHERE r.SystemName = 'Vendors' AND c.VendorId = @Id;
+
+            UPDATE Customer SET VendorId = NULL, RequireReLogin = 1 WHERE VendorId = @Id;
+            """;
+        unlinkCmd.Parameters.AddWithValue("@Id", id);
+        await unlinkCmd.ExecuteNonQueryAsync(cancellationToken);
+
+        await transaction.CommitAsync(cancellationToken);
+        return memberIds;
     }
 
     // ---- Notes ----
@@ -144,12 +155,13 @@ public sealed class SqlVendorStore(IOptions<DatabaseOptions> options) : IVendorS
         return (int)(await cmd.ExecuteScalarAsync(cancellationToken))!;
     }
 
-    public async Task<bool> DeleteNoteAsync(int id, CancellationToken cancellationToken)
+    public async Task<bool> DeleteNoteAsync(int vendorId, int noteId, CancellationToken cancellationToken)
     {
         await using var connection = await OpenAsync(cancellationToken);
         await using var cmd = connection.CreateCommand();
-        cmd.CommandText = "DELETE FROM VendorNote WHERE Id = @Id";
-        cmd.Parameters.AddWithValue("@Id", id);
+        cmd.CommandText = "DELETE FROM VendorNote WHERE Id = @Id AND VendorId = @VendorId";
+        cmd.Parameters.AddWithValue("@Id", noteId);
+        cmd.Parameters.AddWithValue("@VendorId", vendorId);
         return await cmd.ExecuteNonQueryAsync(cancellationToken) > 0;
     }
 
@@ -164,14 +176,21 @@ public sealed class SqlVendorStore(IOptions<DatabaseOptions> options) : IVendorS
     {
         var parts = new List<string> { "Deleted = 0" };
         if (!string.IsNullOrWhiteSpace(q.Search)) parts.Add("(Name LIKE @Search OR Email LIKE @Search)");
-        if (q.Active.HasValue) parts.Add("Active = @Active");
+        if (q.Active.HasValue)
+            parts.Add(q.Active.Value && q.IncludeInactiveVendorId.HasValue
+                ? "(Active = 1 OR Id = @IncludeInactiveVendorId)"
+                : "Active = @Active");
         return string.Join(" AND ", parts);
     }
 
     private static void AddFilterParams(SqlCommand cmd, VendorQuery q)
     {
         if (!string.IsNullOrWhiteSpace(q.Search)) cmd.Parameters.AddWithValue("@Search", $"%{q.Search}%");
-        if (q.Active.HasValue) cmd.Parameters.AddWithValue("@Active", q.Active.Value);
+        if (!q.Active.HasValue) return;
+        if (q.Active.Value && q.IncludeInactiveVendorId.HasValue)
+            cmd.Parameters.AddWithValue("@IncludeInactiveVendorId", q.IncludeInactiveVendorId.Value);
+        else
+            cmd.Parameters.AddWithValue("@Active", q.Active.Value);
     }
 
     private static void AddWriteParams(SqlCommand cmd, Vendor v)
