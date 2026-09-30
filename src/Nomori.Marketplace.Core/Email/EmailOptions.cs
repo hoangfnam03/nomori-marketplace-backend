@@ -34,5 +34,9 @@ public sealed class EmailOptions
 
     public string VendorApplicationRejectedSubject { get; init; } = "Your Nomori Marketplace shop application was not approved";
 
+    public string ProductHiddenSubject { get; init; } = "A product of your shop was hidden";
+
+    public string ProductUnhiddenSubject { get; init; } = "A product of your shop is visible again";
+
     public string VendorMemberSetupSubject { get; init; } = "You have been added to a shop on Nomori Marketplace";
 }

@@ -9,7 +9,7 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
 {
     // Every read joins the owning shop so callers get its name and status without a second query.
     private const string SelectColumns =
-        "p.Id, p.Name, p.ShortDescription, p.FullDescription, p.Price, p.OldPrice, p.StockQuantity, p.Published, p.Deleted, p.VendorId, p.ShowOnHomepage, p.DisplayOrder, p.CreatedOnUtc, p.UpdatedOnUtc, v.Name, v.Active";
+        "p.Id, p.Name, p.ShortDescription, p.FullDescription, p.Price, p.OldPrice, p.StockQuantity, p.Status, p.Deleted, p.VendorId, p.ShowOnHomepage, p.DisplayOrder, p.CreatedOnUtc, p.UpdatedOnUtc, v.Name, v.Active, p.StatusBeforeHidden, p.HiddenReason, p.HiddenOnUtc, p.HiddenByCustomerId, p.ReviewRequestedOnUtc";
 
     private const string FromClause = "FROM Product p INNER JOIN Vendor v ON v.Id = p.VendorId";
 
@@ -75,9 +75,9 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
         await using var connection = await OpenAsync(cancellationToken);
         await using var cmd = connection.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO Product (Name, ShortDescription, FullDescription, Price, OldPrice, StockQuantity, Published, Deleted, VendorId, ShowOnHomepage, DisplayOrder, CreatedOnUtc, UpdatedOnUtc)
+            INSERT INTO Product (Name, ShortDescription, FullDescription, Price, OldPrice, StockQuantity, Status, Deleted, VendorId, ShowOnHomepage, DisplayOrder, CreatedOnUtc, UpdatedOnUtc)
             OUTPUT INSERTED.Id
-            VALUES (@Name, @ShortDescription, @FullDescription, @Price, @OldPrice, @StockQuantity, @Published, 0, @VendorId, @ShowOnHomepage, @DisplayOrder, @CreatedOnUtc, @UpdatedOnUtc)
+            VALUES (@Name, @ShortDescription, @FullDescription, @Price, @OldPrice, @StockQuantity, @Status, 0, @VendorId, @ShowOnHomepage, @DisplayOrder, @CreatedOnUtc, @UpdatedOnUtc)
             """;
         AddWriteParams(cmd, product);
         return (int)(await cmd.ExecuteScalarAsync(cancellationToken))!;
@@ -91,13 +91,35 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
             UPDATE Product SET
                 Name = @Name, ShortDescription = @ShortDescription, FullDescription = @FullDescription,
                 Price = @Price, OldPrice = @OldPrice, StockQuantity = @StockQuantity,
-                Published = @Published, ShowOnHomepage = @ShowOnHomepage,
+                ShowOnHomepage = @ShowOnHomepage,
                 DisplayOrder = @DisplayOrder, UpdatedOnUtc = @UpdatedOnUtc
             WHERE Id = @Id AND Deleted = 0
             """;
-        // The owner is deliberately not updated here: only SetVendorAsync (an admin transfer) may change it.
+        // The owner and the lifecycle fields are deliberately not updated here: see SetVendorAsync and UpdateLifecycleAsync.
         cmd.Parameters.AddWithValue("@Id", product.Id);
         AddWriteParams(cmd, product);
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task UpdateLifecycleAsync(Product product, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            UPDATE Product SET
+                Status = @Status, StatusBeforeHidden = @StatusBeforeHidden, HiddenReason = @HiddenReason,
+                HiddenOnUtc = @HiddenOnUtc, HiddenByCustomerId = @HiddenBy, ReviewRequestedOnUtc = @ReviewRequestedOnUtc,
+                UpdatedOnUtc = @UpdatedOnUtc
+            WHERE Id = @Id AND Deleted = 0
+            """;
+        cmd.Parameters.AddWithValue("@Id", product.Id);
+        cmd.Parameters.AddWithValue("@Status", (int)product.Status);
+        cmd.Parameters.AddWithValue("@StatusBeforeHidden", product.StatusBeforeHidden is { } before ? (int)before : DBNull.Value);
+        cmd.Parameters.AddWithValue("@HiddenReason", (object?)product.HiddenReason ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@HiddenOnUtc", (object?)product.HiddenOnUtc ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@HiddenBy", (object?)product.HiddenByCustomerId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@ReviewRequestedOnUtc", (object?)product.ReviewRequestedOnUtc ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@UpdatedOnUtc", product.UpdatedOnUtc);
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -172,6 +194,8 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
         if (!string.IsNullOrWhiteSpace(q.Search)) parts.Add("(p.Name LIKE @Search OR p.ShortDescription LIKE @Search)");
         if (q.Published.HasValue) parts.Add("p.Published = @Published");
         if (q.VendorId.HasValue) parts.Add("p.VendorId = @VendorId");
+        if (q.Status.HasValue) parts.Add("p.Status = @Status");
+        if (q.ReviewRequested == true) parts.Add("p.ReviewRequestedOnUtc IS NOT NULL");
         // Products of deactivated or deleted shops are not shown to the public.
         if (q.OnlyActiveShops) parts.Add("v.Active = 1 AND v.Deleted = 0");
 
@@ -197,6 +221,7 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
         if (!string.IsNullOrWhiteSpace(q.Search)) cmd.Parameters.AddWithValue("@Search", $"%{q.Search}%");
         if (q.Published.HasValue) cmd.Parameters.AddWithValue("@Published", q.Published.Value);
         if (q.VendorId.HasValue) cmd.Parameters.AddWithValue("@VendorId", q.VendorId.Value);
+        if (q.Status.HasValue) cmd.Parameters.AddWithValue("@Status", (int)q.Status.Value);
     }
 
     private static void AddWriteParams(SqlCommand cmd, Product p)
@@ -207,7 +232,7 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
         cmd.Parameters.AddWithValue("@Price", p.Price);
         cmd.Parameters.AddWithValue("@OldPrice", p.OldPrice);
         cmd.Parameters.AddWithValue("@StockQuantity", p.StockQuantity);
-        cmd.Parameters.AddWithValue("@Published", p.Published);
+        cmd.Parameters.AddWithValue("@Status", (int)p.Status);
         cmd.Parameters.AddWithValue("@VendorId", p.VendorId);
         cmd.Parameters.AddWithValue("@ShowOnHomepage", p.ShowOnHomepage);
         cmd.Parameters.AddWithValue("@DisplayOrder", p.DisplayOrder);
@@ -224,7 +249,7 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
         Price = r.GetDecimal(4),
         OldPrice = r.GetDecimal(5),
         StockQuantity = r.GetInt32(6),
-        Published = r.GetBoolean(7),
+        Status = (ProductStatus)r.GetInt32(7),
         Deleted = r.GetBoolean(8),
         VendorId = r.GetInt32(9),
         ShowOnHomepage = r.GetBoolean(10),
@@ -232,6 +257,11 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
         CreatedOnUtc = r.GetDateTime(12),
         UpdatedOnUtc = r.GetDateTime(13),
         VendorName = r.GetString(14),
-        VendorActive = r.GetBoolean(15)
+        VendorActive = r.GetBoolean(15),
+        StatusBeforeHidden = r.IsDBNull(16) ? null : (ProductStatus)r.GetInt32(16),
+        HiddenReason = r.IsDBNull(17) ? null : r.GetString(17),
+        HiddenOnUtc = r.IsDBNull(18) ? null : r.GetDateTime(18),
+        HiddenByCustomerId = r.IsDBNull(19) ? null : r.GetInt32(19),
+        ReviewRequestedOnUtc = r.IsDBNull(20) ? null : r.GetDateTime(20)
     };
 }

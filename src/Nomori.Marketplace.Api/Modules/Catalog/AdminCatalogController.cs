@@ -86,10 +86,24 @@ public sealed class AdminCatalogController(
         [FromQuery] int pageSize = 50,
         [FromQuery] string? search = null,
         [FromQuery] int? vendorId = null,
+        [FromQuery] string? status = null,
+        [FromQuery] bool? reviewRequested = null,
         CancellationToken cancellationToken = default)
     {
+        ProductStatus? parsedStatus = null;
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            if (!ProductStatusNames.TryParse(status, out var value))
+                return BadRequest(new ValidationProblemDetails(new Dictionary<string, string[]>
+                {
+                    ["status"] = ["Status must be draft, live, stopped or hiddenByAdmin."]
+                }));
+            parsedStatus = value;
+        }
+
         var result = await productService.GetListAsync(
-            new ProductQuery(Math.Max(page, 1), Math.Clamp(pageSize, 1, MaxPageSize), Search: search, VendorId: vendorId), cancellationToken);
+            new ProductQuery(Math.Max(page, 1), Math.Clamp(pageSize, 1, MaxPageSize), Search: search, VendorId: vendorId,
+                Status: parsedStatus, ReviewRequested: reviewRequested), cancellationToken);
         return Ok(ToPagedResponse(result, ToAdminProductResponse));
     }
 
@@ -130,6 +144,24 @@ public sealed class AdminCatalogController(
             ActorId(), cancellationToken);
         if (!result.Succeeded) return this.ToFailure(result);
         return Ok(ToAdminProductResponse(result.Value!));
+    }
+
+    /// <summary>Hides a product from the storefront. The reason is required, is emailed to the shop and is shown to it.</summary>
+    [HttpPost("products/{id:int}/hide")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> HideProduct(int id, HideProductRequest request, CancellationToken cancellationToken)
+    {
+        var result = await productService.HideAsync(id, request.Reason, ActorId(), cancellationToken);
+        return result.Succeeded ? Ok(ToAdminProductResponse(result.Value!)) : this.ToFailure(result);
+    }
+
+    /// <summary>Restores the state the product had before it was hidden.</summary>
+    [HttpPost("products/{id:int}/unhide")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> UnhideProduct(int id, CancellationToken cancellationToken)
+    {
+        var result = await productService.UnhideAsync(id, ActorId(), cancellationToken);
+        return result.Succeeded ? Ok(ToAdminProductResponse(result.Value!)) : this.ToFailure(result);
     }
 
     /// <summary>Moves a product to another shop. The only way to change a product's owner.</summary>
@@ -224,7 +256,8 @@ public sealed class AdminCatalogController(
         new(c.Id, c.Name, c.Description, c.ParentCategoryId, c.PictureId, c.ShowOnHomepage, c.Published, c.RestrictFromVendors, c.DisplayOrder, c.CreatedOnUtc, c.UpdatedOnUtc);
 
     private static AdminProductResponse ToAdminProductResponse(Product p) =>
-        new(p.Id, p.Name, p.ShortDescription, p.FullDescription, p.Price, p.OldPrice, p.StockQuantity, p.Published, p.VendorId, p.VendorName, p.ShowOnHomepage, p.DisplayOrder, p.CreatedOnUtc, p.UpdatedOnUtc);
+        new(p.Id, p.Name, p.ShortDescription, p.FullDescription, p.Price, p.OldPrice, p.StockQuantity, p.Published, p.VendorId, p.VendorName, p.ShowOnHomepage, p.DisplayOrder, p.CreatedOnUtc, p.UpdatedOnUtc,
+            ProductStatusNames.ToName(p.Status), p.HiddenReason, p.HiddenOnUtc, p.ReviewRequestedOnUtc);
 
     private static AdminManufacturerResponse ToAdminManufacturerResponse(Manufacturer m) =>
         new(m.Id, m.Name, m.Description, m.PictureId, m.Published, m.DisplayOrder, m.CreatedOnUtc, m.UpdatedOnUtc);
@@ -277,9 +310,12 @@ public sealed record AdminProductResponse(
     int Id, string Name, string? ShortDescription, string? FullDescription,
     decimal Price, decimal OldPrice, int StockQuantity,
     bool Published, int VendorId, string? VendorName, bool ShowOnHomepage, int DisplayOrder,
-    DateTime CreatedOnUtc, DateTime UpdatedOnUtc);
+    DateTime CreatedOnUtc, DateTime UpdatedOnUtc,
+    string Status, string? HiddenReason, DateTime? HiddenOnUtc, DateTime? ReviewRequestedOnUtc);
 
 public sealed record TransferProductRequest(int VendorId);
+
+public sealed record HideProductRequest(string? Reason);
 
 public sealed record AdminProductDetailResponse(
     AdminProductResponse Product,
