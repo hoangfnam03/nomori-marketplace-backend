@@ -37,7 +37,8 @@ public sealed record CreateCategoryCommand(
     int PictureId,
     bool ShowOnHomepage,
     bool Published,
-    int DisplayOrder);
+    int DisplayOrder,
+    bool RestrictFromVendors = false);
 
 public sealed record UpdateCategoryCommand(
     int Id,
@@ -47,7 +48,8 @@ public sealed record UpdateCategoryCommand(
     int PictureId,
     bool ShowOnHomepage,
     bool Published,
-    int DisplayOrder);
+    int DisplayOrder,
+    bool RestrictFromVendors = false);
 
 public sealed record CreateProductCommand(
     string Name,
@@ -93,9 +95,13 @@ public sealed record UpdateManufacturerCommand(
     bool Published,
     int DisplayOrder);
 
-public sealed record CatalogResult<T>(T? Value, IReadOnlyDictionary<string, string[]> Errors)
+/// <summary>
+/// Outcome of a catalog operation: field errors (400), an <see cref="ErrorCode"/> from <see cref="CatalogErrors"/>
+/// (not_found is 404, every other code is a 409 business-rule conflict), or a value.
+/// </summary>
+public sealed record CatalogResult<T>(T? Value, IReadOnlyDictionary<string, string[]> Errors, string? ErrorCode = null)
 {
-    public bool Succeeded => Errors.Count == 0;
+    public bool Succeeded => Errors.Count == 0 && ErrorCode is null;
 }
 
 public static class CatalogResult
@@ -108,4 +114,7 @@ public static class CatalogResult
 
     public static CatalogResult<T> Failure<T>(IReadOnlyDictionary<string, string[]> errors) =>
         new(default, errors);
+
+    public static CatalogResult<T> Error<T>(string errorCode) =>
+        new(default, new Dictionary<string, string[]>(), errorCode);
 }

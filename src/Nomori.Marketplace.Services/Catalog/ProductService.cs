@@ -7,6 +7,7 @@ public sealed class ProductService(
     IProductStore productStore,
     ICategoryStore categoryStore,
     IManufacturerStore manufacturerStore,
+    ITaxonomyService taxonomy,
     IClock clock) : IProductService
 {
     public async Task<ProductDetail?> GetDetailAsync(int id, CancellationToken cancellationToken)
@@ -43,6 +44,8 @@ public sealed class ProductService(
     public async Task<CatalogResult<Product>> CreateAsync(CreateProductCommand command, CancellationToken cancellationToken)
     {
         var errors = Validate(command.Name, command.Price, command.OldPrice, command.StockQuantity);
+        var selection = await taxonomy.ValidateSelectionAsync(command.CategoryIds, command.ManufacturerIds, TaxonomyAudience.Admin, cancellationToken);
+        foreach (var error in selection.Errors) errors[error.Key] = error.Value;
         if (errors.Count > 0) return CatalogResult.Failure<Product>(errors);
 
         var now = clock.UtcNow;
@@ -63,10 +66,10 @@ public sealed class ProductService(
         };
         product.Id = await productStore.InsertAsync(product, cancellationToken);
 
-        if (command.CategoryIds.Length > 0)
-            await productStore.SetCategoriesAsync(product.Id, command.CategoryIds, cancellationToken);
-        if (command.ManufacturerIds.Length > 0)
-            await productStore.SetManufacturersAsync(product.Id, command.ManufacturerIds, cancellationToken);
+        if (selection.Value!.CategoryIds.Length > 0)
+            await productStore.SetCategoriesAsync(product.Id, selection.Value.CategoryIds, cancellationToken);
+        if (selection.Value.ManufacturerIds.Length > 0)
+            await productStore.SetManufacturersAsync(product.Id, selection.Value.ManufacturerIds, cancellationToken);
 
         return CatalogResult.Success(product);
     }
@@ -77,6 +80,8 @@ public sealed class ProductService(
         if (existing is null) return CatalogResult.Failure<Product>("id", "Product not found.");
 
         var errors = Validate(command.Name, command.Price, command.OldPrice, command.StockQuantity);
+        var selection = await taxonomy.ValidateSelectionAsync(command.CategoryIds, command.ManufacturerIds, TaxonomyAudience.Admin, cancellationToken);
+        foreach (var error in selection.Errors) errors[error.Key] = error.Value;
         if (errors.Count > 0) return CatalogResult.Failure<Product>(errors);
 
         existing.Name = command.Name.Trim();
@@ -91,8 +96,8 @@ public sealed class ProductService(
         existing.DisplayOrder = command.DisplayOrder;
         existing.UpdatedOnUtc = clock.UtcNow;
         await productStore.UpdateAsync(existing, cancellationToken);
-        await productStore.SetCategoriesAsync(command.Id, command.CategoryIds, cancellationToken);
-        await productStore.SetManufacturersAsync(command.Id, command.ManufacturerIds, cancellationToken);
+        await productStore.SetCategoriesAsync(command.Id, selection.Value!.CategoryIds, cancellationToken);
+        await productStore.SetManufacturersAsync(command.Id, selection.Value.ManufacturerIds, cancellationToken);
 
         return CatalogResult.Success(existing);
     }

@@ -12,6 +12,8 @@ public sealed class CatalogController(
     IProductService productService,
     IManufacturerService manufacturerService) : ControllerBase
 {
+    private const int MaxPageSize = 100;
+
     [HttpGet("categories")]
     public async Task<IActionResult> GetCategories(
         [FromQuery] int page = 1,
@@ -19,7 +21,7 @@ public sealed class CatalogController(
         [FromQuery] int? parentId = null,
         CancellationToken cancellationToken = default)
     {
-        var result = await categoryService.GetListAsync(new CategoryQuery(page, pageSize, parentId, Published: true), cancellationToken);
+        var result = await categoryService.GetListAsync(new CategoryQuery(Math.Max(page, 1), Math.Clamp(pageSize, 1, MaxPageSize), parentId, Published: true), cancellationToken);
         return Ok(ToPagedResponse(result, ToCategoryResponse));
     }
 
@@ -33,8 +35,9 @@ public sealed class CatalogController(
     [HttpGet("categories/{id:int}")]
     public async Task<IActionResult> GetCategory(int id, CancellationToken cancellationToken)
     {
-        var category = await categoryService.GetAsync(id, cancellationToken);
-        if (category is null || !category.Published) return NotFound();
+        // Hidden when the category or any of its ancestors is unpublished.
+        var category = await categoryService.GetPublicAsync(id, cancellationToken);
+        if (category is null) return NotFound();
         return Ok(ToCategoryResponse(category));
     }
 
@@ -42,7 +45,7 @@ public sealed class CatalogController(
     public async Task<IActionResult> GetProducts([FromQuery] ProductListRequest request, CancellationToken cancellationToken)
     {
         var query = new ProductQuery(
-            request.Page, request.PageSize,
+            Math.Max(request.Page, 1), Math.Clamp(request.PageSize, 1, MaxPageSize),
             request.CategoryId, request.ManufacturerId,
             request.MinPrice, request.MaxPrice,
             request.Search, request.Sort,
@@ -69,7 +72,7 @@ public sealed class CatalogController(
         [FromQuery] int pageSize = 20,
         CancellationToken cancellationToken = default)
     {
-        var result = await manufacturerService.GetListAsync(new ManufacturerQuery(page, pageSize, Published: true), cancellationToken);
+        var result = await manufacturerService.GetListAsync(new ManufacturerQuery(Math.Max(page, 1), Math.Clamp(pageSize, 1, MaxPageSize), Published: true), cancellationToken);
         return Ok(ToPagedResponse(result, ToManufacturerResponse));
     }
 

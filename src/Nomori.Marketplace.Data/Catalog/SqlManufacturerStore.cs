@@ -43,6 +43,51 @@ public sealed class SqlManufacturerStore(IOptions<DatabaseOptions> options) : IM
         return (items, totalCount);
     }
 
+    public async Task<IReadOnlyList<Manufacturer>> GetByIdsAsync(IReadOnlyCollection<int> ids, CancellationToken cancellationToken)
+    {
+        if (ids.Count == 0) return [];
+
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        var names = new List<string>();
+        var index = 0;
+        foreach (var id in ids)
+        {
+            var name = $"@Id{index++}";
+            names.Add(name);
+            cmd.Parameters.AddWithValue(name, id);
+        }
+
+        cmd.CommandText = $"SELECT {SelectColumns} FROM Manufacturer WHERE Deleted = 0 AND Id IN ({string.Join(", ", names)})";
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        var items = new List<Manufacturer>();
+        while (await reader.ReadAsync(cancellationToken)) items.Add(Read(reader));
+        return items;
+    }
+
+    public async Task<int> CountProductsAsync(int id, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM ProductManufacturer pm INNER JOIN Product p ON p.Id = pm.ProductId AND p.Deleted = 0 WHERE pm.ManufacturerId = @Id";
+        cmd.Parameters.AddWithValue("@Id", id);
+        return (int)(await cmd.ExecuteScalarAsync(cancellationToken))!;
+    }
+
+    public async Task<bool> NameExistsAsync(string name, int? excludeId, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT CASE WHEN EXISTS (
+                SELECT 1 FROM Manufacturer WHERE Deleted = 0 AND Name = @Name AND (@ExcludeId IS NULL OR Id <> @ExcludeId)
+            ) THEN 1 ELSE 0 END
+            """;
+        cmd.Parameters.AddWithValue("@Name", name);
+        cmd.Parameters.AddWithValue("@ExcludeId", (object?)excludeId ?? DBNull.Value);
+        return (int)(await cmd.ExecuteScalarAsync(cancellationToken))! == 1;
+    }
+
     public async Task<int> InsertAsync(Manufacturer manufacturer, CancellationToken cancellationToken)
     {
         await using var connection = await OpenAsync(cancellationToken);
