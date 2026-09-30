@@ -1,9 +1,11 @@
 using Nomori.Marketplace.Core.Catalog;
+using Nomori.Marketplace.Core.Media;
+using Nomori.Marketplace.Services.Media;
 using Nomori.Marketplace.Core.Time;
 
 namespace Nomori.Marketplace.Services.Catalog;
 
-public sealed class CategoryService(ICategoryStore categoryStore, IClock clock) : ICategoryService
+public sealed class CategoryService(ICategoryStore categoryStore, IMediaStore mediaStore, IClock clock) : ICategoryService
 {
     public Task<Category?> GetAsync(int id, CancellationToken cancellationToken) =>
         categoryStore.GetAsync(id, cancellationToken);
@@ -23,6 +25,7 @@ public sealed class CategoryService(ICategoryStore categoryStore, IClock clock) 
     public async Task<CatalogResult<Category>> CreateAsync(CreateCategoryCommand command, CancellationToken cancellationToken)
     {
         var errors = ValidateName(command.Name);
+        await MediaAttachment.ValidateAsync(mediaStore, command.PictureId, MediaPurpose.Category, null, errors, cancellationToken);
         if (errors.Count > 0) return CatalogResult.Failure<Category>(errors);
 
         var now = clock.UtcNow;
@@ -48,6 +51,8 @@ public sealed class CategoryService(ICategoryStore categoryStore, IClock clock) 
         if (existing is null) return CatalogResult.Failure<Category>("id", "Category not found.");
 
         var errors = ValidateName(command.Name);
+        if (command.PictureId != existing.PictureId)
+            await MediaAttachment.ValidateAsync(mediaStore, command.PictureId, MediaPurpose.Category, null, errors, cancellationToken);
         if (errors.Count > 0) return CatalogResult.Failure<Category>(errors);
 
         existing.Name = command.Name.Trim();

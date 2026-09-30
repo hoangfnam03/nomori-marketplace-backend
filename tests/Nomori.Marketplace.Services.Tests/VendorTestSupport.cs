@@ -101,3 +101,28 @@ internal static class NullLog<T>
 {
     public static NullLogger<T> Instance { get; } = NullLogger<T>.Instance;
 }
+
+internal sealed class FakeMediaStore : Nomori.Marketplace.Core.Media.IMediaStore
+{
+    private int nextId = 1;
+
+    public Dictionary<int, Nomori.Marketplace.Core.Media.MediaAsset> Assets { get; } = [];
+    public HashSet<int> Referenced { get; } = [];
+
+    public Task<int> InsertAsync(Nomori.Marketplace.Core.Media.MediaAsset asset, byte[] data, CancellationToken cancellationToken)
+    {
+        asset.Id = nextId++;
+        Assets[asset.Id] = asset;
+        return Task.FromResult(asset.Id);
+    }
+
+    public Task<Nomori.Marketplace.Core.Media.MediaAsset?> GetAsync(int id, CancellationToken cancellationToken) =>
+        Task.FromResult(Assets.GetValueOrDefault(id));
+
+    public Task<Nomori.Marketplace.Core.Media.MediaContent?> GetContentAsync(int id, CancellationToken cancellationToken) =>
+        Task.FromResult<Nomori.Marketplace.Core.Media.MediaContent?>(null);
+
+    public Task<bool> DeleteAsync(int id, CancellationToken cancellationToken) => Task.FromResult(Assets.Remove(id));
+
+    public Task<bool> IsReferencedAsync(int id, CancellationToken cancellationToken) => Task.FromResult(Referenced.Contains(id));
+}

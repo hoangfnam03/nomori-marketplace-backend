@@ -1,9 +1,11 @@
 using Nomori.Marketplace.Core.Catalog;
+using Nomori.Marketplace.Core.Media;
+using Nomori.Marketplace.Services.Media;
 using Nomori.Marketplace.Core.Time;
 
 namespace Nomori.Marketplace.Services.Catalog;
 
-public sealed class ManufacturerService(IManufacturerStore manufacturerStore, IClock clock) : IManufacturerService
+public sealed class ManufacturerService(IManufacturerStore manufacturerStore, IMediaStore mediaStore, IClock clock) : IManufacturerService
 {
     public Task<Manufacturer?> GetAsync(int id, CancellationToken cancellationToken) =>
         manufacturerStore.GetAsync(id, cancellationToken);
@@ -17,6 +19,7 @@ public sealed class ManufacturerService(IManufacturerStore manufacturerStore, IC
     public async Task<CatalogResult<Manufacturer>> CreateAsync(CreateManufacturerCommand command, CancellationToken cancellationToken)
     {
         var errors = ValidateName(command.Name);
+        await MediaAttachment.ValidateAsync(mediaStore, command.PictureId, MediaPurpose.Manufacturer, null, errors, cancellationToken);
         if (errors.Count > 0) return CatalogResult.Failure<Manufacturer>(errors);
 
         var now = clock.UtcNow;
@@ -40,6 +43,8 @@ public sealed class ManufacturerService(IManufacturerStore manufacturerStore, IC
         if (existing is null) return CatalogResult.Failure<Manufacturer>("id", "Manufacturer not found.");
 
         var errors = ValidateName(command.Name);
+        if (command.PictureId != existing.PictureId)
+            await MediaAttachment.ValidateAsync(mediaStore, command.PictureId, MediaPurpose.Manufacturer, null, errors, cancellationToken);
         if (errors.Count > 0) return CatalogResult.Failure<Manufacturer>(errors);
 
         existing.Name = command.Name.Trim();

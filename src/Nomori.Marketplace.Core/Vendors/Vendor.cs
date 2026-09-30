@@ -41,7 +41,8 @@ public sealed record UpdateVendorCommand(
     string? Description,
     string? AdminComment,
     bool Active,
-    int DisplayOrder);
+    int DisplayOrder,
+    int? PictureId = null);
 
 /// <summary>
 /// Outcome of a vendor operation. <see cref="Errors"/> are field validation errors (400);

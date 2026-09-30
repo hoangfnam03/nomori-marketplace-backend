@@ -4,10 +4,12 @@ using Microsoft.Extensions.DependencyInjection;
 using Nomori.Marketplace.Core.Catalog;
 using Nomori.Marketplace.Core.Configuration;
 using Nomori.Marketplace.Core.Customers;
+using Nomori.Marketplace.Core.Media;
 using Nomori.Marketplace.Core.Security;
 using Nomori.Marketplace.Core.Vendors;
 using Nomori.Marketplace.Data.Catalog;
 using Nomori.Marketplace.Data.Customers;
+using Nomori.Marketplace.Data.Media;
 using Nomori.Marketplace.Data.Security;
 using Nomori.Marketplace.Data.Vendors;
 
@@ -34,6 +36,7 @@ public static class DatabaseRegistrationExtensions
         services.AddScoped<IVendorStore, SqlVendorStore>();
         services.AddScoped<IVendorApplicationStore, SqlVendorApplicationStore>();
         services.AddScoped<IVendorMemberStore, SqlVendorMemberStore>();
+        services.AddScoped<IMediaStore, SqlMediaStore>();
 
         var databaseOptions = configuration.GetSection(DatabaseOptions.SectionName).Get<DatabaseOptions>() ?? new DatabaseOptions();
         if (!string.Equals(databaseOptions.Provider, "SqlServer", StringComparison.OrdinalIgnoreCase))

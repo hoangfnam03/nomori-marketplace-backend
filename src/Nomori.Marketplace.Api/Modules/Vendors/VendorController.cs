@@ -60,7 +60,7 @@ public sealed class VendorController(IVendorService vendorService, IVendorAccess
     public async Task<IActionResult> UpdateVendor(int id, UpdateVendorRequest request, CancellationToken cancellationToken)
     {
         var result = await vendorService.UpdateAsync(
-            new UpdateVendorCommand(id, request.Name, request.Email, request.Description, request.AdminComment, request.Active, request.DisplayOrder),
+            new UpdateVendorCommand(id, request.Name, request.Email, request.Description, request.AdminComment, request.Active, request.DisplayOrder, request.PictureId),
             cancellationToken);
         if (!result.Succeeded) return this.ToFailure(result, "Vendor update failed");
 
@@ -93,7 +93,8 @@ public sealed record UpdateVendorRequest(
     string? Description = null,
     string? AdminComment = null,
     bool Active = true,
-    int DisplayOrder = 0);
+    int DisplayOrder = 0,
+    int? PictureId = null);
 
 public sealed record VendorPagedResponse(
     IReadOnlyList<VendorResponse> Items,
