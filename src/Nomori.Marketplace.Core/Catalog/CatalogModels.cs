@@ -13,6 +13,9 @@ public sealed record ProductQuery(
     ProductSortOrder Sort = ProductSortOrder.DisplayOrder,
     bool? Published = null,
     int? VendorId = null,
+    ProductStatus? Status = null,
+    /// <summary>When true, only products with a pending review request.</summary>
+    bool? ReviewRequested = null,
     /// <summary>Hide products whose shop is inactive or deleted. Set for every public query.</summary>
     bool OnlyActiveShops = false);
 
@@ -68,7 +71,7 @@ public sealed record CreateProductCommand(
     int[] CategoryIds,
     int[] ManufacturerIds);
 
-/// <summary>Seller input. Has no owner, homepage or ordering fields: sellers cannot set those.</summary>
+/// <summary>Seller input. Has no owner, homepage, ordering or status fields: sellers change status through their own actions.</summary>
 public sealed record SaveVendorProductCommand(
     string Name,
     string? ShortDescription,
@@ -76,7 +79,6 @@ public sealed record SaveVendorProductCommand(
     decimal Price,
     decimal OldPrice,
     int StockQuantity,
-    bool Published,
     int[] CategoryIds,
     int[] ManufacturerIds);
 

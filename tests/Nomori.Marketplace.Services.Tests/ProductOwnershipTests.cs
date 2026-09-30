@@ -26,12 +26,14 @@ public sealed class ProductOwnershipTests
             Vendors.Vendors.Add(new Vendor { Id = ShopB, Name = "Shop B", Active = true });
         }
 
-        public ProductService Create() => new(Products, new UnusedCategoryStore(), new UnusedManufacturerStore(), Vendors, Taxonomy, Audit, new TestClock());
+        public ProductService Create() => new(
+            Products, new UnusedCategoryStore(), new UnusedManufacturerStore(), Vendors, new NoMembers(), Taxonomy, Audit,
+            new RecordingEmailSender(), TestOptions.Email(false), NullLog<ProductService>.Instance, new TestClock());
     }
 
     private static SaveVendorProductCommand Seller(
-        string name = "Mug", decimal price = 10, decimal oldPrice = 0, int stock = 3, bool published = false, int[]? categories = null) =>
-        new(name, " short ", null, price, oldPrice, stock, published, categories ?? [1], []);
+        string name = "Mug", decimal price = 10, decimal oldPrice = 0, int stock = 3, int[]? categories = null) =>
+        new(name, " short ", null, price, oldPrice, stock, categories ?? [1], []);
 
     private static CreateProductCommand Admin(int? vendorId = null) =>
         new("Plate", null, null, 5, 0, 1, true, vendorId, true, 7, [1], []);
@@ -142,19 +144,6 @@ public sealed class ProductOwnershipTests
         Assert.Contains("oldPrice", (await service.CreateForVendorAsync(ShopA, Seller(price: 10, oldPrice: 10), Actor, CancellationToken.None)).Errors.Keys);
         Assert.Contains("stockQuantity", (await service.CreateForVendorAsync(ShopA, Seller(stock: -1), Actor, CancellationToken.None)).Errors.Keys);
         Assert.True((await service.CreateForVendorAsync(ShopA, Seller(price: 10, oldPrice: 12), Actor, CancellationToken.None)).Succeeded);
-    }
-
-    [Fact]
-    public async Task PublishingNeedsACategory()
-    {
-        var f = new Fixture();
-        var service = f.Create();
-
-        var blocked = await service.CreateForVendorAsync(ShopA, Seller(published: true, categories: []), Actor, CancellationToken.None);
-        Assert.Contains("published", blocked.Errors.Keys);
-
-        Assert.True((await service.CreateForVendorAsync(ShopA, Seller(published: false, categories: []), Actor, CancellationToken.None)).Succeeded);
-        Assert.True((await service.CreateForVendorAsync(ShopA, Seller(published: true), Actor, CancellationToken.None)).Succeeded);
     }
 
     [Fact]
@@ -276,6 +265,8 @@ public sealed class ProductOwnershipTests
         public Task<IReadOnlyList<int>> GetCategoryIdsAsync(int productId, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<int>>(categories.GetValueOrDefault(productId) ?? []);
 
+        public int[] CategoriesOf(int productId) => categories.GetValueOrDefault(productId) ?? [];
+
         public Task<IReadOnlyList<int>> GetManufacturerIdsAsync(int productId, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<int>>([]);
 
@@ -294,6 +285,8 @@ public sealed class ProductOwnershipTests
             return Task.CompletedTask;
         }
 
+        public Task UpdateLifecycleAsync(Product product, CancellationToken cancellationToken) => Task.CompletedTask;
+
         public Task SetVendorAsync(int productId, int vendorId, DateTime nowUtc, CancellationToken cancellationToken)
         {
             Products.Single(p => p.Id == productId).VendorId = vendorId;
@@ -309,7 +302,26 @@ public sealed class ProductOwnershipTests
         public Task SetManufacturersAsync(int productId, int[] manufacturerIds, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
-    private sealed class UnusedCategoryStore : ICategoryStore
+    internal sealed class NoMembers : IVendorMemberStore
+    {
+        public List<VendorMember> Members { get; } = [];
+
+        public Task<IReadOnlyList<VendorMember>> ListAsync(int vendorId, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<VendorMember>>(Members.ToList());
+
+        public Task<VendorMember?> GetAsync(int vendorId, int customerId, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<CreateMemberStoreResult> CreateAsync(int vendorId, string email, string? firstName, string? lastName, string passwordHash,
+            string passwordSalt, string setupTokenHash, DateTime setupTokenExpiresOnUtc, int maxMembers, DateTime nowUtc, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task ReplaceSetupTokenAsync(int customerId, string tokenHash, DateTime expiresOnUtc, DateTime nowUtc, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<RemoveMemberOutcome> RemoveAsync(int vendorId, int customerId, CancellationToken cancellationToken) => throw new NotSupportedException();
+    }
+
+    internal sealed class UnusedCategoryStore : ICategoryStore
     {
         public Task<Category?> GetAsync(int id, CancellationToken cancellationToken) => Task.FromResult<Category?>(null);
         public Task<(IReadOnlyList<Category> Items, int TotalCount)> GetPagedAsync(CategoryQuery query, CancellationToken cancellationToken) => throw new NotSupportedException();
@@ -323,7 +335,7 @@ public sealed class ProductOwnershipTests
         public Task DeleteAsync(int id, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
-    private sealed class UnusedManufacturerStore : IManufacturerStore
+    internal sealed class UnusedManufacturerStore : IManufacturerStore
     {
         public Task<Manufacturer?> GetAsync(int id, CancellationToken cancellationToken) => Task.FromResult<Manufacturer?>(null);
         public Task<(IReadOnlyList<Manufacturer> Items, int TotalCount)> GetPagedAsync(ManufacturerQuery query, CancellationToken cancellationToken) => throw new NotSupportedException();

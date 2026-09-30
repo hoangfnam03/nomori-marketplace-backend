@@ -1,19 +1,29 @@
+using System.Text.Encodings.Web;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Nomori.Marketplace.Core.Catalog;
+using Nomori.Marketplace.Core.Email;
 using Nomori.Marketplace.Core.Security;
 using Nomori.Marketplace.Core.Time;
 using Nomori.Marketplace.Core.Vendors;
 
 namespace Nomori.Marketplace.Services.Catalog;
 
-public sealed class ProductService(
+public sealed partial class ProductService(
     IProductStore productStore,
     ICategoryStore categoryStore,
     IManufacturerStore manufacturerStore,
     IVendorStore vendorStore,
+    IVendorMemberStore memberStore,
     ITaxonomyService taxonomy,
     IAuditLogService auditLog,
+    IEmailSender emailSender,
+    IOptions<EmailOptions> emailOptions,
+    ILogger<ProductService> logger,
     IClock clock) : IProductService
 {
+    private const int MaxReasonLength = 2000;
+
     public async Task<ProductDetail?> GetDetailAsync(int id, CancellationToken cancellationToken)
     {
         var product = await productStore.GetAsync(id, cancellationToken);
@@ -77,7 +87,7 @@ public sealed class ProductService(
             Price = command.Price,
             OldPrice = command.OldPrice,
             StockQuantity = command.StockQuantity,
-            Published = command.Published,
+            Status = command.Published ? ProductStatus.Live : ProductStatus.Draft,
             VendorId = vendorId!.Value,
             ShowOnHomepage = command.ShowOnHomepage,
             DisplayOrder = command.DisplayOrder,
@@ -109,7 +119,7 @@ public sealed class ProductService(
         existing.Price = command.Price;
         existing.OldPrice = command.OldPrice;
         existing.StockQuantity = command.StockQuantity;
-        existing.Published = command.Published;
+        ApplyPublishedFlag(existing, command.Published);
         existing.ShowOnHomepage = command.ShowOnHomepage;
         existing.DisplayOrder = command.DisplayOrder;
         existing.UpdatedOnUtc = clock.UtcNow;
@@ -183,7 +193,7 @@ public sealed class ProductService(
             Price = command.Price,
             OldPrice = command.OldPrice,
             StockQuantity = command.StockQuantity,
-            Published = command.Published,
+            Status = ProductStatus.Draft,
             VendorId = vendorId,
             // Admin-only fields: sellers start from the defaults.
             ShowOnHomepage = false,
@@ -207,6 +217,9 @@ public sealed class ProductService(
         if (!vendor.Active) return CatalogResult.Error<Product>(CatalogErrors.Forbidden);
 
         var (errors, selection) = await ValidateSellerAsync(command, cancellationToken);
+        // A product on sale must always keep a category.
+        if (existing.Status == ProductStatus.Live && (selection?.CategoryIds.Length ?? 0) == 0 && !errors.ContainsKey("categoryIds"))
+            errors["categoryIds"] = ["A product on sale needs at least one category. Stop selling it first."];
         if (errors.Count > 0) return CatalogResult.Failure<Product>(errors);
 
         existing.Name = command.Name.Trim();
@@ -215,8 +228,7 @@ public sealed class ProductService(
         existing.Price = command.Price;
         existing.OldPrice = command.OldPrice;
         existing.StockQuantity = command.StockQuantity;
-        existing.Published = command.Published;
-        // ShowOnHomepage and DisplayOrder keep their current (admin-controlled) values.
+        // Status, ShowOnHomepage and DisplayOrder keep their current values: sellers change status through their own actions.
         existing.UpdatedOnUtc = clock.UtcNow;
         await productStore.UpdateAsync(existing, cancellationToken);
         await productStore.SetCategoriesAsync(existing.Id, selection!.CategoryIds, cancellationToken);
@@ -240,7 +252,164 @@ public sealed class ProductService(
         return CatalogResult.Success(true);
     }
 
+    // ---- Lifecycle: seller actions ----
+
+    public async Task<CatalogResult<Product>> SetStatusForVendorAsync(
+        int vendorId, int productId, ProductStatus target, int actorCustomerId, CancellationToken cancellationToken)
+    {
+        if (target is not (ProductStatus.Live or ProductStatus.Stopped))
+            return CatalogResult.Failure<Product>("status", "Status must be live or stopped.");
+
+        var (product, failure) = await LoadOwnedForWriteAsync(vendorId, productId, cancellationToken);
+        if (failure is not null) return failure;
+
+        if (product!.Status == ProductStatus.HiddenByAdmin) return CatalogResult.Error<Product>(CatalogErrors.ProductHiddenByAdmin);
+        if (product.Status == target) return CatalogResult.Success(product);
+
+        if (target == ProductStatus.Stopped)
+        {
+            // Only a product on sale can be stopped; a draft has nothing to stop.
+            if (product.Status != ProductStatus.Live) return CatalogResult.Error<Product>(CatalogErrors.ProductInvalidTransition);
+        }
+        else
+        {
+            var errors = new Dictionary<string, string[]>();
+            if (product.Price <= 0) errors["price"] = ["Price must be greater than 0 before the product can be published."];
+            if ((await productStore.GetCategoryIdsAsync(productId, cancellationToken)).Count == 0)
+                errors["categoryIds"] = ["Add at least one category before the product can be published."];
+            if (errors.Count > 0) return CatalogResult.Failure<Product>(errors);
+        }
+
+        var previous = product.Status;
+        product.Status = target;
+        product.UpdatedOnUtc = clock.UtcNow;
+        await productStore.UpdateLifecycleAsync(product, cancellationToken);
+
+        await auditLog.WriteAsync(target == ProductStatus.Live ? "product.published" : "product.stopped", actorCustomerId,
+            entityType: "Product", entityId: productId,
+            details: new { productId, vendorId, from = previous.ToString() }, cancellationToken: cancellationToken);
+        return CatalogResult.Success(product);
+    }
+
+    public async Task<CatalogResult<Product>> RequestReviewForVendorAsync(
+        int vendorId, int productId, int actorCustomerId, CancellationToken cancellationToken)
+    {
+        var (product, failure) = await LoadOwnedForWriteAsync(vendorId, productId, cancellationToken);
+        if (failure is not null) return failure;
+        if (product!.Status != ProductStatus.HiddenByAdmin) return CatalogResult.Error<Product>(CatalogErrors.ProductNotHidden);
+
+        product.ReviewRequestedOnUtc = clock.UtcNow;
+        product.UpdatedOnUtc = product.ReviewRequestedOnUtc.Value;
+        await productStore.UpdateLifecycleAsync(product, cancellationToken);
+
+        await auditLog.WriteAsync("product.review_requested", actorCustomerId, entityType: "Product", entityId: productId,
+            details: new { productId, vendorId }, cancellationToken: cancellationToken);
+        return CatalogResult.Success(product);
+    }
+
+    // ---- Moderation: administrators ----
+
+    public async Task<CatalogResult<Product>> HideAsync(int productId, string? reason, int actorCustomerId, CancellationToken cancellationToken)
+    {
+        var product = await productStore.GetAsync(productId, cancellationToken);
+        if (product is null) return CatalogResult.Error<Product>(CatalogErrors.NotFound);
+
+        var trimmed = reason?.Trim();
+        if (string.IsNullOrEmpty(trimmed)) return CatalogResult.Failure<Product>("reason", "A reason is required when hiding a product.");
+        if (trimmed.Length > MaxReasonLength) return CatalogResult.Failure<Product>("reason", $"Reason cannot exceed {MaxReasonLength} characters.");
+        if (product.Status == ProductStatus.HiddenByAdmin) return CatalogResult.Error<Product>(CatalogErrors.ProductAlreadyHidden);
+
+        var now = clock.UtcNow;
+        var previous = product.Status;
+        product.StatusBeforeHidden = previous;
+        product.Status = ProductStatus.HiddenByAdmin;
+        product.HiddenReason = trimmed;
+        product.HiddenOnUtc = now;
+        product.HiddenByCustomerId = actorCustomerId;
+        product.ReviewRequestedOnUtc = null;
+        product.UpdatedOnUtc = now;
+        await productStore.UpdateLifecycleAsync(product, cancellationToken);
+
+        // The reason is shown to the shop but deliberately kept out of the audit log.
+        await auditLog.WriteAsync("product.hidden", actorCustomerId, entityType: "Product", entityId: productId,
+            details: new { productId, vendorId = product.VendorId, previousStatus = previous.ToString(), reasonProvided = true },
+            cancellationToken: cancellationToken);
+
+        await NotifyMembersAsync(product, emailOptions.Value.ProductHiddenSubject,
+            encoder => $"<p>Your product <strong>{encoder.Encode(product.Name)}</strong> was hidden from the storefront by an administrator.</p><p>Reason: {encoder.Encode(trimmed)}</p><p>You can still edit it and ask for a review from your vendor portal.</p>",
+            cancellationToken);
+        return CatalogResult.Success(product);
+    }
+
+    public async Task<CatalogResult<Product>> UnhideAsync(int productId, int actorCustomerId, CancellationToken cancellationToken)
+    {
+        var product = await productStore.GetAsync(productId, cancellationToken);
+        if (product is null) return CatalogResult.Error<Product>(CatalogErrors.NotFound);
+        if (product.Status != ProductStatus.HiddenByAdmin) return CatalogResult.Error<Product>(CatalogErrors.ProductNotHidden);
+
+        // Restore what the shop had; the fallback only covers rows that predate the column.
+        var restored = product.StatusBeforeHidden is { } before && before != ProductStatus.HiddenByAdmin ? before : ProductStatus.Stopped;
+        product.Status = restored;
+        product.StatusBeforeHidden = null;
+        product.HiddenReason = null;
+        product.HiddenOnUtc = null;
+        product.HiddenByCustomerId = null;
+        product.ReviewRequestedOnUtc = null;
+        product.UpdatedOnUtc = clock.UtcNow;
+        await productStore.UpdateLifecycleAsync(product, cancellationToken);
+
+        await auditLog.WriteAsync("product.unhidden", actorCustomerId, entityType: "Product", entityId: productId,
+            details: new { productId, vendorId = product.VendorId, restoredStatus = restored.ToString() }, cancellationToken: cancellationToken);
+
+        await NotifyMembersAsync(product, emailOptions.Value.ProductUnhiddenSubject,
+            encoder => $"<p>Your product <strong>{encoder.Encode(product.Name)}</strong> is no longer hidden.</p>",
+            cancellationToken);
+        return CatalogResult.Success(product);
+    }
+
     // ---- Helpers ----
+
+    /// <summary>The product when it belongs to the shop and the shop is active; otherwise the matching failure.</summary>
+    private async Task<(Product? Product, CatalogResult<Product>? Failure)> LoadOwnedForWriteAsync(
+        int vendorId, int productId, CancellationToken cancellationToken)
+    {
+        var product = await productStore.GetAsync(productId, cancellationToken);
+        if (product is null || product.VendorId != vendorId) return (null, CatalogResult.Error<Product>(CatalogErrors.NotFound));
+
+        var vendor = await vendorStore.GetAsync(vendorId, cancellationToken);
+        if (vendor is null) return (null, CatalogResult.Error<Product>(CatalogErrors.NotFound));
+        if (!vendor.Active) return (null, CatalogResult.Error<Product>(CatalogErrors.Forbidden));
+        return (product, null);
+    }
+
+    /// <summary>Admin form checkbox: checked puts a product on sale, unchecked stops a live product. A hidden product is never changed here.</summary>
+    private static void ApplyPublishedFlag(Product product, bool published)
+    {
+        if (product.Status == ProductStatus.HiddenByAdmin) return;
+        if (published) product.Status = ProductStatus.Live;
+        else if (product.Status == ProductStatus.Live) product.Status = ProductStatus.Stopped;
+    }
+
+    /// <summary>Emails every member of the shop. A delivery failure is logged and never undoes the moderation action.</summary>
+    private async Task NotifyMembersAsync(Product product, string subject, Func<HtmlEncoder, string> body, CancellationToken cancellationToken)
+    {
+        if (!emailOptions.Value.Enabled) return;
+
+        try
+        {
+            var members = await memberStore.ListAsync(product.VendorId, cancellationToken);
+            var html = body(HtmlEncoder.Default);
+            foreach (var member in members)
+                await emailSender.SendEmailAsync(new EmailMessage(member.Email, subject, html, null), cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            LogNotificationFailed(ex, product.Id);
+        }
+    }
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Failed to email shop members about product {ProductId}.")]
+    private partial void LogNotificationFailed(Exception exception, int productId);
 
     private async Task InsertWithMappingsAsync(Product product, TaxonomySelection selection, CancellationToken cancellationToken)
     {
@@ -261,9 +430,6 @@ public sealed class ProductService(
 
         var selection = await taxonomy.ValidateSelectionAsync(command.CategoryIds, command.ManufacturerIds, TaxonomyAudience.Seller, cancellationToken);
         foreach (var error in selection.Errors) errors[error.Key] = error.Value;
-
-        if (command.Published && !errors.ContainsKey("price") && (selection.Value?.CategoryIds.Length ?? command.CategoryIds.Length) == 0)
-            errors["published"] = ["A product needs at least one category before it can be published."];
 
         return (errors, selection.Value);
     }

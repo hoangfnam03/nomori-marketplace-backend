@@ -24,12 +24,23 @@ public sealed class VendorProductController(
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 20,
         [FromQuery] string? search = null,
-        [FromQuery] bool? published = null,
+        [FromQuery] string? status = null,
         CancellationToken cancellationToken = default)
     {
         if (await RequireMemberAsync(vendorId, cancellationToken) is null) return NotFound();
 
-        var query = new ProductQuery(Math.Max(page, 1), Math.Clamp(pageSize, 1, MaxPageSize), Search: search, Published: published);
+        ProductStatus? parsedStatus = null;
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            if (!ProductStatusNames.TryParse(status, out var value))
+                return BadRequest(new ValidationProblemDetails(new Dictionary<string, string[]>
+                {
+                    ["status"] = ["Status must be draft, live, stopped or hiddenByAdmin."]
+                }));
+            parsedStatus = value;
+        }
+
+        var query = new ProductQuery(Math.Max(page, 1), Math.Clamp(pageSize, 1, MaxPageSize), Search: search, Status: parsedStatus);
         var result = await productService.GetListForVendorAsync(vendorId, query, cancellationToken);
         return Ok(new CatalogPagedResponse<VendorProductResponse>(
             result.Items.Select(p => VendorProductResponse.From(p, null, null)).ToList(),
@@ -82,6 +93,30 @@ public sealed class VendorProductController(
         return result.Succeeded ? NoContent() : this.ToFailure(result);
     }
 
+    /// <summary>Publishes or stops a product of this shop. A product hidden by an administrator cannot be changed by its shop.</summary>
+    [HttpPut("{id:int}/status")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> SetStatus(int vendorId, int id, ChangeProductStatusRequest request, CancellationToken cancellationToken)
+    {
+        if (await RequireMemberAsync(vendorId, cancellationToken) is not { } caller) return NotFound();
+        if (!ProductStatusNames.TryParse(request.Status, out var target))
+            return BadRequest(new ValidationProblemDetails(new Dictionary<string, string[]> { ["status"] = ["Status must be live or stopped."] }));
+
+        var result = await productService.SetStatusForVendorAsync(vendorId, id, target, caller.CustomerId!.Value, cancellationToken);
+        return result.Succeeded ? Ok(VendorProductResponse.From(result.Value!, null, null)) : this.ToFailure(result);
+    }
+
+    /// <summary>Asks an administrator to look at a hidden product again.</summary>
+    [HttpPost("{id:int}/review-request")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> RequestReview(int vendorId, int id, CancellationToken cancellationToken)
+    {
+        if (await RequireMemberAsync(vendorId, cancellationToken) is not { } caller) return NotFound();
+
+        var result = await productService.RequestReviewForVendorAsync(vendorId, id, caller.CustomerId!.Value, cancellationToken);
+        return result.Succeeded ? Ok(VendorProductResponse.From(result.Value!, null, null)) : this.ToFailure(result);
+    }
+
     /// <summary>The caller, only when they are a member of the shop in the route. The shop id is never taken from the body.</summary>
     private async Task<VendorCaller?> RequireMemberAsync(int vendorId, CancellationToken cancellationToken)
     {
@@ -90,6 +125,8 @@ public sealed class VendorProductController(
     }
 }
 
+public sealed record ChangeProductStatusRequest(string? Status);
+
 public sealed record SaveVendorProductRequest(
     string Name,
     string? ShortDescription = null,
@@ -97,21 +134,22 @@ public sealed record SaveVendorProductRequest(
     decimal Price = 0,
     decimal OldPrice = 0,
     int StockQuantity = 0,
-    bool Published = false,
     int[]? CategoryIds = null,
     int[]? ManufacturerIds = null)
 {
     public SaveVendorProductCommand ToCommand() =>
-        new(Name, ShortDescription, FullDescription, Price, OldPrice, StockQuantity, Published, CategoryIds ?? [], ManufacturerIds ?? []);
+        new(Name, ShortDescription, FullDescription, Price, OldPrice, StockQuantity, CategoryIds ?? [], ManufacturerIds ?? []);
 }
 
 /// <summary>Seller view of a product. Has no homepage or ordering fields because sellers do not control them.</summary>
 public sealed record VendorProductResponse(
     int Id, int VendorId, string Name, string? ShortDescription, string? FullDescription,
     decimal Price, decimal OldPrice, int StockQuantity, bool Published,
+    string Status, string? HiddenReason, DateTime? ReviewRequestedOnUtc,
     int[]? CategoryIds, int[]? ManufacturerIds, DateTime CreatedOnUtc, DateTime UpdatedOnUtc)
 {
     public static VendorProductResponse From(Product p, int[]? categoryIds, int[]? manufacturerIds) => new(
         p.Id, p.VendorId, p.Name, p.ShortDescription, p.FullDescription, p.Price, p.OldPrice, p.StockQuantity, p.Published,
+        ProductStatusNames.ToName(p.Status), p.Status == ProductStatus.HiddenByAdmin ? p.HiddenReason : null, p.ReviewRequestedOnUtc,
         categoryIds, manufacturerIds, p.CreatedOnUtc, p.UpdatedOnUtc);
 }

@@ -1,5 +1,14 @@
 namespace Nomori.Marketplace.Core.Catalog;
 
+/// <summary>Product lifecycle. Only <see cref="Live"/> products can appear on the storefront.</summary>
+public enum ProductStatus
+{
+    Draft = 0,
+    Live = 1,
+    Stopped = 2,
+    HiddenByAdmin = 3
+}
+
 public sealed class Product
 {
     public int Id { get; set; }
@@ -9,7 +18,21 @@ public sealed class Product
     public decimal Price { get; set; }
     public decimal OldPrice { get; set; }
     public int StockQuantity { get; set; }
-    public bool Published { get; set; }
+    public ProductStatus Status { get; set; }
+
+    /// <summary>True when the product is on sale. Derived from <see cref="Status"/>, so the two can never disagree.</summary>
+    public bool Published => Status == ProductStatus.Live;
+
+    /// <summary>Set while hidden: the state to restore when an administrator unhides the product.</summary>
+    public ProductStatus? StatusBeforeHidden { get; set; }
+
+    public string? HiddenReason { get; set; }
+    public DateTime? HiddenOnUtc { get; set; }
+    public int? HiddenByCustomerId { get; set; }
+
+    /// <summary>Set when the shop asked an administrator to look at a hidden product again.</summary>
+    public DateTime? ReviewRequestedOnUtc { get; set; }
+
     public bool Deleted { get; set; }
     /// <summary>Owning shop. Never null: platform products belong to the platform shop.</summary>
     public int VendorId { get; set; }
@@ -43,6 +66,9 @@ public interface IProductStore
     Task UpdateAsync(Product product, CancellationToken cancellationToken);
     Task DeleteAsync(int id, CancellationToken cancellationToken);
     Task SetVendorAsync(int productId, int vendorId, DateTime nowUtc, CancellationToken cancellationToken);
+
+    /// <summary>Writes the lifecycle fields only: status, hidden fields and the review request.</summary>
+    Task UpdateLifecycleAsync(Product product, CancellationToken cancellationToken);
     Task SetCategoriesAsync(int productId, int[] categoryIds, CancellationToken cancellationToken);
     Task SetManufacturersAsync(int productId, int[] manufacturerIds, CancellationToken cancellationToken);
 }
@@ -60,6 +86,19 @@ public interface IProductService
     Task<CatalogResult<Product>> CreateForVendorAsync(int vendorId, SaveVendorProductCommand command, int actorCustomerId, CancellationToken cancellationToken);
     Task<CatalogResult<Product>> UpdateForVendorAsync(int vendorId, int productId, SaveVendorProductCommand command, int actorCustomerId, CancellationToken cancellationToken);
     Task<CatalogResult<bool>> DeleteForVendorAsync(int vendorId, int productId, int actorCustomerId, CancellationToken cancellationToken);
+
+    /// <summary>Publishes (live) or stops (stopped) a product. A hidden product cannot be changed by its shop.</summary>
+    Task<CatalogResult<Product>> SetStatusForVendorAsync(int vendorId, int productId, ProductStatus target, int actorCustomerId, CancellationToken cancellationToken);
+
+    /// <summary>Asks an administrator to look at a hidden product again.</summary>
+    Task<CatalogResult<Product>> RequestReviewForVendorAsync(int vendorId, int productId, int actorCustomerId, CancellationToken cancellationToken);
+
+    // ---- Moderation (platform administrators) ----
+
+    Task<CatalogResult<Product>> HideAsync(int productId, string? reason, int actorCustomerId, CancellationToken cancellationToken);
+
+    /// <summary>Restores the state the product had before it was hidden.</summary>
+    Task<CatalogResult<Product>> UnhideAsync(int productId, int actorCustomerId, CancellationToken cancellationToken);
 
     /// <summary>Platform administrators only: moves a product to another shop.</summary>
     Task<CatalogResult<Product>> TransferAsync(int productId, int newVendorId, int actorCustomerId, CancellationToken cancellationToken);
