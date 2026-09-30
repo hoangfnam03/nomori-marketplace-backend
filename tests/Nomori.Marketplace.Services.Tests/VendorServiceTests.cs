@@ -10,7 +10,7 @@ public sealed class VendorServiceTests
     {
         var store = new FakeVendorStore { FormerMembers = [10, 11] };
         var audit = new RecordingAuditLog();
-        var service = new VendorService(store, audit, new TestClock());
+        var service = new VendorService(store, new FakeMediaStore(), audit, new TestClock());
 
         Assert.True(await service.DeleteAsync(5, 1, CancellationToken.None));
 
@@ -24,7 +24,7 @@ public sealed class VendorServiceTests
         var store = new FakeVendorStore { FormerMembers = null };
         var audit = new RecordingAuditLog();
 
-        Assert.False(await new VendorService(store, audit, new TestClock()).DeleteAsync(5, 1, CancellationToken.None));
+        Assert.False(await new VendorService(store, new FakeMediaStore(), audit, new TestClock()).DeleteAsync(5, 1, CancellationToken.None));
         Assert.Empty(audit.Entries);
     }
 
@@ -33,7 +33,7 @@ public sealed class VendorServiceTests
     {
         var store = new FakeVendorStore();
         store.Vendors.Add(new Vendor { Id = 5, Name = "Old", Email = "old@example.com" });
-        var service = new VendorService(store, new RecordingAuditLog(), new TestClock());
+        var service = new VendorService(store, new FakeMediaStore(), new RecordingAuditLog(), new TestClock());
 
         var invalid = await service.UpdateAsync(new UpdateVendorCommand(5, "", "", null, null, true, 0), CancellationToken.None);
         Assert.Contains("name", invalid.Errors.Keys);

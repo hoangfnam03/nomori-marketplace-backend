@@ -1,11 +1,13 @@
 using Nomori.Marketplace.Core.Catalog;
+using Nomori.Marketplace.Core.Media;
+using Nomori.Marketplace.Services.Media;
 using Nomori.Marketplace.Core.Security;
 using Nomori.Marketplace.Core.Time;
 using Nomori.Marketplace.Core.Vendors;
 
 namespace Nomori.Marketplace.Services.Vendors;
 
-public sealed class VendorService(IVendorStore vendorStore, IAuditLogService auditLog, IClock clock) : IVendorService
+public sealed class VendorService(IVendorStore vendorStore, IMediaStore mediaStore, IAuditLogService auditLog, IClock clock) : IVendorService
 {
     public Task<Vendor?> GetAsync(int id, CancellationToken cancellationToken) =>
         vendorStore.GetAsync(id, cancellationToken);
@@ -25,6 +27,8 @@ public sealed class VendorService(IVendorStore vendorStore, IAuditLogService aud
         if (existing is null) return VendorResult.Error<Vendor>(VendorErrors.NotFound);
 
         var errors = Validate(command.Name, command.Email);
+        if (command.PictureId is { } pictureId && pictureId != existing.PictureId)
+            await MediaAttachment.ValidateAsync(mediaStore, pictureId, MediaPurpose.VendorLogo, existing.Id, errors, cancellationToken);
         if (errors.Count > 0) return VendorResult.Failure<Vendor>(errors);
 
         existing.Name = command.Name.Trim();
@@ -33,6 +37,7 @@ public sealed class VendorService(IVendorStore vendorStore, IAuditLogService aud
         existing.AdminComment = VendorValidation.NullIfBlank(command.AdminComment);
         existing.Active = command.Active;
         existing.DisplayOrder = command.DisplayOrder;
+        if (command.PictureId is { } newPicture) existing.PictureId = newPicture;
         existing.UpdatedOnUtc = clock.UtcNow;
         await vendorStore.UpdateAsync(existing, cancellationToken);
         return VendorResult.Success(existing);
