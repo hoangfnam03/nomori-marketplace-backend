@@ -4,6 +4,7 @@ namespace Nomori.Marketplace.Core.Catalog;
 public static class CatalogErrors
 {
     public const string NotFound = "not_found";
+    public const string Forbidden = "forbidden";
     public const string CategoryHasChildren = "category.has_children";
     public const string CategoryInUse = "category.in_use";
     public const string ManufacturerInUse = "manufacturer.in_use";

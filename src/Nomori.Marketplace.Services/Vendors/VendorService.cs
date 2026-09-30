@@ -21,12 +21,17 @@ public sealed class VendorService(IVendorStore vendorStore, IMediaStore mediaSto
         return new PagedResult<Vendor>(items, total, query.Page, query.PageSize);
     }
 
+    public Task<Vendor?> GetPlatformShopAsync(CancellationToken cancellationToken) =>
+        vendorStore.GetPlatformShopAsync(cancellationToken);
+
     public async Task<VendorResult<Vendor>> UpdateAsync(UpdateVendorCommand command, CancellationToken cancellationToken)
     {
         var existing = await vendorStore.GetAsync(command.Id, cancellationToken);
         if (existing is null) return VendorResult.Error<Vendor>(VendorErrors.NotFound);
 
         var errors = Validate(command.Name, command.Email);
+        if (existing.IsPlatformShop && !command.Active)
+            errors["active"] = ["The platform shop cannot be deactivated."];
         if (command.PictureId is { } pictureId && pictureId != existing.PictureId)
             await MediaAttachment.ValidateAsync(mediaStore, pictureId, MediaPurpose.VendorLogo, existing.Id, errors, cancellationToken);
         if (errors.Count > 0) return VendorResult.Failure<Vendor>(errors);
@@ -43,10 +48,14 @@ public sealed class VendorService(IVendorStore vendorStore, IMediaStore mediaSto
         return VendorResult.Success(existing);
     }
 
-    public async Task<bool> DeleteAsync(int id, int actorCustomerId, CancellationToken cancellationToken)
+    public async Task<VendorResult<bool>> DeleteAsync(int id, int actorCustomerId, CancellationToken cancellationToken)
     {
+        var vendor = await vendorStore.GetAsync(id, cancellationToken);
+        if (vendor is null) return VendorResult.Error<bool>(VendorErrors.NotFound);
+        if (vendor.IsPlatformShop) return VendorResult.Error<bool>(VendorErrors.PlatformShop);
+
         var formerMembers = await vendorStore.DeleteAsync(id, clock.UtcNow, cancellationToken);
-        if (formerMembers is null) return false;
+        if (formerMembers is null) return VendorResult.Error<bool>(VendorErrors.NotFound);
 
         foreach (var memberId in formerMembers)
         {
@@ -55,7 +64,7 @@ public sealed class VendorService(IVendorStore vendorStore, IMediaStore mediaSto
                 cancellationToken: cancellationToken);
         }
 
-        return true;
+        return VendorResult.Success(true);
     }
 
     public async Task<PagedResult<VendorNote>> GetNotesAsync(int vendorId, int page, int pageSize, CancellationToken cancellationToken)

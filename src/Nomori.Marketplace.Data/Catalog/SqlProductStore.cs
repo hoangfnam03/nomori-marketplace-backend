@@ -7,14 +7,17 @@ namespace Nomori.Marketplace.Data.Catalog;
 
 public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProductStore
 {
+    // Every read joins the owning shop so callers get its name and status without a second query.
     private const string SelectColumns =
-        "Id, Name, ShortDescription, FullDescription, Price, OldPrice, StockQuantity, Published, Deleted, VendorId, ShowOnHomepage, DisplayOrder, CreatedOnUtc, UpdatedOnUtc";
+        "p.Id, p.Name, p.ShortDescription, p.FullDescription, p.Price, p.OldPrice, p.StockQuantity, p.Published, p.Deleted, p.VendorId, p.ShowOnHomepage, p.DisplayOrder, p.CreatedOnUtc, p.UpdatedOnUtc, v.Name, v.Active";
+
+    private const string FromClause = "FROM Product p INNER JOIN Vendor v ON v.Id = p.VendorId";
 
     public async Task<Product?> GetAsync(int id, CancellationToken cancellationToken)
     {
         await using var connection = await OpenAsync(cancellationToken);
         await using var cmd = connection.CreateCommand();
-        cmd.CommandText = $"SELECT {SelectColumns} FROM Product WHERE Id = @Id AND Deleted = 0";
+        cmd.CommandText = $"SELECT {SelectColumns} {FromClause} WHERE p.Id = @Id AND p.Deleted = 0";
         cmd.Parameters.AddWithValue("@Id", id);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? Read(reader) : null;
@@ -26,13 +29,13 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
         var (where, sort) = BuildFilter(query);
 
         await using var countCmd = connection.CreateCommand();
-        countCmd.CommandText = $"SELECT COUNT(*) FROM Product WHERE {where}";
+        countCmd.CommandText = $"SELECT COUNT(*) {FromClause} WHERE {where}";
         AddFilterParams(countCmd, query);
         var totalCount = (int)(await countCmd.ExecuteScalarAsync(cancellationToken))!;
 
         await using var cmd = connection.CreateCommand();
         var offset = (query.Page - 1) * query.PageSize;
-        cmd.CommandText = $"SELECT {SelectColumns} FROM Product WHERE {where} ORDER BY {sort} OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY";
+        cmd.CommandText = $"SELECT {SelectColumns} {FromClause} WHERE {where} ORDER BY {sort} OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY";
         AddFilterParams(cmd, query);
         cmd.Parameters.AddWithValue("@Offset", offset);
         cmd.Parameters.AddWithValue("@PageSize", query.PageSize);
@@ -88,12 +91,24 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
             UPDATE Product SET
                 Name = @Name, ShortDescription = @ShortDescription, FullDescription = @FullDescription,
                 Price = @Price, OldPrice = @OldPrice, StockQuantity = @StockQuantity,
-                Published = @Published, VendorId = @VendorId, ShowOnHomepage = @ShowOnHomepage,
+                Published = @Published, ShowOnHomepage = @ShowOnHomepage,
                 DisplayOrder = @DisplayOrder, UpdatedOnUtc = @UpdatedOnUtc
             WHERE Id = @Id AND Deleted = 0
             """;
+        // The owner is deliberately not updated here: only SetVendorAsync (an admin transfer) may change it.
         cmd.Parameters.AddWithValue("@Id", product.Id);
         AddWriteParams(cmd, product);
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task SetVendorAsync(int productId, int vendorId, DateTime nowUtc, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "UPDATE Product SET VendorId = @VendorId, UpdatedOnUtc = @NowUtc WHERE Id = @Id AND Deleted = 0";
+        cmd.Parameters.AddWithValue("@Id", productId);
+        cmd.Parameters.AddWithValue("@VendorId", vendorId);
+        cmd.Parameters.AddWithValue("@NowUtc", nowUtc);
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -147,24 +162,27 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
 
     private static (string Where, string Sort) BuildFilter(ProductQuery q)
     {
-        var parts = new List<string> { "Deleted = 0" };
+        var parts = new List<string> { "p.Deleted = 0" };
         if (q.CategoryId.HasValue)
-            parts.Add("Id IN (SELECT ProductId FROM ProductCategory WHERE CategoryId = @CategoryId)");
+            parts.Add("p.Id IN (SELECT ProductId FROM ProductCategory WHERE CategoryId = @CategoryId)");
         if (q.ManufacturerId.HasValue)
-            parts.Add("Id IN (SELECT ProductId FROM ProductManufacturer WHERE ManufacturerId = @ManufacturerId)");
-        if (q.MinPrice.HasValue) parts.Add("Price >= @MinPrice");
-        if (q.MaxPrice.HasValue) parts.Add("Price <= @MaxPrice");
-        if (!string.IsNullOrWhiteSpace(q.Search)) parts.Add("(Name LIKE @Search OR ShortDescription LIKE @Search)");
-        if (q.Published.HasValue) parts.Add("Published = @Published");
+            parts.Add("p.Id IN (SELECT ProductId FROM ProductManufacturer WHERE ManufacturerId = @ManufacturerId)");
+        if (q.MinPrice.HasValue) parts.Add("p.Price >= @MinPrice");
+        if (q.MaxPrice.HasValue) parts.Add("p.Price <= @MaxPrice");
+        if (!string.IsNullOrWhiteSpace(q.Search)) parts.Add("(p.Name LIKE @Search OR p.ShortDescription LIKE @Search)");
+        if (q.Published.HasValue) parts.Add("p.Published = @Published");
+        if (q.VendorId.HasValue) parts.Add("p.VendorId = @VendorId");
+        // Products of deactivated or deleted shops are not shown to the public.
+        if (q.OnlyActiveShops) parts.Add("v.Active = 1 AND v.Deleted = 0");
 
         var sort = q.Sort switch
         {
-            ProductSortOrder.NameAsc => "Name ASC",
-            ProductSortOrder.NameDesc => "Name DESC",
-            ProductSortOrder.PriceAsc => "Price ASC",
-            ProductSortOrder.PriceDesc => "Price DESC",
-            ProductSortOrder.Newest => "CreatedOnUtc DESC",
-            _ => "DisplayOrder ASC, Name ASC"
+            ProductSortOrder.NameAsc => "p.Name ASC",
+            ProductSortOrder.NameDesc => "p.Name DESC",
+            ProductSortOrder.PriceAsc => "p.Price ASC",
+            ProductSortOrder.PriceDesc => "p.Price DESC",
+            ProductSortOrder.Newest => "p.CreatedOnUtc DESC",
+            _ => "p.DisplayOrder ASC, p.Name ASC"
         };
 
         return (string.Join(" AND ", parts), sort);
@@ -178,6 +196,7 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
         if (q.MaxPrice.HasValue) cmd.Parameters.AddWithValue("@MaxPrice", q.MaxPrice.Value);
         if (!string.IsNullOrWhiteSpace(q.Search)) cmd.Parameters.AddWithValue("@Search", $"%{q.Search}%");
         if (q.Published.HasValue) cmd.Parameters.AddWithValue("@Published", q.Published.Value);
+        if (q.VendorId.HasValue) cmd.Parameters.AddWithValue("@VendorId", q.VendorId.Value);
     }
 
     private static void AddWriteParams(SqlCommand cmd, Product p)
@@ -189,7 +208,7 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
         cmd.Parameters.AddWithValue("@OldPrice", p.OldPrice);
         cmd.Parameters.AddWithValue("@StockQuantity", p.StockQuantity);
         cmd.Parameters.AddWithValue("@Published", p.Published);
-        cmd.Parameters.AddWithValue("@VendorId", (object?)p.VendorId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@VendorId", p.VendorId);
         cmd.Parameters.AddWithValue("@ShowOnHomepage", p.ShowOnHomepage);
         cmd.Parameters.AddWithValue("@DisplayOrder", p.DisplayOrder);
         cmd.Parameters.AddWithValue("@CreatedOnUtc", p.CreatedOnUtc);
@@ -207,10 +226,12 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
         StockQuantity = r.GetInt32(6),
         Published = r.GetBoolean(7),
         Deleted = r.GetBoolean(8),
-        VendorId = r.IsDBNull(9) ? null : r.GetInt32(9),
+        VendorId = r.GetInt32(9),
         ShowOnHomepage = r.GetBoolean(10),
         DisplayOrder = r.GetInt32(11),
         CreatedOnUtc = r.GetDateTime(12),
-        UpdatedOnUtc = r.GetDateTime(13)
+        UpdatedOnUtc = r.GetDateTime(13),
+        VendorName = r.GetString(14),
+        VendorActive = r.GetBoolean(15)
     };
 }

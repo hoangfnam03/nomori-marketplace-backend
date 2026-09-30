@@ -11,7 +11,10 @@ public sealed record ProductQuery(
     decimal? MaxPrice = null,
     string? Search = null,
     ProductSortOrder Sort = ProductSortOrder.DisplayOrder,
-    bool? Published = null);
+    bool? Published = null,
+    int? VendorId = null,
+    /// <summary>Hide products whose shop is inactive or deleted. Set for every public query.</summary>
+    bool OnlyActiveShops = false);
 
 public sealed record ManufacturerQuery(int Page = 1, int PageSize = 20, bool? Published = null);
 
@@ -62,6 +65,18 @@ public sealed record CreateProductCommand(
     int? VendorId,
     bool ShowOnHomepage,
     int DisplayOrder,
+    int[] CategoryIds,
+    int[] ManufacturerIds);
+
+/// <summary>Seller input. Has no owner, homepage or ordering fields: sellers cannot set those.</summary>
+public sealed record SaveVendorProductCommand(
+    string Name,
+    string? ShortDescription,
+    string? FullDescription,
+    decimal Price,
+    decimal OldPrice,
+    int StockQuantity,
+    bool Published,
     int[] CategoryIds,
     int[] ManufacturerIds);
 

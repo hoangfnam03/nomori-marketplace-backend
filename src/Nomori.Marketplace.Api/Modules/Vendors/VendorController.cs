@@ -75,7 +75,8 @@ public sealed class VendorController(IVendorService vendorService, IVendorAccess
     public async Task<IActionResult> DeleteVendor(int id, CancellationToken cancellationToken)
     {
         var caller = await accessContext.GetCallerAsync(cancellationToken);
-        return await vendorService.DeleteAsync(id, caller.CustomerId!.Value, cancellationToken) ? NoContent() : NotFound();
+        var result = await vendorService.DeleteAsync(id, caller.CustomerId!.Value, cancellationToken);
+        return result.Succeeded ? NoContent() : this.ToFailure(result, "Vendor delete failed");
     }
 
     // Responses differ per caller, so they must never be shared through a cache.
