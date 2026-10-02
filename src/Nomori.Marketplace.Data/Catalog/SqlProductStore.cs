@@ -9,7 +9,7 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
 {
     // Every read joins the owning shop so callers get its name and status without a second query.
     private const string SelectColumns =
-        "p.Id, p.Name, p.ShortDescription, p.FullDescription, p.Price, p.OldPrice, p.StockQuantity, p.Status, p.Deleted, p.VendorId, p.ShowOnHomepage, p.DisplayOrder, p.CreatedOnUtc, p.UpdatedOnUtc, v.Name, v.Active, p.StatusBeforeHidden, p.HiddenReason, p.HiddenOnUtc, p.HiddenByCustomerId, p.ReviewRequestedOnUtc";
+        "p.Id, p.Name, p.ShortDescription, p.FullDescription, p.Price, p.OldPrice, p.StockQuantity, p.Status, p.Deleted, p.VendorId, p.ShowOnHomepage, p.DisplayOrder, p.CreatedOnUtc, p.UpdatedOnUtc, v.Name, v.Active, p.StatusBeforeHidden, p.HiddenReason, p.HiddenOnUtc, p.HiddenByCustomerId, p.ReviewRequestedOnUtc, p.Sku, p.Gtin, p.ManufacturerPartNumber, p.AvailableStartUtc, p.AvailableEndUtc";
 
     private const string FromClause = "FROM Product p INNER JOIN Vendor v ON v.Id = p.VendorId";
 
@@ -75,11 +75,12 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
         await using var connection = await OpenAsync(cancellationToken);
         await using var cmd = connection.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO Product (Name, ShortDescription, FullDescription, Price, OldPrice, StockQuantity, Status, Deleted, VendorId, ShowOnHomepage, DisplayOrder, CreatedOnUtc, UpdatedOnUtc)
+            INSERT INTO Product (Name, ShortDescription, FullDescription, Price, OldPrice, StockQuantity, Status, Deleted, VendorId, ShowOnHomepage, DisplayOrder, CreatedOnUtc, UpdatedOnUtc, Sku, Gtin, ManufacturerPartNumber, AvailableStartUtc, AvailableEndUtc)
             OUTPUT INSERTED.Id
-            VALUES (@Name, @ShortDescription, @FullDescription, @Price, @OldPrice, @StockQuantity, @Status, 0, @VendorId, @ShowOnHomepage, @DisplayOrder, @CreatedOnUtc, @UpdatedOnUtc)
+            VALUES (@Name, @ShortDescription, @FullDescription, @Price, @OldPrice, @StockQuantity, @Status, 0, @VendorId, @ShowOnHomepage, @DisplayOrder, @CreatedOnUtc, @UpdatedOnUtc, @Sku, @Gtin, @ManufacturerPartNumber, @AvailableStartUtc, @AvailableEndUtc)
             """;
         AddWriteParams(cmd, product);
+        AddContentParams(cmd, product);
         return (int)(await cmd.ExecuteScalarAsync(cancellationToken))!;
     }
 
@@ -95,10 +96,75 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
                 DisplayOrder = @DisplayOrder, UpdatedOnUtc = @UpdatedOnUtc
             WHERE Id = @Id AND Deleted = 0
             """;
-        // The owner and the lifecycle fields are deliberately not updated here: see SetVendorAsync and UpdateLifecycleAsync.
+        // The owner, the lifecycle fields and the content fields are deliberately not updated here: see SetVendorAsync, UpdateLifecycleAsync and UpdateContentAsync.
         cmd.Parameters.AddWithValue("@Id", product.Id);
         AddWriteParams(cmd, product);
         await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task UpdateContentAsync(Product product, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            UPDATE Product SET
+                Sku = @Sku, Gtin = @Gtin, ManufacturerPartNumber = @ManufacturerPartNumber,
+                AvailableStartUtc = @AvailableStartUtc, AvailableEndUtc = @AvailableEndUtc
+            WHERE Id = @Id AND Deleted = 0
+            """;
+        cmd.Parameters.AddWithValue("@Id", product.Id);
+        AddContentParams(cmd, product);
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<bool> IsSkuTakenAsync(int vendorId, string sku, int excludeProductId, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT TOP 1 1 FROM Product WHERE VendorId = @VendorId AND Sku = @Sku AND Deleted = 0 AND Id <> @ExcludeId";
+        cmd.Parameters.AddWithValue("@VendorId", vendorId);
+        cmd.Parameters.AddWithValue("@Sku", sku);
+        cmd.Parameters.AddWithValue("@ExcludeId", excludeProductId);
+        return await cmd.ExecuteScalarAsync(cancellationToken) is not null;
+    }
+
+    public async Task<IReadOnlyList<int>> GetRelatedIdsAsync(int productId, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT RelatedProductId FROM ProductRelation WHERE ProductId = @ProductId ORDER BY DisplayOrder, RelatedProductId";
+        cmd.Parameters.AddWithValue("@ProductId", productId);
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        var ids = new List<int>();
+        while (await reader.ReadAsync(cancellationToken)) ids.Add(reader.GetInt32(0));
+        return ids;
+    }
+
+    public async Task SetRelatedAsync(int productId, int[] relatedProductIds, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
+
+        await using (var deleteCmd = connection.CreateCommand())
+        {
+            deleteCmd.Transaction = transaction;
+            deleteCmd.CommandText = "DELETE FROM ProductRelation WHERE ProductId = @ProductId";
+            deleteCmd.Parameters.AddWithValue("@ProductId", productId);
+            await deleteCmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        for (var i = 0; i < relatedProductIds.Length; i++)
+        {
+            await using var insertCmd = connection.CreateCommand();
+            insertCmd.Transaction = transaction;
+            insertCmd.CommandText = "INSERT INTO ProductRelation (ProductId, RelatedProductId, DisplayOrder) VALUES (@ProductId, @RelatedId, @DisplayOrder)";
+            insertCmd.Parameters.AddWithValue("@ProductId", productId);
+            insertCmd.Parameters.AddWithValue("@RelatedId", relatedProductIds[i]);
+            insertCmd.Parameters.AddWithValue("@DisplayOrder", i);
+            await insertCmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
     }
 
     public async Task UpdateLifecycleAsync(Product product, CancellationToken cancellationToken)
@@ -263,13 +329,18 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
             parts.Add("p.Id IN (SELECT ProductId FROM ProductManufacturer WHERE ManufacturerId = @ManufacturerId)");
         if (q.MinPrice.HasValue) parts.Add("p.Price >= @MinPrice");
         if (q.MaxPrice.HasValue) parts.Add("p.Price <= @MaxPrice");
-        if (!string.IsNullOrWhiteSpace(q.Search)) parts.Add("(p.Name LIKE @Search OR p.ShortDescription LIKE @Search)");
+        if (!string.IsNullOrWhiteSpace(q.Search)) parts.Add("(p.Name LIKE @Search OR p.ShortDescription LIKE @Search OR p.Sku LIKE @Search)");
         if (q.Published.HasValue) parts.Add("p.Published = @Published");
         if (q.VendorId.HasValue) parts.Add("p.VendorId = @VendorId");
         if (q.Status.HasValue) parts.Add("p.Status = @Status");
         if (q.ReviewRequested == true) parts.Add("p.ReviewRequestedOnUtc IS NOT NULL");
         // Products of deactivated or deleted shops are not shown to the public.
-        if (q.OnlyActiveShops) parts.Add("v.Active = 1 AND v.Deleted = 0");
+        if (q.OnlyActiveShops)
+        {
+            parts.Add("v.Active = 1 AND v.Deleted = 0");
+            // The publication window applies to every public read.
+            parts.Add("(p.AvailableStartUtc IS NULL OR p.AvailableStartUtc <= SYSUTCDATETIME()) AND (p.AvailableEndUtc IS NULL OR p.AvailableEndUtc > SYSUTCDATETIME())");
+        }
 
         var sort = q.Sort switch
         {
@@ -294,6 +365,15 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
         if (q.Published.HasValue) cmd.Parameters.AddWithValue("@Published", q.Published.Value);
         if (q.VendorId.HasValue) cmd.Parameters.AddWithValue("@VendorId", q.VendorId.Value);
         if (q.Status.HasValue) cmd.Parameters.AddWithValue("@Status", (int)q.Status.Value);
+    }
+
+    private static void AddContentParams(SqlCommand cmd, Product p)
+    {
+        cmd.Parameters.AddWithValue("@Sku", (object?)p.Sku ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@Gtin", (object?)p.Gtin ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@ManufacturerPartNumber", (object?)p.ManufacturerPartNumber ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@AvailableStartUtc", (object?)p.AvailableStartUtc ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@AvailableEndUtc", (object?)p.AvailableEndUtc ?? DBNull.Value);
     }
 
     private static void AddWriteParams(SqlCommand cmd, Product p)
@@ -334,6 +414,11 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
         HiddenReason = r.IsDBNull(17) ? null : r.GetString(17),
         HiddenOnUtc = r.IsDBNull(18) ? null : r.GetDateTime(18),
         HiddenByCustomerId = r.IsDBNull(19) ? null : r.GetInt32(19),
-        ReviewRequestedOnUtc = r.IsDBNull(20) ? null : r.GetDateTime(20)
+        ReviewRequestedOnUtc = r.IsDBNull(20) ? null : r.GetDateTime(20),
+        Sku = r.IsDBNull(21) ? null : r.GetString(21),
+        Gtin = r.IsDBNull(22) ? null : r.GetString(22),
+        ManufacturerPartNumber = r.IsDBNull(23) ? null : r.GetString(23),
+        AvailableStartUtc = r.IsDBNull(24) ? null : r.GetDateTime(24),
+        AvailableEndUtc = r.IsDBNull(25) ? null : r.GetDateTime(25)
     };
 }

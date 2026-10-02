@@ -60,13 +60,18 @@ public sealed class CatalogController(
     {
         var detail = await productService.GetDetailAsync(id, cancellationToken);
         // Products of deactivated or deleted shops are not public.
-        if (detail is null || !detail.Product.Published || !detail.Product.VendorActive) return NotFound();
+        // The publication window is part of "public", same as in the list query.
+        if (detail is null || !detail.Product.Published || !detail.Product.VendorActive || !detail.Product.IsAvailableAt(DateTime.UtcNow)) return NotFound();
+
+        var related = await productService.GetVisibleRelatedAsync(id, cancellationToken);
+        var relatedPictures = await productService.GetMainPictureIdsAsync(related.Select(p => p.Id).ToList(), cancellationToken);
         return Ok(new ProductDetailResponse(
             ToProductResponse(detail.Product, (detail.PictureIds.Count > 0 ? detail.PictureIds[0] : 0)),
             detail.Product.FullDescription,
             detail.Categories.Select(ToCategoryResponse).ToList(),
             detail.Manufacturers.Select(ToManufacturerResponse).ToList(),
-            detail.PictureIds));
+            detail.PictureIds,
+            related.Select(p => ToProductResponse(p, relatedPictures.GetValueOrDefault(p.Id))).ToList()));
     }
 
     [HttpGet("manufacturers")]
@@ -137,7 +142,8 @@ public sealed record ProductDetailResponse(
     ProductResponse Product, string? FullDescription,
     IReadOnlyList<CategoryResponse> Categories,
     IReadOnlyList<ManufacturerResponse> Manufacturers,
-    IReadOnlyList<int> PictureIds);
+    IReadOnlyList<int> PictureIds,
+    IReadOnlyList<ProductResponse> RelatedProducts);
 
 public sealed record ManufacturerResponse(
     int Id, string Name, string? Description,

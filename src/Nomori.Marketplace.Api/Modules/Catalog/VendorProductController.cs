@@ -57,7 +57,31 @@ public sealed class VendorProductController(
         return detail is null
             ? NotFound()
             : Ok(VendorProductResponse.From(detail.Product, detail.Categories.Select(c => c.Id).ToArray(), detail.Manufacturers.Select(m => m.Id).ToArray(),
-                detail.PictureIds.ToArray(), (detail.PictureIds.Count > 0 ? detail.PictureIds[0] : 0)));
+                detail.PictureIds.ToArray(), (detail.PictureIds.Count > 0 ? detail.PictureIds[0] : 0), detail.RelatedProductIds.ToArray()));
+    }
+
+    /// <summary>Replaces the ordered related products of a product (maximum 12, products of this shop only).</summary>
+    [HttpPut("{id:int}/related")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> SetRelated(int vendorId, int id, SetRelatedProductsRequest request, CancellationToken cancellationToken)
+    {
+        if (await RequireMemberAsync(vendorId, cancellationToken) is not { } caller) return NotFound();
+
+        var result = await productService.SetRelatedForVendorAsync(vendorId, id, request.ProductIds, caller.CustomerId!.Value, cancellationToken);
+        return result.Succeeded ? Ok(new { relatedProductIds = result.Value }) : this.ToFailure(result);
+    }
+
+    /// <summary>Copies a product into a new draft of the same shop.</summary>
+    [HttpPost("{id:int}/copy")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> CopyProduct(int vendorId, int id, CancellationToken cancellationToken)
+    {
+        if (await RequireMemberAsync(vendorId, cancellationToken) is not { } caller) return NotFound();
+
+        var result = await productService.CopyForVendorAsync(vendorId, id, caller.CustomerId!.Value, cancellationToken);
+        return result.Succeeded
+            ? CreatedAtAction(nameof(GetProduct), new { vendorId, id = result.Value!.Id }, VendorProductResponse.From(result.Value, null, null))
+            : this.ToFailure(result);
     }
 
     /// <summary>Replaces the ordered pictures of a product (maximum 10; the first is the main picture).</summary>
@@ -142,6 +166,8 @@ public sealed record ChangeProductStatusRequest(string? Status);
 
 public sealed record SetProductPicturesRequest(int[]? PictureIds);
 
+public sealed record SetRelatedProductsRequest(int[]? ProductIds);
+
 public sealed record SaveVendorProductRequest(
     string Name,
     string? ShortDescription = null,
@@ -150,10 +176,16 @@ public sealed record SaveVendorProductRequest(
     decimal OldPrice = 0,
     int StockQuantity = 0,
     int[]? CategoryIds = null,
-    int[]? ManufacturerIds = null)
+    int[]? ManufacturerIds = null,
+    string? Sku = null,
+    string? Gtin = null,
+    string? ManufacturerPartNumber = null,
+    DateTime? AvailableStartUtc = null,
+    DateTime? AvailableEndUtc = null)
 {
     public SaveVendorProductCommand ToCommand() =>
-        new(Name, ShortDescription, FullDescription, Price, OldPrice, StockQuantity, CategoryIds ?? [], ManufacturerIds ?? []);
+        new(Name, ShortDescription, FullDescription, Price, OldPrice, StockQuantity, CategoryIds ?? [], ManufacturerIds ?? [],
+            Sku, Gtin, ManufacturerPartNumber, AvailableStartUtc, AvailableEndUtc);
 }
 
 /// <summary>Seller view of a product. Has no homepage or ordering fields because sellers do not control them.</summary>
@@ -162,13 +194,19 @@ public sealed record VendorProductResponse(
     decimal Price, decimal OldPrice, int StockQuantity, bool Published,
     string Status, string? HiddenReason, DateTime? ReviewRequestedOnUtc,
     int[]? CategoryIds, int[]? ManufacturerIds, DateTime CreatedOnUtc, DateTime UpdatedOnUtc,
-    int[]? PictureIds, int MainPictureId)
+    int[]? PictureIds, int MainPictureId,
+    string? Sku, string? Gtin, string? ManufacturerPartNumber, DateTime? AvailableStartUtc, DateTime? AvailableEndUtc,
+    int[]? RelatedProductIds)
 {
     /// <param name="pictureIds">Ordered picture ids; only known when a single product is read.</param>
     /// <param name="mainPictureId">First picture id, or 0 when there is none or it is not known.</param>
     public static VendorProductResponse From(
-        Product p, int[]? categoryIds, int[]? manufacturerIds, int[]? pictureIds = null, int mainPictureId = 0) => new(
+        Product p, int[]? categoryIds, int[]? manufacturerIds, int[]? pictureIds = null, int mainPictureId = 0, int[]? relatedProductIds = null) => new(
         p.Id, p.VendorId, p.Name, p.ShortDescription, p.FullDescription, p.Price, p.OldPrice, p.StockQuantity, p.Published,
         ProductStatusNames.ToName(p.Status), p.Status == ProductStatus.HiddenByAdmin ? p.HiddenReason : null, p.ReviewRequestedOnUtc,
-        categoryIds, manufacturerIds, p.CreatedOnUtc, p.UpdatedOnUtc, pictureIds, mainPictureId);
+        categoryIds, manufacturerIds, p.CreatedOnUtc, p.UpdatedOnUtc, pictureIds, mainPictureId,
+        p.Sku, p.Gtin, p.ManufacturerPartNumber, AsUtc(p.AvailableStartUtc), AsUtc(p.AvailableEndUtc), relatedProductIds);
+
+    // Values read from SQL have no kind; mark them UTC so JSON carries a trailing Z.
+    private static DateTime? AsUtc(DateTime? value) => value is null ? null : DateTime.SpecifyKind(value.Value, DateTimeKind.Utc);
 }

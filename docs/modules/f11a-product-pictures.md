@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Module ID** | F11-A (slice of F11 "Product variants, attributes, specifications and product media") |
-| **Status** | Backend and Angular implemented. SQL store and migration not yet run against a real database. |
+| **Status** | Backend and Angular implemented and merged (PR #13). SQL store and migration not yet run against a real database. |
 | **Branch** | `feat/product-pictures/foundation` (backend and frontend) |
 | **Depends on** | F08-A (media upload, purpose `product`), F10-A (ownership), F10-B (lifecycle) |
 | **Unblocks** | F13 (cards with images), F16 (cart line image) |
