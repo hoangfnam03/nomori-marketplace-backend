@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Nomori.Marketplace.Core.Catalog;
 using Nomori.Marketplace.Core.Email;
+using Nomori.Marketplace.Core.Media;
 using Nomori.Marketplace.Core.Security;
 using Nomori.Marketplace.Core.Time;
 using Nomori.Marketplace.Core.Vendors;
@@ -15,6 +16,7 @@ public sealed partial class ProductService(
     IManufacturerStore manufacturerStore,
     IVendorStore vendorStore,
     IVendorMemberStore memberStore,
+    IMediaStore mediaStore,
     ITaxonomyService taxonomy,
     IAuditLogService auditLog,
     IEmailSender emailSender,
@@ -23,6 +25,7 @@ public sealed partial class ProductService(
     IClock clock) : IProductService
 {
     private const int MaxReasonLength = 2000;
+    private const int MaxPictures = 10;
 
     public async Task<ProductDetail?> GetDetailAsync(int id, CancellationToken cancellationToken)
     {
@@ -46,7 +49,8 @@ public sealed partial class ProductService(
             if (mfr is not null) manufacturers.Add(mfr);
         }
 
-        return new ProductDetail { Product = product, Categories = categories, Manufacturers = manufacturers };
+        var pictureIds = await productStore.GetPictureIdsAsync(id, cancellationToken);
+        return new ProductDetail { Product = product, Categories = categories, Manufacturers = manufacturers, PictureIds = pictureIds };
     }
 
     public async Task<PagedResult<Product>> GetListAsync(ProductQuery query, CancellationToken cancellationToken)
@@ -277,6 +281,8 @@ public sealed partial class ProductService(
             if (product.Price <= 0) errors["price"] = ["Price must be greater than 0 before the product can be published."];
             if ((await productStore.GetCategoryIdsAsync(productId, cancellationToken)).Count == 0)
                 errors["categoryIds"] = ["Add at least one category before the product can be published."];
+            if ((await productStore.GetPictureIdsAsync(productId, cancellationToken)).Count == 0)
+                errors["pictureIds"] = ["Add at least one picture before the product can be published."];
             if (errors.Count > 0) return CatalogResult.Failure<Product>(errors);
         }
 
@@ -306,6 +312,47 @@ public sealed partial class ProductService(
             details: new { productId, vendorId }, cancellationToken: cancellationToken);
         return CatalogResult.Success(product);
     }
+
+    // ---- Pictures ----
+
+    public async Task<CatalogResult<int[]>> SetPicturesForVendorAsync(
+        int vendorId, int productId, int[]? pictureIds, int actorCustomerId, CancellationToken cancellationToken)
+    {
+        var product = await productStore.GetAsync(productId, cancellationToken);
+        if (product is null || product.VendorId != vendorId) return CatalogResult.Error<int[]>(CatalogErrors.NotFound);
+
+        var vendor = await vendorStore.GetAsync(vendorId, cancellationToken);
+        if (vendor is null) return CatalogResult.Error<int[]>(CatalogErrors.NotFound);
+        if (!vendor.Active) return CatalogResult.Error<int[]>(CatalogErrors.Forbidden);
+
+        var ids = pictureIds ?? [];
+        if (ids.Length > MaxPictures)
+            return CatalogResult.Failure<int[]>("pictureIds", $"A product can have at most {MaxPictures} pictures.");
+        if (ids.Distinct().Count() != ids.Length)
+            return CatalogResult.Failure<int[]>("pictureIds", "The same picture is listed more than once.");
+        // A product on sale must always keep a picture.
+        if (ids.Length == 0 && product.Status == ProductStatus.Live)
+            return CatalogResult.Failure<int[]>("pictureIds", "A product on sale needs at least one picture. Stop selling it first.");
+
+        foreach (var id in ids)
+        {
+            var asset = id > 0 ? await mediaStore.GetAsync(id, cancellationToken) : null;
+            if (asset is null || asset.Purpose != MediaPurpose.Product || asset.VendorId != vendorId)
+                return CatalogResult.Failure<int[]>("pictureIds", "A picture does not exist or cannot be used here.");
+
+            var owner = await productStore.GetPictureOwnerAsync(id, cancellationToken);
+            if (owner is not null && owner != productId)
+                return CatalogResult.Failure<int[]>("pictureIds", "A picture is already used by another product.");
+        }
+
+        await productStore.SetPicturesAsync(productId, ids, cancellationToken);
+        await auditLog.WriteAsync("product.pictures_changed", actorCustomerId, entityType: "Product", entityId: productId,
+            details: new { productId, vendorId, count = ids.Length }, cancellationToken: cancellationToken);
+        return CatalogResult.Success(ids);
+    }
+
+    public Task<IReadOnlyDictionary<int, int>> GetMainPictureIdsAsync(IReadOnlyCollection<int> productIds, CancellationToken cancellationToken) =>
+        productStore.GetMainPictureIdsAsync(productIds, cancellationToken);
 
     // ---- Moderation: administrators ----
 

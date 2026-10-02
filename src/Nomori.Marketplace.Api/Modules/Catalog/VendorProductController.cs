@@ -42,8 +42,9 @@ public sealed class VendorProductController(
 
         var query = new ProductQuery(Math.Max(page, 1), Math.Clamp(pageSize, 1, MaxPageSize), Search: search, Status: parsedStatus);
         var result = await productService.GetListForVendorAsync(vendorId, query, cancellationToken);
+        var mainPictures = await productService.GetMainPictureIdsAsync(result.Items.Select(p => p.Id).ToList(), cancellationToken);
         return Ok(new CatalogPagedResponse<VendorProductResponse>(
-            result.Items.Select(p => VendorProductResponse.From(p, null, null)).ToList(),
+            result.Items.Select(p => VendorProductResponse.From(p, null, null, null, mainPictures.GetValueOrDefault(p.Id))).ToList(),
             result.TotalCount, result.Page, result.PageSize, result.TotalPages));
     }
 
@@ -55,7 +56,19 @@ public sealed class VendorProductController(
         var detail = await productService.GetDetailForVendorAsync(vendorId, id, cancellationToken);
         return detail is null
             ? NotFound()
-            : Ok(VendorProductResponse.From(detail.Product, detail.Categories.Select(c => c.Id).ToArray(), detail.Manufacturers.Select(m => m.Id).ToArray()));
+            : Ok(VendorProductResponse.From(detail.Product, detail.Categories.Select(c => c.Id).ToArray(), detail.Manufacturers.Select(m => m.Id).ToArray(),
+                detail.PictureIds.ToArray(), (detail.PictureIds.Count > 0 ? detail.PictureIds[0] : 0)));
+    }
+
+    /// <summary>Replaces the ordered pictures of a product (maximum 10; the first is the main picture).</summary>
+    [HttpPut("{id:int}/pictures")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> SetPictures(int vendorId, int id, SetProductPicturesRequest request, CancellationToken cancellationToken)
+    {
+        if (await RequireMemberAsync(vendorId, cancellationToken) is not { } caller) return NotFound();
+
+        var result = await productService.SetPicturesForVendorAsync(vendorId, id, request.PictureIds, caller.CustomerId!.Value, cancellationToken);
+        return result.Succeeded ? Ok(new { pictureIds = result.Value }) : this.ToFailure(result);
     }
 
     [HttpPost]
@@ -127,6 +140,8 @@ public sealed class VendorProductController(
 
 public sealed record ChangeProductStatusRequest(string? Status);
 
+public sealed record SetProductPicturesRequest(int[]? PictureIds);
+
 public sealed record SaveVendorProductRequest(
     string Name,
     string? ShortDescription = null,
@@ -146,10 +161,14 @@ public sealed record VendorProductResponse(
     int Id, int VendorId, string Name, string? ShortDescription, string? FullDescription,
     decimal Price, decimal OldPrice, int StockQuantity, bool Published,
     string Status, string? HiddenReason, DateTime? ReviewRequestedOnUtc,
-    int[]? CategoryIds, int[]? ManufacturerIds, DateTime CreatedOnUtc, DateTime UpdatedOnUtc)
+    int[]? CategoryIds, int[]? ManufacturerIds, DateTime CreatedOnUtc, DateTime UpdatedOnUtc,
+    int[]? PictureIds, int MainPictureId)
 {
-    public static VendorProductResponse From(Product p, int[]? categoryIds, int[]? manufacturerIds) => new(
+    /// <param name="pictureIds">Ordered picture ids; only known when a single product is read.</param>
+    /// <param name="mainPictureId">First picture id, or 0 when there is none or it is not known.</param>
+    public static VendorProductResponse From(
+        Product p, int[]? categoryIds, int[]? manufacturerIds, int[]? pictureIds = null, int mainPictureId = 0) => new(
         p.Id, p.VendorId, p.Name, p.ShortDescription, p.FullDescription, p.Price, p.OldPrice, p.StockQuantity, p.Published,
         ProductStatusNames.ToName(p.Status), p.Status == ProductStatus.HiddenByAdmin ? p.HiddenReason : null, p.ReviewRequestedOnUtc,
-        categoryIds, manufacturerIds, p.CreatedOnUtc, p.UpdatedOnUtc);
+        categoryIds, manufacturerIds, p.CreatedOnUtc, p.UpdatedOnUtc, pictureIds, mainPictureId);
 }

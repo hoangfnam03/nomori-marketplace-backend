@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Module ID** | F10-B (slice of F10 "Product core and ownership") |
-| **Status** | Backend and Angular implemented. SQL store and migration not yet run against a real database. |
+| **Status** | Backend and Angular implemented and merged (PR #12). SQL store and migration not yet run against a real database. The image rule for publishing was added by [F11-A](f11a-product-pictures.md). |
 | **Branch** | `feat/product-lifecycle/foundation` (backend and frontend) |
 | **Depends on** | F10-A (ownership), F05 (members and their emails), F22 is **not** required: email uses the existing sender |
 | **Unblocks** | F11 (image rule for publishing), F13 (status-aware search), F16 (buyable rule) |
