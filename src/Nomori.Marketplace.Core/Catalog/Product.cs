@@ -54,6 +54,9 @@ public sealed class ProductDetail
     public Product Product { get; set; } = null!;
     public IReadOnlyList<Category> Categories { get; set; } = [];
     public IReadOnlyList<Manufacturer> Manufacturers { get; set; } = [];
+
+    /// <summary>Media asset ids in display order; the first is the main picture.</summary>
+    public IReadOnlyList<int> PictureIds { get; set; } = [];
 }
 
 public interface IProductStore
@@ -70,6 +73,18 @@ public interface IProductStore
     /// <summary>Writes the lifecycle fields only: status, hidden fields and the review request.</summary>
     Task UpdateLifecycleAsync(Product product, CancellationToken cancellationToken);
     Task SetCategoriesAsync(int productId, int[] categoryIds, CancellationToken cancellationToken);
+
+    /// <summary>Picture ids of a product in display order.</summary>
+    Task<IReadOnlyList<int>> GetPictureIdsAsync(int productId, CancellationToken cancellationToken);
+
+    /// <summary>Main picture id per product; products without pictures are absent.</summary>
+    Task<IReadOnlyDictionary<int, int>> GetMainPictureIdsAsync(IReadOnlyCollection<int> productIds, CancellationToken cancellationToken);
+
+    /// <summary>The product a picture is attached to, or null when it is free.</summary>
+    Task<int?> GetPictureOwnerAsync(int mediaAssetId, CancellationToken cancellationToken);
+
+    /// <summary>Replaces all pictures of a product in one transaction; the position in the array is the display order.</summary>
+    Task SetPicturesAsync(int productId, int[] mediaAssetIds, CancellationToken cancellationToken);
     Task SetManufacturersAsync(int productId, int[] manufacturerIds, CancellationToken cancellationToken);
 }
 
@@ -92,6 +107,12 @@ public interface IProductService
 
     /// <summary>Asks an administrator to look at a hidden product again.</summary>
     Task<CatalogResult<Product>> RequestReviewForVendorAsync(int vendorId, int productId, int actorCustomerId, CancellationToken cancellationToken);
+
+    /// <summary>Replaces the ordered pictures of a product of this shop (maximum 10; the first is the main picture).</summary>
+    Task<CatalogResult<int[]>> SetPicturesForVendorAsync(int vendorId, int productId, int[]? pictureIds, int actorCustomerId, CancellationToken cancellationToken);
+
+    /// <summary>Main picture id per product, for list screens. Products without pictures are absent.</summary>
+    Task<IReadOnlyDictionary<int, int>> GetMainPictureIdsAsync(IReadOnlyCollection<int> productIds, CancellationToken cancellationToken);
 
     // ---- Moderation (platform administrators) ----
 

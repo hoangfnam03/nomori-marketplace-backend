@@ -51,7 +51,8 @@ public sealed class CatalogController(
             request.Search, request.Sort,
             Published: true, VendorId: request.VendorId, OnlyActiveShops: true);
         var result = await productService.GetListAsync(query, cancellationToken);
-        return Ok(ToPagedResponse(result, ToProductResponse));
+        var mainPictures = await productService.GetMainPictureIdsAsync(result.Items.Select(p => p.Id).ToList(), cancellationToken);
+        return Ok(ToPagedResponse(result, p => ToProductResponse(p, mainPictures.GetValueOrDefault(p.Id))));
     }
 
     [HttpGet("products/{id:int}")]
@@ -61,10 +62,11 @@ public sealed class CatalogController(
         // Products of deactivated or deleted shops are not public.
         if (detail is null || !detail.Product.Published || !detail.Product.VendorActive) return NotFound();
         return Ok(new ProductDetailResponse(
-            ToProductResponse(detail.Product),
+            ToProductResponse(detail.Product, (detail.PictureIds.Count > 0 ? detail.PictureIds[0] : 0)),
             detail.Product.FullDescription,
             detail.Categories.Select(ToCategoryResponse).ToList(),
-            detail.Manufacturers.Select(ToManufacturerResponse).ToList()));
+            detail.Manufacturers.Select(ToManufacturerResponse).ToList(),
+            detail.PictureIds));
     }
 
     [HttpGet("manufacturers")]
@@ -94,8 +96,8 @@ public sealed class CatalogController(
     private static CategoryTreeNodeResponse ToTreeNodeResponse(CategoryTreeNode node) =>
         new(node.Id, node.Name, node.ParentCategoryId, node.DisplayOrder, node.Children.Select(ToTreeNodeResponse).ToList());
 
-    private static ProductResponse ToProductResponse(Product p) =>
-        new(p.Id, p.Name, p.ShortDescription, p.Price, p.OldPrice, p.StockQuantity, p.ShowOnHomepage, p.DisplayOrder, p.CreatedOnUtc, p.VendorId, p.VendorName);
+    private static ProductResponse ToProductResponse(Product p, int mainPictureId) =>
+        new(p.Id, p.Name, p.ShortDescription, p.Price, p.OldPrice, p.StockQuantity, p.ShowOnHomepage, p.DisplayOrder, p.CreatedOnUtc, p.VendorId, p.VendorName, mainPictureId);
 
     private static ManufacturerResponse ToManufacturerResponse(Manufacturer m) =>
         new(m.Id, m.Name, m.Description, m.PictureId, m.DisplayOrder);
@@ -129,12 +131,13 @@ public sealed record ProductResponse(
     int Id, string Name, string? ShortDescription,
     decimal Price, decimal OldPrice, int StockQuantity,
     bool ShowOnHomepage, int DisplayOrder, DateTime CreatedOnUtc,
-    int VendorId, string? VendorName);
+    int VendorId, string? VendorName, int MainPictureId);
 
 public sealed record ProductDetailResponse(
     ProductResponse Product, string? FullDescription,
     IReadOnlyList<CategoryResponse> Categories,
-    IReadOnlyList<ManufacturerResponse> Manufacturers);
+    IReadOnlyList<ManufacturerResponse> Manufacturers,
+    IReadOnlyList<int> PictureIds);
 
 public sealed record ManufacturerResponse(
     int Id, string Name, string? Description,

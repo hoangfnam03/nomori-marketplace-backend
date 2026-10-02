@@ -138,13 +138,85 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
     {
         await using var connection = await OpenAsync(cancellationToken);
         await using var cmd = connection.CreateCommand();
-        cmd.CommandText = "UPDATE Product SET Deleted = 1 WHERE Id = @Id";
+        // A deleted product releases its pictures so the images can be reused or deleted.
+        cmd.CommandText = "DELETE FROM ProductPicture WHERE ProductId = @Id; UPDATE Product SET Deleted = 1 WHERE Id = @Id";
         cmd.Parameters.AddWithValue("@Id", id);
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
     public Task SetCategoriesAsync(int productId, int[] categoryIds, CancellationToken cancellationToken) =>
         ReplaceMappingsAsync("ProductCategory", "CategoryId", productId, categoryIds, cancellationToken);
+
+    public async Task<IReadOnlyList<int>> GetPictureIdsAsync(int productId, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT MediaAssetId FROM ProductPicture WHERE ProductId = @ProductId ORDER BY DisplayOrder, MediaAssetId";
+        cmd.Parameters.AddWithValue("@ProductId", productId);
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        var ids = new List<int>();
+        while (await reader.ReadAsync(cancellationToken)) ids.Add(reader.GetInt32(0));
+        return ids;
+    }
+
+    public async Task<IReadOnlyDictionary<int, int>> GetMainPictureIdsAsync(IReadOnlyCollection<int> productIds, CancellationToken cancellationToken)
+    {
+        var result = new Dictionary<int, int>();
+        if (productIds.Count == 0) return result;
+
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        // Parameter names are generated (@p0, @p1, ...), never user text.
+        var names = productIds.Select((_, i) => $"@p{i}").ToArray();
+        cmd.CommandText = $"""
+            SELECT ProductId, MediaAssetId FROM (
+                SELECT ProductId, MediaAssetId, ROW_NUMBER() OVER (PARTITION BY ProductId ORDER BY DisplayOrder, MediaAssetId) AS Rn
+                FROM ProductPicture WHERE ProductId IN ({string.Join(",", names)})) x
+            WHERE Rn = 1
+            """;
+        var index = 0;
+        foreach (var id in productIds) cmd.Parameters.AddWithValue(names[index++], id);
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken)) result[reader.GetInt32(0)] = reader.GetInt32(1);
+        return result;
+    }
+
+    public async Task<int?> GetPictureOwnerAsync(int mediaAssetId, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT ProductId FROM ProductPicture WHERE MediaAssetId = @Id";
+        cmd.Parameters.AddWithValue("@Id", mediaAssetId);
+        var value = await cmd.ExecuteScalarAsync(cancellationToken);
+        return value is int productId ? productId : null;
+    }
+
+    public async Task SetPicturesAsync(int productId, int[] mediaAssetIds, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
+
+        await using (var deleteCmd = connection.CreateCommand())
+        {
+            deleteCmd.Transaction = transaction;
+            deleteCmd.CommandText = "DELETE FROM ProductPicture WHERE ProductId = @ProductId";
+            deleteCmd.Parameters.AddWithValue("@ProductId", productId);
+            await deleteCmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        for (var i = 0; i < mediaAssetIds.Length; i++)
+        {
+            await using var insertCmd = connection.CreateCommand();
+            insertCmd.Transaction = transaction;
+            insertCmd.CommandText = "INSERT INTO ProductPicture (MediaAssetId, ProductId, DisplayOrder) VALUES (@Id, @ProductId, @DisplayOrder)";
+            insertCmd.Parameters.AddWithValue("@Id", mediaAssetIds[i]);
+            insertCmd.Parameters.AddWithValue("@ProductId", productId);
+            insertCmd.Parameters.AddWithValue("@DisplayOrder", i);
+            await insertCmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
 
     public Task SetManufacturersAsync(int productId, int[] manufacturerIds, CancellationToken cancellationToken) =>
         ReplaceMappingsAsync("ProductManufacturer", "ManufacturerId", productId, manufacturerIds, cancellationToken);

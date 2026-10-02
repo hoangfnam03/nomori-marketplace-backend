@@ -23,6 +23,7 @@ public sealed class ProductLifecycleTests
 
         public Fixture()
         {
+            Products.DefaultPicture = true;
             Vendors.Vendors.Add(new Vendor { Id = Shop, Name = "Shop", Active = true });
             Vendors.Vendors.Add(new Vendor { Id = OtherShop, Name = "Other", Active = true });
             Members.Members.Add(new VendorMember { CustomerId = 10, Email = "a@example.com" });
@@ -30,7 +31,7 @@ public sealed class ProductLifecycleTests
         }
 
         public ProductService Create() => new(
-            Products, new UnusedCategoryStore(), new UnusedManufacturerStore(), Vendors, Members, new FakeTaxonomy(), Audit,
+            Products, new UnusedCategoryStore(), new UnusedManufacturerStore(), Vendors, Members, new FakeMediaStore(), new FakeTaxonomy(), Audit,
             Email, TestOptions.Email(EmailEnabled), NullLog<ProductService>.Instance, new TestClock());
 
         /// <summary>Creates a draft with a category and a valid price.</summary>

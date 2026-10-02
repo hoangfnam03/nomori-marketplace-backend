@@ -86,6 +86,7 @@ public sealed class SqlMediaStore(IOptions<DatabaseOptions> options) : IMediaSto
             SELECT CASE WHEN EXISTS (SELECT 1 FROM Category WHERE PictureId = @Id)
                           OR EXISTS (SELECT 1 FROM Manufacturer WHERE PictureId = @Id)
                           OR EXISTS (SELECT 1 FROM Vendor WHERE PictureId = @Id AND Deleted = 0)
+                          OR EXISTS (SELECT 1 FROM ProductPicture WHERE MediaAssetId = @Id)
                         THEN 1 ELSE 0 END
             """;
         cmd.Parameters.AddWithValue("@Id", id);

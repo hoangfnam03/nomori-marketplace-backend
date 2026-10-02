@@ -2,7 +2,7 @@
 
 Tài liệu theo dõi (trace) tiến độ so với `nopCommerce/docs/nomori-complete-feature-map.md`. Cập nhật mỗi khi xong hoặc hoãn một slice.
 
-- **Cập nhật lần cuối:** 2026-10-04
+- **Cập nhật lần cuối:** 2026-10-05
 - **Quy ước:** mỗi slice có tài liệu thiết kế trong `docs/modules/` (mục 7 của feature map). Code chỉ sinh sau khi có tài liệu.
 - **Trạng thái:** `Xong` (backend + Angular), `Một phần` (còn slice con chưa làm), `Hoãn` (có quyết định), `Chưa làm`.
 - **Lưu ý về kiểm chứng:** tất cả slice đều có unit test cho service và migration. Các store SQL và luồng HTTP/Angular **chưa có test tự động**, cần test tay theo guide trong tài liệu từng module.
@@ -21,8 +21,8 @@ Tài liệu theo dõi (trace) tiến độ so với `nopCommerce/docs/nomori-com
 | F07 | Localization, tiền tệ, đơn vị, múi giờ | Chưa làm | | Cần trước F14 (giá) |
 | F08 | Media | Một phần | `modules/f08a-media.md` | **F08-A xong, đã merge** (ảnh, upload có kiểm soát). Còn F08-B (thumbnail, quét), F08-C (file riêng tư, download) |
 | F09 | Taxonomy toàn sàn, manufacturer | Một phần | `modules/f09a-taxonomy.md` | **F09-A xong, đã merge**: toàn vẹn cây, luật xóa, cờ `RestrictFromVendors`, validator chọn danh mục cho seller, ràng buộc DB. Còn slug/SEO (F24), template và lọc (F13), localization (F07) |
-| F10 | Sản phẩm, quyền sở hữu | Một phần | `modules/f10a-product-ownership.md`, `modules/f10b-product-lifecycle.md` | **F10-A xong, đã merge** (`VendorId` bắt buộc, shop nền tảng, API seller, chuyển shop). **F10-B xong** (chờ test tay và merge): 4 trạng thái (nháp, đang bán, ngừng bán, bị admin ẩn), seller đăng bán/ngừng bán, admin ẩn kèm lý do và email, bỏ ẩn khôi phục trạng thái cũ, yêu cầu xem lại. Còn F10-C (mô tả HTML, copy, liên quan, lịch đăng bán) |
-| F11 | Biến thể, thuộc tính, thông số | Một phần | | Product attribute và specification attribute đã có. Chưa có: tổ hợp biến thể, ảnh sản phẩm, tier price |
+| F10 | Sản phẩm, quyền sở hữu | Một phần | `modules/f10a-product-ownership.md`, `modules/f10b-product-lifecycle.md` | **F10-A xong, đã merge** (`VendorId` bắt buộc, shop nền tảng, API seller, chuyển shop). **F10-B xong, đã merge** (chưa test tay trên DB thật): 4 trạng thái (nháp, đang bán, ngừng bán, bị admin ẩn), seller đăng bán/ngừng bán, admin ẩn kèm lý do và email, bỏ ẩn khôi phục trạng thái cũ, yêu cầu xem lại. Còn F10-C (mô tả HTML, copy, liên quan, lịch đăng bán) |
+| F11 | Biến thể, thuộc tính, thông số | Một phần | `modules/f11a-product-pictures.md` | **F11-A xong** (chờ test tay và merge): ảnh sản phẩm có thứ tự (tối đa 10, ảnh đầu là ảnh chính), đăng bán cần ít nhất 1 ảnh, ảnh hiện ở danh sách seller, storefront. Product attribute và specification attribute đã có. Chưa có: tổ hợp biến thể (F11-B), tier price |
 | F12 | Tồn kho | Chưa làm | | Cần ledger/reservation trước khi làm giỏ hàng |
 | F13 | Tìm kiếm, lọc | Chưa làm | | |
 | F14–F31 | Giá, khuyến mãi, giỏ hàng, đặt hàng, thanh toán, vận chuyển, đổi trả, thông báo, CMS, SEO, affiliate, báo cáo, import/export, plugin, job nền, theme, AI | Chưa làm | | Xem feature map |
@@ -46,8 +46,8 @@ Theo mục 6 của feature map (M05 recovery plan):
 1. ~~F08-A Media~~ (xong, đã merge)
 2. ~~F09-A Taxonomy toàn sàn~~ (xong, đã merge)
 3. ~~F10-A Sở hữu sản phẩm~~ (xong, đã merge)
-4. ~~F10-B Vòng đời sản phẩm~~ (xong, chờ test tay và merge)
-5. **F11-A** Ảnh sản phẩm (dùng ảnh `product` của F08-A; thêm điều kiện "có ít nhất 1 ảnh" để đăng bán), rồi F11-B biến thể, thông số, tag theo từng sản phẩm. Xem `modules/vendor-products-prd.md` (US-A2 đến A4).
+4. ~~F10-B Vòng đời sản phẩm~~ (xong, đã merge)
+5. ~~F11-A Ảnh sản phẩm~~ (xong, chờ test tay và merge). Tiếp theo: **F10-C** (mô tả HTML an toàn, copy sản phẩm, sản phẩm liên quan, lịch đăng bán, SKU/GTIN) để đóng F10, rồi F11-B biến thể, thông số, tag theo từng sản phẩm. Xem `modules/vendor-products-prd.md` (US-A3, A4).
 6. F12-A Tồn kho, F13-A Tìm kiếm.
 7. F07 (phần tiền tệ, đơn vị, múi giờ) trước F14.
 8. Quay lại F05: `vendor-shop-settings`, `vendor-products`, `vendor-orders`, `vendor-settlement`.
@@ -63,7 +63,8 @@ Theo mục 6 của feature map (M05 recovery plan):
 | `extractError` ở trang admin catalog trước đây không đọc `fieldErrors` (đã sửa ở F08-A) | | |
 | Email liên hệ của shop nền tảng là giá trị giữ chỗ `platform@nomori.local`, admin cần sửa sau khi migrate | `modules/f10a-product-ownership.md` | Vận hành |
 | Trang admin catalog chưa có bộ lọc sản phẩm theo shop (API đã hỗ trợ `vendorId`) | `admin-catalog.page.ts` | F10-C |
-| Điều kiện đăng bán "có ít nhất 1 ảnh" của PRD chưa áp dụng (chưa có ảnh sản phẩm) | `modules/f10b-product-lifecycle.md` | F11-A |
+| Sản phẩm đang bán từ trước F11-A không có ảnh vẫn giữ trạng thái đang bán; luật "có ảnh" chỉ áp khi seller đổi trạng thái. Admin tick Published vẫn không bị luật ảnh | `modules/f11a-product-pictures.md` | F11-A |
+| Test service (`Services.Tests`) không chạy được trên máy này do Windows App Control chặn DLL; code compile, cần chạy `dotnet test` trên máy khác hoặc CI | | Môi trường |
 | Sản phẩm cũ chưa publish được chuyển thành "nháp" (không phân biệt được với "ngừng bán") | `modules/f10b-product-lifecycle.md` | Ghi chú triển khai |
 | Xem sản phẩm công khai theo category chưa gồm category con, chưa cache | `modules/f09a-taxonomy.md` | F13 |
 | Test tích hợp API (`Api.Tests`) rất ít; không có test E2E | | F26/F29 |
@@ -76,4 +77,5 @@ Theo mục 6 của feature map (M05 recovery plan):
 | 2026-10-01 | `feat/media/foundation` | F08-A: upload và phân phối ảnh, gắn vào category, manufacturer, vendor (BE + FE). Đã merge |
 | 2026-10-02 | `feat/taxonomy/foundation` | F09-A: toàn vẹn cây danh mục, luật xóa, hạn chế seller, validator chọn danh mục, ràng buộc DB, audit (BE + FE). Đã merge |
 | 2026-10-03 | `feat/product-ownership/foundation` | F10-A: sở hữu sản phẩm, shop nền tảng, API sản phẩm cho seller, chuyển shop, ẩn sản phẩm của shop bị tắt (BE + FE). **Sửa lỗi:** form sửa sản phẩm của admin làm mất liên kết shop. Nâng ngưỡng cảnh báo CSS của Angular lên 6 kB (lỗi 8 kB). Đã merge |
-| 2026-10-04 | `feat/product-lifecycle/foundation` | F10-B: vòng đời 4 trạng thái, đăng bán/ngừng bán, admin ẩn/bỏ ẩn kèm email, yêu cầu xem lại, lọc "chờ xem lại" (BE + FE) |
+| 2026-10-04 | `feat/product-lifecycle/foundation` | F10-B: vòng đời 4 trạng thái, đăng bán/ngừng bán, admin ẩn/bỏ ẩn kèm email, yêu cầu xem lại, lọc "chờ xem lại" (BE + FE). Đã merge (PR #12) |
+| 2026-10-05 | `feat/product-pictures/foundation` | F11-A: bảng `ProductPicture`, API `PUT .../pictures`, luật "cần ít nhất 1 ảnh để đăng bán", ảnh chính ở danh sách và storefront, gallery ở trang chi tiết, mục ảnh trong form seller (BE + FE). Chưa commit |

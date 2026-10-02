@@ -27,7 +27,7 @@ public sealed class ProductOwnershipTests
         }
 
         public ProductService Create() => new(
-            Products, new UnusedCategoryStore(), new UnusedManufacturerStore(), Vendors, new NoMembers(), Taxonomy, Audit,
+            Products, new UnusedCategoryStore(), new UnusedManufacturerStore(), Vendors, new NoMembers(), new FakeMediaStore(), Taxonomy, Audit,
             new RecordingEmailSender(), TestOptions.Email(false), NullLog<ProductService>.Instance, new TestClock());
     }
 
@@ -252,6 +252,10 @@ public sealed class ProductOwnershipTests
         public List<Product> Products { get; } = [];
         public ProductQuery? LastQuery { get; private set; }
         private readonly Dictionary<int, int[]> categories = [];
+        private readonly Dictionary<int, int[]> pictures = [];
+
+        /// <summary>When true, a product without stored pictures reports one, so tests that are not about pictures can publish.</summary>
+        public bool DefaultPicture { get; set; }
 
         public Task<Product?> GetAsync(int id, CancellationToken cancellationToken) =>
             Task.FromResult(Products.FirstOrDefault(p => p.Id == id && !p.Deleted));
@@ -300,6 +304,21 @@ public sealed class ProductOwnershipTests
         }
 
         public Task SetManufacturersAsync(int productId, int[] manufacturerIds, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task<IReadOnlyList<int>> GetPictureIdsAsync(int productId, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<int>>(pictures.TryGetValue(productId, out var ids) ? ids : DefaultPicture ? [9000 + productId] : []);
+
+        public Task<IReadOnlyDictionary<int, int>> GetMainPictureIdsAsync(IReadOnlyCollection<int> productIds, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyDictionary<int, int>>(productIds.Where(pictures.ContainsKey).ToDictionary(id => id, id => pictures[id].FirstOrDefault()));
+
+        public Task<int?> GetPictureOwnerAsync(int mediaAssetId, CancellationToken cancellationToken) =>
+            Task.FromResult(pictures.Where(kv => kv.Value.Contains(mediaAssetId)).Select(kv => (int?)kv.Key).FirstOrDefault());
+
+        public Task SetPicturesAsync(int productId, int[] mediaAssetIds, CancellationToken cancellationToken)
+        {
+            pictures[productId] = mediaAssetIds;
+            return Task.CompletedTask;
+        }
     }
 
     internal sealed class NoMembers : IVendorMemberStore
