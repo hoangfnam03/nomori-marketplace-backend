@@ -325,6 +325,11 @@ public sealed class ProductOwnershipTests
 
         public Task UpdateContentAsync(Product product, CancellationToken cancellationToken) => Task.CompletedTask;
 
+        public HashSet<int> ProductsWithVariants { get; } = [];
+
+        public Task<bool> HasVariantsAsync(int productId, CancellationToken cancellationToken) =>
+            Task.FromResult(ProductsWithVariants.Contains(productId));
+
         public Task<bool> IsSkuTakenAsync(int vendorId, string sku, int excludeProductId, CancellationToken cancellationToken) =>
             Task.FromResult(Products.Any(p => !p.Deleted && p.VendorId == vendorId && p.Id != excludeProductId
                 && string.Equals(p.Sku, sku, StringComparison.OrdinalIgnoreCase)));

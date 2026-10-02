@@ -11,11 +11,14 @@ namespace Nomori.Marketplace.Api.Modules.Catalog;
 [ApiController]
 [Route("api/v1/products/{productId:int}/attributes")]
 [AllowAnonymous]
-public sealed class ProductAttributePublicController(IProductAttributeService service) : ControllerBase
+public sealed class ProductAttributePublicController(IProductAttributeService service, IProductService productService) : ControllerBase
 {
     [HttpGet]
     public async Task<IActionResult> GetAttributes(int productId, CancellationToken cancellationToken)
     {
+        // Only products a customer can see; drafts, hidden or scheduled products do not exist here.
+        if (await productService.GetPublicProductAsync(productId, cancellationToken) is null) return NotFound();
+
         var detail = await service.GetProductAttributeDetailAsync(productId, cancellationToken);
         return Ok(ToPublicResponse(detail));
     }

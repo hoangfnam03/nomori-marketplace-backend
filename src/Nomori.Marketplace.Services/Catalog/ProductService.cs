@@ -239,7 +239,8 @@ public sealed partial class ProductService(
         existing.FullDescription = HtmlContent.Sanitize(command.FullDescription);
         existing.Price = command.Price;
         existing.OldPrice = command.OldPrice;
-        existing.StockQuantity = command.StockQuantity;
+        // With variants the stock is the sum of the combinations and only changes through the variants call.
+        if (!await productStore.HasVariantsAsync(existing.Id, cancellationToken)) existing.StockQuantity = command.StockQuantity;
         existing.Sku = NullIfBlank(command.Sku);
         existing.Gtin = NullIfBlank(command.Gtin);
         existing.ManufacturerPartNumber = NullIfBlank(command.ManufacturerPartNumber);
@@ -428,6 +429,12 @@ public sealed partial class ProductService(
         await auditLog.WriteAsync("product.copied", actorCustomerId, entityType: "Product", entityId: copy.Id,
             details: new { productId = copy.Id, sourceProductId = productId, vendorId }, cancellationToken: cancellationToken);
         return CatalogResult.Success(copy);
+    }
+
+    public async Task<Product?> GetPublicProductAsync(int id, CancellationToken cancellationToken)
+    {
+        var product = await productStore.GetAsync(id, cancellationToken);
+        return product is { Status: ProductStatus.Live, VendorActive: true } && product.IsAvailableAt(clock.UtcNow) ? product : null;
     }
 
     public async Task<IReadOnlyList<Product>> GetVisibleRelatedAsync(int productId, CancellationToken cancellationToken)

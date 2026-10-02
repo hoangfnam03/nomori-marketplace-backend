@@ -109,6 +109,9 @@ public interface IProductStore
     Task UpdateContentAsync(Product product, CancellationToken cancellationToken);
 
     /// <summary>Whether another product of the shop (not deleted, not <paramref name="excludeProductId"/>) already uses the SKU, ignoring case.</summary>
+    /// <summary>Whether the product has at least one attribute combination; its stock is then the sum of the combinations.</summary>
+    Task<bool> HasVariantsAsync(int productId, CancellationToken cancellationToken);
+
     Task<bool> IsSkuTakenAsync(int vendorId, string sku, int excludeProductId, CancellationToken cancellationToken);
 
     /// <summary>Related product ids of a product in display order.</summary>
@@ -146,6 +149,9 @@ public interface IProductService
 
     /// <summary>Copies a product of this shop into a new draft (no SKU, pictures, related products or schedule).</summary>
     Task<CatalogResult<Product>> CopyForVendorAsync(int vendorId, int productId, int actorCustomerId, CancellationToken cancellationToken);
+
+    /// <summary>The product when a customer may see it now: live, shop active, sale window open. Otherwise null.</summary>
+    Task<Product?> GetPublicProductAsync(int id, CancellationToken cancellationToken);
 
     /// <summary>Related products a customer may see now: live, inside their window, shop active, in the saved order.</summary>
     Task<IReadOnlyList<Product>> GetVisibleRelatedAsync(int productId, CancellationToken cancellationToken);

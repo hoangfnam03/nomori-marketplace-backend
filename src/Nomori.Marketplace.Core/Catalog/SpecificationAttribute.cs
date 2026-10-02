@@ -138,6 +138,9 @@ public interface ISpecificationAttributeStore
     Task<int> InsertTagAsync(ProductTag tag, CancellationToken ct);
     Task DeleteTagAsync(int id, CancellationToken ct);
     Task SetProductTagsAsync(int productId, int[] tagIds, CancellationToken ct);
+
+    /// <summary>Replaces the option-type rows of a product in one transaction; rows of other types are kept.</summary>
+    Task ReplaceProductOptionSpecsAsync(int productId, int[] optionIds, CancellationToken ct);
 }
 
 // Service interface
