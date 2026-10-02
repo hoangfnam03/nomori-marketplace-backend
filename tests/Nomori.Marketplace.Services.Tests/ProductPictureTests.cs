@@ -26,7 +26,7 @@ public sealed class ProductPictureTests
         }
 
         public ProductService Create() => new(
-            Products, new FakeInventoryStore(Products), new UnusedCategoryStore(), new UnusedManufacturerStore(), Vendors, new NoMembers(), Media, new FakeTaxonomy(), Audit,
+            Products, new FakeInventoryStore(Products), new FakePrimaryCurrency(), new UnusedCategoryStore(), new UnusedManufacturerStore(), Vendors, new NoMembers(), Media, new FakeTaxonomy(), Audit,
             new RecordingEmailSender(), TestOptions.Email(false), NullLog<ProductService>.Instance, new TestClock());
 
         public static async Task<int> DraftAsync(ProductService service) =>

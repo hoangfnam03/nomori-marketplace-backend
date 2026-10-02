@@ -27,7 +27,7 @@ public sealed class ProductOwnershipTests
         }
 
         public ProductService Create() => new(
-            Products, new FakeInventoryStore(Products), new UnusedCategoryStore(), new UnusedManufacturerStore(), Vendors, new NoMembers(), new FakeMediaStore(), Taxonomy, Audit,
+            Products, new FakeInventoryStore(Products), new FakePrimaryCurrency(), new UnusedCategoryStore(), new UnusedManufacturerStore(), Vendors, new NoMembers(), new FakeMediaStore(), Taxonomy, Audit,
             new RecordingEmailSender(), TestOptions.Email(false), NullLog<ProductService>.Instance, new TestClock());
     }
 

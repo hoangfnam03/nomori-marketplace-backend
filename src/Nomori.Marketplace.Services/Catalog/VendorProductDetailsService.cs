@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using Nomori.Marketplace.Core.Catalog;
+using Nomori.Marketplace.Core.Directory;
 using Nomori.Marketplace.Core.Security;
 using Nomori.Marketplace.Core.Time;
 using Nomori.Marketplace.Core.Vendors;
@@ -13,6 +14,7 @@ public sealed partial class VendorProductDetailsService(
     IProductAttributeService attributeService,
     ISpecificationAttributeStore specStore,
     IInventoryStore inventoryStore,
+    IPrimaryCurrencyProvider primaryCurrency,
     IAuditLogService auditLog,
     IClock clock) : IVendorProductDetailsService
 {
@@ -132,6 +134,8 @@ public sealed partial class VendorProductDetailsService(
     {
         var errors = new Dictionary<string, string[]>();
         var attributes = command.Attributes ?? [];
+        var currency = await primaryCurrency.GetPrimaryAsync(cancellationToken);
+        string ScaleMessage() => $"Amounts in {currency.Code} can have at most {currency.DecimalPlaces} decimal place(s).";
         var combinations = command.Combinations ?? [];
 
         if (attributes.Count > VariantLimits.MaxAttributes)
@@ -158,6 +162,8 @@ public sealed partial class VendorProductDetailsService(
                 var color = string.IsNullOrWhiteSpace(value.ColorSquaresRgb) ? null : value.ColorSquaresRgb.Trim();
                 if (color is not null && !ColorPattern().IsMatch(color))
                     return Fail(errors, "attributes", "A colour must look like #RRGGBB.");
+                if (!CurrencyRules.HasValidScale(value.PriceAdjustment, currency.DecimalPlaces))
+                    return Fail(errors, "attributes", ScaleMessage());
                 cleanedValues.Add(new VariantValueInput(name, color, value.PriceAdjustment));
             }
             if (cleanedValues.Select(v => v.Name.ToLowerInvariant()).Distinct().Count() != cleanedValues.Count)
@@ -195,6 +201,9 @@ public sealed partial class VendorProductDetailsService(
                 if (!seenSkus.Add(sku) || await attributeStore.IsCombinationSkuTakenAsync(vendorId, sku, product.Id, cancellationToken))
                     return Fail(errors, "combinations", $"{label}: SKU “{sku}” is already used in your shop.");
             }
+
+            if (combination.OverriddenPrice is { } overridden && !CurrencyRules.HasValidScale(overridden, currency.DecimalPlaces))
+                return Fail(errors, "combinations", $"{label}: {ScaleMessage()}");
 
             var price = combination.OverriddenPrice ?? product.Price + indexes.Select((v, a) => cleaned[a].Values[v].PriceAdjustment).Sum();
             if (price <= 0) return Fail(errors, "combinations", $"{label}: the price must stay above 0.");

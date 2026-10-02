@@ -31,7 +31,7 @@ public sealed class ProductLifecycleTests
         }
 
         public ProductService Create() => new(
-            Products, new FakeInventoryStore(Products), new UnusedCategoryStore(), new UnusedManufacturerStore(), Vendors, Members, new FakeMediaStore(), new FakeTaxonomy(), Audit,
+            Products, new FakeInventoryStore(Products), new FakePrimaryCurrency(), new UnusedCategoryStore(), new UnusedManufacturerStore(), Vendors, Members, new FakeMediaStore(), new FakeTaxonomy(), Audit,
             Email, TestOptions.Email(EmailEnabled), NullLog<ProductService>.Instance, new TestClock());
 
         /// <summary>Creates a draft with a category and a valid price.</summary>
