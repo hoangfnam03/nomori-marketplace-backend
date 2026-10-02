@@ -17,6 +17,12 @@ public sealed class Product
     public string? FullDescription { get; set; }
     public decimal Price { get; set; }
     public decimal OldPrice { get; set; }
+
+    /// <summary>A lower price for a while (or for good): used when it exists and its window is open. Always below <see cref="Price"/>.</summary>
+    public decimal? SpecialPrice { get; set; }
+
+    public DateTime? SpecialPriceStartUtc { get; set; }
+    public DateTime? SpecialPriceEndUtc { get; set; }
     public int StockQuantity { get; set; }
 
     /// <summary>False for products with no stock limit (for example digital goods): always available, nothing is reserved.</summary>
@@ -84,6 +90,9 @@ public sealed class ProductDetail
 
     /// <summary>Related product ids in display order, as saved by the shop (not filtered for visibility).</summary>
     public IReadOnlyList<int> RelatedProductIds { get; set; } = [];
+
+    /// <summary>Quantity prices, lowest quantity first.</summary>
+    public IReadOnlyList<TierPrice> TierPrices { get; set; } = [];
 }
 
 public interface IProductStore
@@ -122,6 +131,15 @@ public interface IProductStore
     Task<bool> HasVariantsAsync(int productId, CancellationToken cancellationToken);
 
     Task<bool> IsSkuTakenAsync(int vendorId, string sku, int excludeProductId, CancellationToken cancellationToken);
+
+    /// <summary>Writes the special price and its window only.</summary>
+    Task UpdatePricingAsync(Product product, CancellationToken cancellationToken);
+
+    /// <summary>Tier prices of a product, lowest quantity first.</summary>
+    Task<IReadOnlyList<TierPrice>> GetTierPricesAsync(int productId, CancellationToken cancellationToken);
+
+    /// <summary>Replaces all tier prices of a product in one transaction.</summary>
+    Task SetTierPricesAsync(int productId, IReadOnlyList<TierPrice> tiers, CancellationToken cancellationToken);
 
     /// <summary>Related product ids of a product in display order.</summary>
     Task<IReadOnlyList<int>> GetRelatedIdsAsync(int productId, CancellationToken cancellationToken);

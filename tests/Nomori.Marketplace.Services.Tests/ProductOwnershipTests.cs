@@ -327,6 +327,19 @@ public sealed class ProductOwnershipTests
 
         public HashSet<int> ProductsWithVariants { get; } = [];
 
+        private readonly Dictionary<int, List<TierPrice>> tiers = [];
+
+        public Task UpdatePricingAsync(Product product, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task<IReadOnlyList<TierPrice>> GetTierPricesAsync(int productId, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<TierPrice>>(tiers.GetValueOrDefault(productId)?.OrderBy(t => t.Quantity).ToList() ?? []);
+
+        public Task SetTierPricesAsync(int productId, IReadOnlyList<TierPrice> newTiers, CancellationToken cancellationToken)
+        {
+            tiers[productId] = [.. newTiers];
+            return Task.CompletedTask;
+        }
+
         public Task<bool> HasVariantsAsync(int productId, CancellationToken cancellationToken) =>
             Task.FromResult(ProductsWithVariants.Contains(productId));
 

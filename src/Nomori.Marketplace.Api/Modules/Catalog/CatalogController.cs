@@ -11,6 +11,7 @@ public sealed class CatalogController(
     ICategoryService categoryService,
     IProductService productService,
     ICatalogSearchService searchService,
+    IPriceCalculationService priceService,
     IInventoryService inventoryService,
     IManufacturerService manufacturerService) : ControllerBase
 {
@@ -92,7 +93,22 @@ public sealed class CatalogController(
             detail.PictureIds,
             related.Select(p => ToProductResponse(p, relatedPictures.GetValueOrDefault(p.Id))).ToList(),
             availability?.TrackInventory ?? true,
-            availability?.Product ?? detail.Product.StockQuantity));
+            availability?.Product ?? detail.Product.StockQuantity,
+            detail.TierPrices.Select(t => new TierPriceResponse(t.Quantity, t.Price)).ToList()));
+    }
+
+    /// <summary>
+    /// The price of a quantity of a product with the chosen variant values (<c>valueIds</c>, repeat the key), in the primary currency.
+    /// Special price, tier price and variant rules are applied by the server; screens only show the answer.
+    /// </summary>
+    [HttpGet("products/{id:int}/price")]
+    public async Task<IActionResult> GetPrice(int id, [FromQuery] int quantity = 1, [FromQuery] int[]? valueIds = null, CancellationToken cancellationToken = default)
+    {
+        // Only products a customer can see; drafts, hidden or scheduled products do not exist here.
+        if (await productService.GetPublicProductAsync(id, cancellationToken) is null) return NotFound();
+
+        var result = await priceService.QuoteAsync(new PriceRequest(id, quantity, valueIds ?? []), cancellationToken);
+        return result.Succeeded ? Ok(result.Value) : this.ToFailure(result);
     }
 
     [HttpGet("manufacturers")]
@@ -125,7 +141,8 @@ public sealed class CatalogController(
     // In stock on the list means: not tracked, or something on hand. The exact available quantity is on the detail.
     private static ProductResponse ToProductResponse(Product p, int mainPictureId) =>
         new(p.Id, p.Name, p.ShortDescription, p.Price, p.OldPrice, p.StockQuantity, p.ShowOnHomepage, p.DisplayOrder, p.CreatedOnUtc, p.VendorId, p.VendorName, mainPictureId,
-            !p.TrackInventory || p.StockQuantity > 0);
+            !p.TrackInventory || p.StockQuantity > 0,
+            PriceRules.CurrentPrice(p, DateTime.UtcNow), PriceRules.IsSpecialActive(p, DateTime.UtcNow));
 
     private static ManufacturerResponse ToManufacturerResponse(Manufacturer m) =>
         new(m.Id, m.Name, m.Description, m.PictureId, m.DisplayOrder);
@@ -174,7 +191,7 @@ public sealed record ProductResponse(
     int Id, string Name, string? ShortDescription,
     decimal Price, decimal OldPrice, int StockQuantity,
     bool ShowOnHomepage, int DisplayOrder, DateTime CreatedOnUtc,
-    int VendorId, string? VendorName, int MainPictureId, bool InStock);
+    int VendorId, string? VendorName, int MainPictureId, bool InStock, decimal FinalPrice, bool OnSale);
 
 public sealed record ProductDetailResponse(
     ProductResponse Product, string? FullDescription,
@@ -184,7 +201,9 @@ public sealed record ProductDetailResponse(
     IReadOnlyList<ProductResponse> RelatedProducts,
     bool TrackInventory,
     /// <summary>What a customer can still buy: on hand minus active reservations. Meaningless when <see cref="TrackInventory"/> is false.</summary>
-    int AvailableQuantity);
+    int AvailableQuantity,
+    /// <summary>Quantity prices, lowest quantity first: from <c>Quantity</c> units each unit costs <c>Price</c>.</summary>
+    IReadOnlyList<TierPriceResponse> TierPrices);
 
 public sealed record ManufacturerResponse(
     int Id, string Name, string? Description,

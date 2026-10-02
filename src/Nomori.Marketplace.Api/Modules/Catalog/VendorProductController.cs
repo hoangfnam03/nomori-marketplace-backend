@@ -58,7 +58,8 @@ public sealed class VendorProductController(
         return detail is null
             ? NotFound()
             : Ok(VendorProductResponse.From(detail.Product, detail.Categories.Select(c => c.Id).ToArray(), detail.Manufacturers.Select(m => m.Id).ToArray(),
-                detail.PictureIds.ToArray(), (detail.PictureIds.Count > 0 ? detail.PictureIds[0] : 0), detail.RelatedProductIds.ToArray()));
+                detail.PictureIds.ToArray(), (detail.PictureIds.Count > 0 ? detail.PictureIds[0] : 0), detail.RelatedProductIds.ToArray(),
+                detail.TierPrices.Select(t => new TierPriceResponse(t.Quantity, t.Price)).ToList()));
     }
 
     /// <summary>Replaces the ordered related products of a product (maximum 12, products of this shop only).</summary>
@@ -198,17 +199,20 @@ public sealed record VendorProductResponse(
     int[]? PictureIds, int MainPictureId,
     bool TrackInventory, int LowStockThreshold, bool IsLowStock,
     string? Sku, string? Gtin, string? ManufacturerPartNumber, DateTime? AvailableStartUtc, DateTime? AvailableEndUtc,
-    int[]? RelatedProductIds)
+    int[]? RelatedProductIds,
+    decimal? SpecialPrice, DateTime? SpecialPriceStartUtc, DateTime? SpecialPriceEndUtc, IReadOnlyList<TierPriceResponse>? TierPrices)
 {
     /// <param name="pictureIds">Ordered picture ids; only known when a single product is read.</param>
     /// <param name="mainPictureId">First picture id, or 0 when there is none or it is not known.</param>
     public static VendorProductResponse From(
-        Product p, int[]? categoryIds, int[]? manufacturerIds, int[]? pictureIds = null, int mainPictureId = 0, int[]? relatedProductIds = null) => new(
+        Product p, int[]? categoryIds, int[]? manufacturerIds, int[]? pictureIds = null, int mainPictureId = 0, int[]? relatedProductIds = null,
+        IReadOnlyList<TierPriceResponse>? tierPrices = null) => new(
         p.Id, p.VendorId, p.Name, p.ShortDescription, p.FullDescription, p.Price, p.OldPrice, p.StockQuantity, p.Published,
         ProductStatusNames.ToName(p.Status), p.Status == ProductStatus.HiddenByAdmin ? p.HiddenReason : null, p.ReviewRequestedOnUtc,
         categoryIds, manufacturerIds, p.CreatedOnUtc, p.UpdatedOnUtc, pictureIds, mainPictureId,
         p.TrackInventory, p.LowStockThreshold, p.IsLowStock,
-        p.Sku, p.Gtin, p.ManufacturerPartNumber, AsUtc(p.AvailableStartUtc), AsUtc(p.AvailableEndUtc), relatedProductIds);
+        p.Sku, p.Gtin, p.ManufacturerPartNumber, AsUtc(p.AvailableStartUtc), AsUtc(p.AvailableEndUtc), relatedProductIds,
+        p.SpecialPrice, AsUtc(p.SpecialPriceStartUtc), AsUtc(p.SpecialPriceEndUtc), tierPrices);
 
     // Values read from SQL have no kind; mark them UTC so JSON carries a trailing Z.
     private static DateTime? AsUtc(DateTime? value) => value is null ? null : DateTime.SpecifyKind(value.Value, DateTimeKind.Utc);

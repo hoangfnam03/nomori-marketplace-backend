@@ -9,7 +9,7 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
 {
     // Every read joins the owning shop so callers get its name and status without a second query.
     private const string SelectColumns =
-        "p.Id, p.Name, p.ShortDescription, p.FullDescription, p.Price, p.OldPrice, p.StockQuantity, p.Status, p.Deleted, p.VendorId, p.ShowOnHomepage, p.DisplayOrder, p.CreatedOnUtc, p.UpdatedOnUtc, v.Name, v.Active, p.StatusBeforeHidden, p.HiddenReason, p.HiddenOnUtc, p.HiddenByCustomerId, p.ReviewRequestedOnUtc, p.Sku, p.Gtin, p.ManufacturerPartNumber, p.AvailableStartUtc, p.AvailableEndUtc, p.TrackInventory, p.LowStockThreshold";
+        "p.Id, p.Name, p.ShortDescription, p.FullDescription, p.Price, p.OldPrice, p.StockQuantity, p.Status, p.Deleted, p.VendorId, p.ShowOnHomepage, p.DisplayOrder, p.CreatedOnUtc, p.UpdatedOnUtc, v.Name, v.Active, p.StatusBeforeHidden, p.HiddenReason, p.HiddenOnUtc, p.HiddenByCustomerId, p.ReviewRequestedOnUtc, p.Sku, p.Gtin, p.ManufacturerPartNumber, p.AvailableStartUtc, p.AvailableEndUtc, p.TrackInventory, p.LowStockThreshold, p.SpecialPrice, p.SpecialPriceStartUtc, p.SpecialPriceEndUtc";
 
     private const string FromClause = "FROM Product p INNER JOIN Vendor v ON v.Id = p.VendorId";
 
@@ -116,6 +116,61 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
         cmd.Parameters.AddWithValue("@Id", product.Id);
         AddContentParams(cmd, product);
         await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task UpdatePricingAsync(Product product, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            UPDATE Product SET SpecialPrice = @SpecialPrice, SpecialPriceStartUtc = @Start, SpecialPriceEndUtc = @End, UpdatedOnUtc = @UpdatedOnUtc
+            WHERE Id = @Id AND Deleted = 0
+            """;
+        cmd.Parameters.AddWithValue("@Id", product.Id);
+        cmd.Parameters.AddWithValue("@SpecialPrice", (object?)product.SpecialPrice ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@Start", (object?)product.SpecialPriceStartUtc ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@End", (object?)product.SpecialPriceEndUtc ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@UpdatedOnUtc", product.UpdatedOnUtc);
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<TierPrice>> GetTierPricesAsync(int productId, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT Quantity, Price FROM ProductTierPrice WHERE ProductId = @ProductId ORDER BY Quantity";
+        cmd.Parameters.AddWithValue("@ProductId", productId);
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        var tiers = new List<TierPrice>();
+        while (await reader.ReadAsync(cancellationToken)) tiers.Add(new TierPrice(reader.GetInt32(0), reader.GetDecimal(1)));
+        return tiers;
+    }
+
+    public async Task SetTierPricesAsync(int productId, IReadOnlyList<TierPrice> tiers, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
+
+        await using (var deleteCmd = connection.CreateCommand())
+        {
+            deleteCmd.Transaction = transaction;
+            deleteCmd.CommandText = "DELETE FROM ProductTierPrice WHERE ProductId = @ProductId";
+            deleteCmd.Parameters.AddWithValue("@ProductId", productId);
+            await deleteCmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        foreach (var tier in tiers)
+        {
+            await using var insertCmd = connection.CreateCommand();
+            insertCmd.Transaction = transaction;
+            insertCmd.CommandText = "INSERT INTO ProductTierPrice (ProductId, Quantity, Price) VALUES (@ProductId, @Quantity, @Price)";
+            insertCmd.Parameters.AddWithValue("@ProductId", productId);
+            insertCmd.Parameters.AddWithValue("@Quantity", tier.Quantity);
+            insertCmd.Parameters.AddWithValue("@Price", tier.Price);
+            await insertCmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
     }
 
     public async Task<bool> HasVariantsAsync(int productId, CancellationToken cancellationToken)
@@ -390,6 +445,9 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
         AvailableStartUtc = r.IsDBNull(24) ? null : r.GetDateTime(24),
         AvailableEndUtc = r.IsDBNull(25) ? null : r.GetDateTime(25),
         TrackInventory = r.GetBoolean(26),
-        LowStockThreshold = r.GetInt32(27)
+        LowStockThreshold = r.GetInt32(27),
+        SpecialPrice = r.IsDBNull(28) ? null : r.GetDecimal(28),
+        SpecialPriceStartUtc = r.IsDBNull(29) ? null : r.GetDateTime(29),
+        SpecialPriceEndUtc = r.IsDBNull(30) ? null : r.GetDateTime(30)
     };
 }
