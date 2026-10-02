@@ -7,7 +7,9 @@ using Nomori.Marketplace.Core.Customers;
 using Nomori.Marketplace.Core.Media;
 using Nomori.Marketplace.Core.Security;
 using Nomori.Marketplace.Core.Vendors;
+using Nomori.Marketplace.Core.Directory;
 using Nomori.Marketplace.Data.Catalog;
+using Nomori.Marketplace.Data.Directory;
 using Nomori.Marketplace.Data.Customers;
 using Nomori.Marketplace.Data.Media;
 using Nomori.Marketplace.Data.Security;
@@ -34,6 +36,7 @@ public static class DatabaseRegistrationExtensions
         services.AddScoped<IProductAttributeStore, SqlProductAttributeStore>();
         services.AddScoped<IInventoryStore, SqlInventoryStore>();
         services.AddScoped<IProductFacetStore, SqlProductFacetStore>();
+        services.AddScoped<ICurrencyStore, SqlCurrencyStore>();
         services.AddScoped<ISpecificationAttributeStore, SqlSpecificationAttributeStore>();
         services.AddScoped<IVendorStore, SqlVendorStore>();
         services.AddScoped<IVendorApplicationStore, SqlVendorApplicationStore>();

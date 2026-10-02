@@ -2,7 +2,7 @@
 
 Tài liệu theo dõi (trace) tiến độ so với `nopCommerce/docs/nomori-complete-feature-map.md`. Cập nhật mỗi khi xong hoặc hoãn một slice.
 
-- **Cập nhật lần cuối:** 2026-10-09
+- **Cập nhật lần cuối:** 2026-10-10
 - **Quy ước:** mỗi slice có tài liệu thiết kế trong `docs/modules/` (mục 7 của feature map). Code chỉ sinh sau khi có tài liệu.
 - **Trạng thái:** `Xong` (backend + Angular), `Một phần` (còn slice con chưa làm), `Hoãn` (có quyết định), `Chưa làm`.
 - **Lưu ý về kiểm chứng:** tất cả slice đều có unit test cho service và migration. Các store SQL và luồng HTTP/Angular **chưa có test tự động**, cần test tay theo guide trong tài liệu từng module.
@@ -18,7 +18,7 @@ Tài liệu theo dõi (trace) tiến độ so với `nopCommerce/docs/nomori-com
 | F04 | Hồ sơ khách hàng | Một phần | `modules/customer-profile.md` | Chưa có: GDPR, tin nhắn riêng |
 | F05 | Vendor / Shop | Một phần | `modules/vendors*.md` | Xong: quản trị vendor, đăng ký shop, thành viên shop. **Hoãn:** `vendor-shop-settings`, sản phẩm, đơn hàng, đối soát của vendor (PRD đã có) |
 | F06 | Multi-store | **Hoãn** | | Quyết định 2026-10-01: sàn một domain, làm khi cần nhiều domain/brand |
-| F07 | Localization, tiền tệ, đơn vị, múi giờ | Chưa làm | | Cần trước F14 (giá) |
+| F07 | Localization, tiền tệ, đơn vị, múi giờ | Một phần | `modules/f07a-currency.md` | **F07-A xong** (chờ test tay và merge): tiền tệ (một tiền tệ chính, tiền tệ hiển thị kèm tỷ giá nhập tay), quy tắc số chữ số thập phân cho mọi giá, làm tròn và quy đổi, trang admin tiền tệ, bộ chọn tiền tệ ở storefront. Chưa có: đơn vị đo và múi giờ (F07-B), quốc gia và địa chỉ (F07-C), ngôn ngữ (F07-D), thuế (F07-E) |
 | F08 | Media | Một phần | `modules/f08a-media.md` | **F08-A xong, đã merge** (ảnh, upload có kiểm soát). Còn F08-B (thumbnail, quét), F08-C (file riêng tư, download) |
 | F09 | Taxonomy toàn sàn, manufacturer | Một phần | `modules/f09a-taxonomy.md` | **F09-A xong, đã merge**: toàn vẹn cây, luật xóa, cờ `RestrictFromVendors`, validator chọn danh mục cho seller, ràng buộc DB. Còn slug/SEO (F24), template và lọc (F13), localization (F07) |
 | F10 | Sản phẩm, quyền sở hữu | Một phần | `modules/f10a-product-ownership.md`, `modules/f10b-product-lifecycle.md`, `modules/f10c-product-content.md` | **F10-A xong, đã merge** (`VendorId` bắt buộc, shop nền tảng, API seller, chuyển shop). **F10-B xong, đã merge** (chưa test tay trên DB thật): 4 trạng thái (nháp, đang bán, ngừng bán, bị admin ẩn), seller đăng bán/ngừng bán, admin ẩn kèm lý do và email, bỏ ẩn khôi phục trạng thái cũ, yêu cầu xem lại. **F10-C xong** (chờ test tay và merge, xem `modules/f10c-product-content.md`): mô tả HTML lọc an toàn, SKU/GTIN/MPN (SKU duy nhất theo shop), lịch đăng bán, sản phẩm liên quan (cùng shop, tối đa 12), copy sản phẩm. Cặp F10 đóng lại ở slice này |
@@ -50,9 +50,10 @@ Theo mục 6 của feature map (M05 recovery plan):
 5. ~~F11-A Ảnh sản phẩm~~ (xong, đã merge)
 5b. ~~F10-C Nội dung sản phẩm~~ (xong, chờ test tay và merge). 5c. ~~F11-B Biến thể, thông số, tag của seller~~ (xong, đã merge)
 5d. ~~F12-A Tồn kho: sổ cái, giữ chỗ~~ (xong, đã merge)
-5e. ~~F13-A Tìm kiếm, lọc, facet, gợi ý~~ (xong, chờ test tay và merge). Tiếp theo: **F07** (tiền tệ, đơn vị, múi giờ) trước F14 giá, rồi giỏ hàng (F16) dùng giữ chỗ tồn kho của F12-A. Xem `modules/vendor-products-prd.md` (US-A3, A4).
+5e. ~~F13-A Tìm kiếm, lọc, facet, gợi ý~~ (xong, đã merge)
+5f. ~~F07-A Tiền tệ và quy tắc tiền~~ (xong, chờ test tay và merge). Tiếp theo: **F14-A** giá (giá đặc biệt, bậc giá, công thức tính giá) rồi giỏ hàng F16 dùng giữ chỗ tồn kho của F12-A; F07-B đến F07-E làm khi cần (múi giờ trước F20/F22). Xem `modules/vendor-products-prd.md` (US-A3, A4).
 6. F13-A Tìm kiếm.
-7. F07 (phần tiền tệ, đơn vị, múi giờ) trước F14, sau đó F14 giá, F16 giỏ hàng.
+7. F14 giá, F16 giỏ hàng (F07-A đã xong).
 8. Quay lại F05: `vendor-shop-settings`, `vendor-products`, `vendor-orders`, `vendor-settlement`.
 
 ## 4. Nợ kỹ thuật và việc treo
@@ -72,6 +73,8 @@ Theo mục 6 của feature map (M05 recovery plan):
 | Logic khoá và đồng thời của tồn kho (`SqlInventoryStore`: `UPDLOCK, HOLDLOCK`, giữ chỗ cuối cùng) chỉ kiểm bằng tay trên SQL; unit test chỉ phủ `StockRules` và service | `modules/f12a-inventory.md` | F12-A (test tay), F26 |
 | Endpoint admin thô `/admin/products/{id}/attributes/combinations` vẫn ghi tồn kho tổ hợp không qua sổ cái | `modules/f12a-inventory.md` | F12-B |
 | Hàng giữ chỗ hết hạn chưa được dọn khỏi bảng `StockReservation` | `modules/f12a-inventory.md` | F29 |
+| Mọi số tiền lưu ở tiền tệ chính (mặc định USD, cố định sau khi có sản phẩm); cart, đơn và thanh toán sau này phải lưu kèm mã tiền tệ | `modules/f07a-currency.md` | F16 đến F19 |
+| Tiền tệ khách chọn chỉ lưu trong trình duyệt, tỷ giá nhập tay | `modules/f07a-currency.md` | F04, F28 |
 | Test service (`Services.Tests`) không chạy được trên máy này do Windows App Control chặn DLL; code compile, cần chạy `dotnet test` trên máy khác hoặc CI | | Môi trường |
 | Sản phẩm cũ chưa publish được chuyển thành "nháp" (không phân biệt được với "ngừng bán") | `modules/f10b-product-lifecycle.md` | Ghi chú triển khai |
 | Tìm kiếm dùng `LIKE '%từ%'` (không dùng index), facet là nhiều truy vấn mỗi lần, chưa cache; `inStock` ở danh sách là tồn kho thực, không trừ hàng đang giữ chỗ | `modules/f13a-catalog-search.md` | F13-C |
@@ -91,3 +94,4 @@ Theo mục 6 của feature map (M05 recovery plan):
 | 2026-10-07 | `feat/product-variants/foundation` | F11-B: API seller cho biến thể, thông số, tag (`PUT .../variants`, `.../specs`, `.../tags`, `GET .../product-options`), kiểm tra tổ hợp, SKU duy nhất gồm cả SKU tổ hợp, tồn kho sản phẩm = tổng tổ hợp, **sửa lỗ hổng:** API công khai `/products/{id}/attributes|specs|tags` trước đây trả cả sản phẩm nháp/bị ẩn. Trang seller `/vendor/products/:id/details`, storefront chọn biến thể (BE + FE). **Sửa lỗi:** storefront đọc sai dạng dữ liệu thuộc tính công khai (`m.mapping.id`). Chưa commit |
 | 2026-10-08 | `feat/inventory/foundation` | F12-A: migration `StockMovement`, `StockReservation`, `TrackInventory`, `LowStockThreshold`; `IInventoryStore`/`IInventoryService` (adjust, reserve, release, commit, availability) với `StockRules` thuần; API seller `GET .../inventory`, `POST .../stock-adjustments`, `PUT .../inventory-settings`, `GET .../stock-movements`, lọc `lowStock`; lưu sản phẩm của seller không còn sửa tồn kho (chỉ qua sổ cái), admin sửa qua delta; lưu biến thể bị chặn khi có hàng đang giữ chỗ; storefront hiện tồn kho khả dụng. Mục Inventory ở `/vendor/products/:id/details`, badge sắp hết hàng (BE + FE). Chưa commit |
 | 2026-10-09 | `feat/search/foundation` | F13-A: `ICatalogSearchService`, bộ dựng SQL dùng chung `ProductFilter` (luật công khai luôn áp dụng, tham số hoá, escape `LIKE`), `GET /catalog/products` mở rộng (danh mục kèm con, nhà sản xuất, giá, còn hàng, tag, thông số, độ khớp), `GET /catalog/products/facets` và `/suggest`, migration index tag và thông số. Trang danh sách storefront có bảng lọc, chip bộ lọc, URL đồng bộ; ô tìm kiếm có gợi ý bằng bàn phím (BE + FE). **Sửa lỗi:** trang danh sách storefront trước đây không gửi từ khoá tìm kiếm lên API. Chưa commit |
+| 2026-10-10 | `feat/localization/foundation` | F07-A: bảng `Currency` (một tiền tệ chính, seed USD), quyền `settings.manage`, `CurrencyRules` (làm tròn, quy đổi, số chữ số thập phân), `ICurrencyService`, API công khai `GET /currencies` và API admin CRUD + đặt tiền tệ chính (chia lại tỷ giá, bị khoá khi đã có sản phẩm), kiểm tra số chữ số thập phân cho giá sản phẩm, giá cũ, điều chỉnh và giá riêng của biến thể. Angular: `CurrencyService` thay 8 chỗ gắn cứng `$`, bộ chọn tiền tệ ở header, trang `/admin/currencies` (BE + FE). Chưa commit |

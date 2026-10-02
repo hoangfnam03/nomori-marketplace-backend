@@ -27,6 +27,9 @@ public static class PermissionCodes
 
     public const string CatalogManage = "catalog.manage";
 
+    /// <summary>Platform settings such as currencies (F07).</summary>
+    public const string SettingsManage = "settings.manage";
+
     public const string VendorManage = "vendor.manage";
     public const string VendorPortal = "vendor.portal";
 }

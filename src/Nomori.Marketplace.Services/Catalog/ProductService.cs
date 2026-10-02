@@ -2,6 +2,7 @@ using System.Text.Encodings.Web;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Nomori.Marketplace.Core.Catalog;
+using Nomori.Marketplace.Core.Directory;
 using Nomori.Marketplace.Core.Email;
 using Nomori.Marketplace.Core.Media;
 using Nomori.Marketplace.Core.Security;
@@ -13,6 +14,7 @@ namespace Nomori.Marketplace.Services.Catalog;
 public sealed partial class ProductService(
     IProductStore productStore,
     IInventoryStore inventoryStore,
+    IPrimaryCurrencyProvider primaryCurrency,
     ICategoryStore categoryStore,
     IManufacturerStore manufacturerStore,
     IVendorStore vendorStore,
@@ -68,6 +70,7 @@ public sealed partial class ProductService(
     public async Task<CatalogResult<Product>> CreateAsync(CreateProductCommand command, int actorCustomerId, CancellationToken cancellationToken)
     {
         var errors = Validate(command.Name, command.Price, command.OldPrice, command.StockQuantity, command.FullDescription);
+        await AddScaleErrorsAsync(errors, cancellationToken, ("price", command.Price), ("oldPrice", command.OldPrice));
         var selection = await taxonomy.ValidateSelectionAsync(command.CategoryIds, command.ManufacturerIds, TaxonomyAudience.Admin, cancellationToken);
         foreach (var error in selection.Errors) errors[error.Key] = error.Value;
 
@@ -114,6 +117,7 @@ public sealed partial class ProductService(
         if (existing is null) return CatalogResult.Error<Product>(CatalogErrors.NotFound);
 
         var errors = Validate(command.Name, command.Price, command.OldPrice, command.StockQuantity, command.FullDescription);
+        await AddScaleErrorsAsync(errors, cancellationToken, ("price", command.Price), ("oldPrice", command.OldPrice));
         var selection = await taxonomy.ValidateSelectionAsync(command.CategoryIds, command.ManufacturerIds, TaxonomyAudience.Admin, cancellationToken);
         foreach (var error in selection.Errors) errors[error.Key] = error.Value;
 
@@ -608,6 +612,7 @@ public sealed partial class ProductService(
         if (command.Price <= 0) errors["price"] = ["Price must be greater than 0."];
         if (command.OldPrice != 0 && command.OldPrice <= command.Price)
             errors["oldPrice"] = ["Old price must be greater than the price, or 0 for none."];
+        await AddScaleErrorsAsync(errors, cancellationToken, ("price", command.Price), ("oldPrice", command.OldPrice));
 
         var selection = await taxonomy.ValidateSelectionAsync(command.CategoryIds, command.ManufacturerIds, TaxonomyAudience.Seller, cancellationToken);
         foreach (var error in selection.Errors) errors[error.Key] = error.Value;
@@ -619,6 +624,17 @@ public sealed partial class ProductService(
     private Task AuditAsync(string eventName, int actorCustomerId, Product product, CancellationToken cancellationToken) =>
         auditLog.WriteAsync(eventName, actorCustomerId, entityType: "Product", entityId: product.Id,
             details: new { productId = product.Id, vendorId = product.VendorId }, cancellationToken: cancellationToken);
+
+    /// <summary>Prices are stored in the primary currency, so they may have no more decimals than it allows. An earlier error on the field stays.</summary>
+    private async Task AddScaleErrorsAsync(Dictionary<string, string[]> errors, CancellationToken cancellationToken, params (string Field, decimal Value)[] amounts)
+    {
+        var currency = await primaryCurrency.GetPrimaryAsync(cancellationToken);
+        foreach (var (field, value) in amounts)
+        {
+            if (!CurrencyRules.HasValidScale(value, currency.DecimalPlaces))
+                errors.TryAdd(field, [$"Amounts in {currency.Code} can have at most {currency.DecimalPlaces} decimal place(s)."]);
+        }
+    }
 
     private static Dictionary<string, string[]> Validate(string? name, decimal price, decimal oldPrice, int stockQuantity, string? fullDescription = null)
     {

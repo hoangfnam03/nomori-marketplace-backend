@@ -34,10 +34,10 @@ public sealed class ProductVariantsTests
         }
 
         public VendorProductDetailsService Create() => new(
-            Products, Vendors, Attributes, new ProductAttributeService(Attributes), Specs, Inventory, Audit, new TestClock());
+            Products, Vendors, Attributes, new ProductAttributeService(Attributes), Specs, Inventory, new FakePrimaryCurrency(), Audit, new TestClock());
 
         public ProductService CreateProducts() => new(
-            Products, Inventory, new UnusedCategoryStore(), new UnusedManufacturerStore(), Vendors, new NoMembers(), new FakeMediaStore(), new FakeTaxonomy(), Audit,
+            Products, Inventory, new FakePrimaryCurrency(), new UnusedCategoryStore(), new UnusedManufacturerStore(), Vendors, new NoMembers(), new FakeMediaStore(), new FakeTaxonomy(), Audit,
             new RecordingEmailSender(), TestOptions.Email(false), NullLog<ProductService>.Instance, new TestClock());
 
         public async Task<int> DraftAsync(int vendorId = Shop, decimal price = 10)

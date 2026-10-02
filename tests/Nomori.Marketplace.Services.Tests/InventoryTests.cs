@@ -68,7 +68,7 @@ public sealed class InventoryTests
         public InventoryService Create() => new(Inventory, Products, Vendors, Attributes, Audit, Clock);
 
         public ProductService CreateProducts() => new(
-            Products, Inventory, new UnusedCategoryStore(), new UnusedManufacturerStore(), Vendors, new NoMembers(), new FakeMediaStore(), new FakeTaxonomy(), Audit,
+            Products, Inventory, new FakePrimaryCurrency(), new UnusedCategoryStore(), new UnusedManufacturerStore(), Vendors, new NoMembers(), new FakeMediaStore(), new FakeTaxonomy(), Audit,
             new RecordingEmailSender(), TestOptions.Email(false), NullLog<ProductService>.Instance, Clock);
 
         public async Task<int> ProductAsync(int stock = 10, int vendorId = Shop)
@@ -424,7 +424,7 @@ public sealed class InventoryTests
         await f.Create().ReserveAsync("cart", id, 501, 1, null, CancellationToken.None);
         f.Attributes.Attributes.Add(new ProductAttributeSpec { Id = 1, Name = "Color" });
         var details = new VendorProductDetailsService(f.Products, f.Vendors, f.Attributes, new ProductAttributeService(f.Attributes),
-            new FakeSpecificationStore(), f.Inventory, f.Audit, f.Clock);
+            new FakeSpecificationStore(), f.Inventory, new FakePrimaryCurrency(), f.Audit, f.Clock);
         var command = new SaveVariantsCommand([new VariantAttributeInput(1, true, [new VariantValueInput("Red")])], [new VariantCombinationInput([0], null, 4, null)]);
 
         var refused = await details.SetVariantsAsync(Shop, id, command, Seller, CancellationToken.None);
