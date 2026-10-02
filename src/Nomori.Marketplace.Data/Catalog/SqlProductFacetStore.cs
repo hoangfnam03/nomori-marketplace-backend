@@ -18,7 +18,7 @@ public sealed class SqlProductFacetStore(IOptions<DatabaseOptions> options) : IP
 
         var total = 0;
         decimal? min = null, max = null;
-        await RunAsync(connection, filter, $"SELECT COUNT(*), MIN(p.Price), MAX(p.Price) {FromClause} WHERE {filter.Where}", async reader =>
+        await RunAsync(connection, filter, $"SELECT COUNT(*), MIN({ProductFilter.PriceExpression}), MAX({ProductFilter.PriceExpression}) {FromClause} WHERE {filter.Where}", async reader =>
         {
             if (await reader.ReadAsync(cancellationToken))
             {

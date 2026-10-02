@@ -107,6 +107,19 @@ public sealed class ProductFilterTests
     }
 
     [Fact]
+    public void PriceFilterAndSortsUseTheSpecialPriceWhileItsWindowIsOpen()
+    {
+        var filter = ProductFilter.Build(new ProductQuery(1, 20, MinPrice: 5, MaxPrice: 9, Sort: ProductSortOrder.PriceAsc, Published: true, OnlyActiveShops: true));
+
+        Assert.Contains($"{ProductFilter.PriceExpression} >= @MinPrice", filter.Where);
+        Assert.Contains($"{ProductFilter.PriceExpression} <= @MaxPrice", filter.Where);
+        Assert.StartsWith(ProductFilter.PriceExpression + " ASC", filter.Sort);
+        Assert.Contains("p.SpecialPriceStartUtc <= SYSUTCDATETIME()", ProductFilter.PriceExpression);
+        Assert.Contains("p.SpecialPriceEndUtc > SYSUTCDATETIME()", ProductFilter.PriceExpression);
+        Assert.StartsWith(ProductFilter.PriceExpression + " DESC", ProductFilter.Build(new ProductQuery(1, 20, Sort: ProductSortOrder.PriceDesc)).Sort);
+    }
+
+    [Fact]
     public void SearchIndexMigrationRunsAfterInventory()
     {
         long Version(Type type) =>

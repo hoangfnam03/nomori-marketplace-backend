@@ -56,7 +56,8 @@ public sealed partial class ProductService(
 
         var pictureIds = await productStore.GetPictureIdsAsync(id, cancellationToken);
         var relatedIds = await productStore.GetRelatedIdsAsync(id, cancellationToken);
-        return new ProductDetail { Product = product, Categories = categories, Manufacturers = manufacturers, PictureIds = pictureIds, RelatedProductIds = relatedIds };
+        var tierPrices = await productStore.GetTierPricesAsync(id, cancellationToken);
+        return new ProductDetail { Product = product, Categories = categories, Manufacturers = manufacturers, PictureIds = pictureIds, RelatedProductIds = relatedIds, TierPrices = tierPrices };
     }
 
     public async Task<PagedResult<Product>> GetListAsync(ProductQuery query, CancellationToken cancellationToken)
@@ -124,7 +125,10 @@ public sealed partial class ProductService(
         // The owner is fixed after creation. Omitting vendorId (or repeating the current one) is fine.
         if (command.VendorId is { } requested && requested != existing.VendorId)
             errors["vendorId"] = ["The owner of a product cannot be changed here. Use the transfer action."];
+        if (!errors.ContainsKey("price") && await PriceConflictAsync(existing, command.Price, cancellationToken) is { } priceConflict)
+            errors["price"] = [priceConflict];
         if (errors.Count > 0) return CatalogResult.Failure<Product>(errors);
+        var previousPrice = existing.Price;
 
         existing.Name = command.Name.Trim();
         existing.ShortDescription = NullIfBlank(command.ShortDescription);
@@ -149,6 +153,7 @@ public sealed partial class ProductService(
         await productStore.SetCategoriesAsync(existing.Id, selection.Value!.CategoryIds, cancellationToken);
         await productStore.SetManufacturersAsync(existing.Id, selection.Value.ManufacturerIds, cancellationToken);
 
+        await AuditPriceChangeAsync(existing, previousPrice, actorCustomerId, cancellationToken);
         await AuditAsync("product.updated", actorCustomerId, existing, cancellationToken);
         return CatalogResult.Success(existing);
     }
@@ -248,7 +253,10 @@ public sealed partial class ProductService(
         // A product on sale must always keep a category.
         if (existing.Status == ProductStatus.Live && (selection?.CategoryIds.Length ?? 0) == 0 && !errors.ContainsKey("categoryIds"))
             errors["categoryIds"] = ["A product on sale needs at least one category. Stop selling it first."];
+        if (!errors.ContainsKey("price") && await PriceConflictAsync(existing, command.Price, cancellationToken) is { } priceConflict)
+            errors["price"] = [priceConflict];
         if (errors.Count > 0) return CatalogResult.Failure<Product>(errors);
+        var previousPrice = existing.Price;
 
         existing.Name = command.Name.Trim();
         existing.ShortDescription = NullIfBlank(command.ShortDescription);
@@ -268,6 +276,7 @@ public sealed partial class ProductService(
         await productStore.SetCategoriesAsync(existing.Id, selection!.CategoryIds, cancellationToken);
         await productStore.SetManufacturersAsync(existing.Id, selection.ManufacturerIds, cancellationToken);
 
+        await AuditPriceChangeAsync(existing, previousPrice, actorCustomerId, cancellationToken);
         await AuditAsync("product.updated", actorCustomerId, existing, cancellationToken);
         return CatalogResult.Success(existing);
     }
@@ -571,6 +580,26 @@ public sealed partial class ProductService(
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Failed to email shop members about product {ProductId}.")]
     private partial void LogNotificationFailed(Exception exception, int productId);
+
+    /// <summary>
+    /// The regular price must stay above the special price and every tier price, which were validated against the old price.
+    /// Raising the price is always fine. Returns the reason, or null when the change is allowed.
+    /// </summary>
+    private async Task<string?> PriceConflictAsync(Product existing, decimal newPrice, CancellationToken cancellationToken)
+    {
+        if (newPrice >= existing.Price) return null;
+        if (existing.SpecialPrice is { } special && newPrice <= special)
+            return "The price must stay above the special price. Lower or remove the special price first.";
+        return (await productStore.GetTierPricesAsync(existing.Id, cancellationToken)).Any(t => t.Price >= newPrice)
+            ? "The price must stay above every tier price. Lower or remove the tier prices first."
+            : null;
+    }
+
+    private Task AuditPriceChangeAsync(Product product, decimal previousPrice, int actorCustomerId, CancellationToken cancellationToken) =>
+        previousPrice == product.Price
+            ? Task.CompletedTask
+            : auditLog.WriteAsync("product.price_changed", actorCustomerId, entityType: "Product", entityId: product.Id,
+                details: new { productId = product.Id, vendorId = product.VendorId, from = previousPrice, to = product.Price }, cancellationToken: cancellationToken);
 
     /// <summary>A new product starts with its stock; the ledger needs the first row so its history adds up.</summary>
     private Task RecordInitialStockAsync(Product product, int actorCustomerId, CancellationToken cancellationToken) =>

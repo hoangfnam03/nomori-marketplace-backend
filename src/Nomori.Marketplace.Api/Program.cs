@@ -154,6 +154,8 @@ builder.Services.AddScoped<IVendorProductDetailsService, VendorProductDetailsSer
 builder.Services.AddScoped<IInventoryService, InventoryService>();
 builder.Services.AddScoped<ICatalogSearchService, CatalogSearchService>();
 builder.Services.AddScoped<ICurrencyService, CurrencyService>();
+builder.Services.AddScoped<IPriceCalculationService, PriceCalculationService>();
+builder.Services.AddScoped<IProductPricingService, ProductPricingService>();
 builder.Services.AddScoped<IPrimaryCurrencyProvider, PrimaryCurrencyProvider>();
 builder.Services.AddScoped<IVendorService, VendorService>();
 builder.Services.AddScoped<IVendorApplicationService, VendorApplicationService>();

@@ -10,6 +10,14 @@ namespace Nomori.Marketplace.Data.Catalog;
 /// </summary>
 internal sealed class ProductFilter
 {
+    /// <summary>
+    /// The price a customer pays for one unit before variants and quantity: the special price while its window is open, otherwise the price.
+    /// The price filter, the price sorts and the facet range all use it, so a product on sale is found at its sale price.
+    /// </summary>
+    public const string PriceExpression =
+        "(CASE WHEN p.SpecialPrice IS NOT NULL AND (p.SpecialPriceStartUtc IS NULL OR p.SpecialPriceStartUtc <= SYSUTCDATETIME()) " +
+        "AND (p.SpecialPriceEndUtc IS NULL OR p.SpecialPriceEndUtc > SYSUTCDATETIME()) THEN p.SpecialPrice ELSE p.Price END)";
+
     private readonly List<(string Name, object Value)> parameters = [];
 
     /// <summary>The parameters the clause refers to, for tests and for <see cref="Apply"/>.</summary>
@@ -38,8 +46,8 @@ internal sealed class ProductFilter
         else if (q.ManufacturerId.HasValue)
             parts.Add($"p.Id IN (SELECT ProductId FROM ProductManufacturer WHERE ManufacturerId = {filter.Add("@ManufacturerId", q.ManufacturerId.Value)})");
 
-        if (q.MinPrice.HasValue) parts.Add($"p.Price >= {filter.Add("@MinPrice", q.MinPrice.Value)}");
-        if (q.MaxPrice.HasValue) parts.Add($"p.Price <= {filter.Add("@MaxPrice", q.MaxPrice.Value)}");
+        if (q.MinPrice.HasValue) parts.Add($"{PriceExpression} >= {filter.Add("@MinPrice", q.MinPrice.Value)}");
+        if (q.MaxPrice.HasValue) parts.Add($"{PriceExpression} <= {filter.Add("@MaxPrice", q.MaxPrice.Value)}");
 
         var terms = SearchText.Terms(q.Search);
         for (var i = 0; i < terms.Length; i++)
@@ -98,8 +106,8 @@ internal sealed class ProductFilter
     {
         ProductSortOrder.NameAsc => "p.Name ASC, p.Id ASC",
         ProductSortOrder.NameDesc => "p.Name DESC, p.Id ASC",
-        ProductSortOrder.PriceAsc => "p.Price ASC, p.Id ASC",
-        ProductSortOrder.PriceDesc => "p.Price DESC, p.Id ASC",
+        ProductSortOrder.PriceAsc => $"{PriceExpression} ASC, p.Id ASC",
+        ProductSortOrder.PriceDesc => $"{PriceExpression} DESC, p.Id ASC",
         ProductSortOrder.Newest => "p.CreatedOnUtc DESC, p.Id DESC",
         // Name starts with the first term, then contains it, then everything else.
         ProductSortOrder.Relevance when terms.Length > 0 =>

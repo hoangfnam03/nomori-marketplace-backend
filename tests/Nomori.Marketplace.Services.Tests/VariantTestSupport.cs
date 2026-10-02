@@ -61,7 +61,7 @@ internal sealed class FakeAttributeStore : IProductAttributeStore
             mappingIds.Add(mapping.Id);
             valueIds.Add(command.Attributes[a].Values.Select((v, i) =>
             {
-                var value = new ProductAttributeValue { Id = nextId++, ProductAttributeMappingId = mapping.Id, Name = v.Name, DisplayOrder = i };
+                var value = new ProductAttributeValue { Id = nextId++, ProductAttributeMappingId = mapping.Id, Name = v.Name, PriceAdjustment = v.PriceAdjustment, DisplayOrder = i };
                 values.Add(value);
                 return value.Id;
             }).ToArray());
