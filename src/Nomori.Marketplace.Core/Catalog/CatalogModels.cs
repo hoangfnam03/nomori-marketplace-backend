@@ -18,8 +18,18 @@ public sealed record ProductQuery(
     bool? ReviewRequested = null,
     /// <summary>When true, only tracked products at or below their low-stock threshold.</summary>
     bool? LowStock = null,
-    /// <summary>Hide products whose shop is inactive or deleted. Set for every public query.</summary>
-    bool OnlyActiveShops = false);
+    /// <summary>Hide products whose shop is inactive or deleted, and products outside their sale window. Set for every public query.</summary>
+    bool OnlyActiveShops = false,
+    /// <summary>The category and its descendants; replaces <see cref="CategoryId"/> when given.</summary>
+    int[]? CategoryIds = null,
+    /// <summary>Any of these manufacturers.</summary>
+    int[]? ManufacturerIds = null,
+    /// <summary>Any of these tag names (lower case).</summary>
+    string[]? Tags = null,
+    /// <summary>One entry per specification attribute: a product needs one option of every group (OR inside, AND across).</summary>
+    IReadOnlyList<int[]>? SpecOptionGroups = null,
+    /// <summary>Only products a customer can still buy: not tracked, or stock above what is reserved.</summary>
+    bool InStockOnly = false);
 
 public sealed record ManufacturerQuery(int Page = 1, int PageSize = 20, bool? Published = null);
 
@@ -30,7 +40,9 @@ public enum ProductSortOrder
     NameDesc = 2,
     PriceAsc = 3,
     PriceDesc = 4,
-    Newest = 5
+    Newest = 5,
+    /// <summary>Names that start with the first search term come first.</summary>
+    Relevance = 6
 }
 
 public sealed record PagedResult<T>(IReadOnlyList<T> Items, int TotalCount, int Page, int PageSize)

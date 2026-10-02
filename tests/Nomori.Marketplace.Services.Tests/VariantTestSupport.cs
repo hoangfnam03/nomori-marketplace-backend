@@ -117,6 +117,9 @@ internal sealed class FakeSpecificationStore : ISpecificationAttributeStore
     public Task<IReadOnlyList<SpecificationAttributeOption>> GetOptionsAsync(int specAttributeId, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<SpecificationAttributeOption>>(Options.Where(o => o.SpecificationAttributeId == specAttributeId).ToList());
 
+    public Task<IReadOnlyList<SpecificationAttributeOption>> GetOptionsByIdsAsync(IEnumerable<int> ids, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<SpecificationAttributeOption>>(Options.Where(o => ids.Contains(o.Id)).ToList());
+
     public Task<SpecificationAttributeOption?> GetOptionAsync(int id, CancellationToken ct) =>
         Task.FromResult(Options.FirstOrDefault(o => o.Id == id));
 
@@ -161,7 +164,6 @@ internal sealed class FakeSpecificationStore : ISpecificationAttributeStore
     public Task<int> InsertAsync(SpecificationAttributeDef attr, CancellationToken ct) => throw new NotSupportedException();
     public Task UpdateAsync(SpecificationAttributeDef attr, CancellationToken ct) => throw new NotSupportedException();
     public Task DeleteAsync(int id, CancellationToken ct) => throw new NotSupportedException();
-    public Task<IReadOnlyList<SpecificationAttributeOption>> GetOptionsByIdsAsync(IEnumerable<int> ids, CancellationToken ct) => throw new NotSupportedException();
     public Task<int> InsertOptionAsync(SpecificationAttributeOption opt, CancellationToken ct) => throw new NotSupportedException();
     public Task UpdateOptionAsync(SpecificationAttributeOption opt, CancellationToken ct) => throw new NotSupportedException();
     public Task DeleteOptionAsync(int id, CancellationToken ct) => throw new NotSupportedException();
