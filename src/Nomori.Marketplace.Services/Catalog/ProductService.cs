@@ -459,7 +459,7 @@ public sealed partial class ProductService(
     public async Task<Product?> GetPublicProductAsync(int id, CancellationToken cancellationToken)
     {
         var product = await productStore.GetAsync(id, cancellationToken);
-        return product is { Status: ProductStatus.Live, VendorActive: true } && product.IsAvailableAt(clock.UtcNow) ? product : null;
+        return product is not null && product.IsVisibleAt(clock.UtcNow) ? product : null;
     }
 
     public async Task<IReadOnlyList<Product>> GetVisibleRelatedAsync(int productId, CancellationToken cancellationToken)
