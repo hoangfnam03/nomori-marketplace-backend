@@ -46,6 +46,9 @@ public sealed class Product
 
     public DateTime? AvailableEndUtc { get; set; }
 
+    /// <summary>What a customer may see and buy: live, the shop active, and the publication window open.</summary>
+    public bool IsVisibleAt(DateTime nowUtc) => Status == ProductStatus.Live && VendorActive && IsAvailableAt(nowUtc);
+
     /// <summary>True when <paramref name="nowUtc"/> is inside the publication window.</summary>
     public bool IsAvailableAt(DateTime nowUtc) =>
         (AvailableStartUtc is null || AvailableStartUtc <= nowUtc) && (AvailableEndUtc is null || nowUtc < AvailableEndUtc);

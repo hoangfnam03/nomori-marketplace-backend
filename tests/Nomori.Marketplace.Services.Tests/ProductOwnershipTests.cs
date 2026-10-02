@@ -364,7 +364,8 @@ public sealed class ProductOwnershipTests
         public Task<IReadOnlyList<VendorMember>> ListAsync(int vendorId, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<VendorMember>>(Members.ToList());
 
-        public Task<VendorMember?> GetAsync(int vendorId, int customerId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<VendorMember?> GetAsync(int vendorId, int customerId, CancellationToken cancellationToken) =>
+            Task.FromResult(Members.FirstOrDefault(m => m.CustomerId == customerId));
 
         public Task<CreateMemberStoreResult> CreateAsync(int vendorId, string email, string? firstName, string? lastName, string passwordHash,
             string passwordSalt, string setupTokenHash, DateTime setupTokenExpiresOnUtc, int maxMembers, DateTime nowUtc, CancellationToken cancellationToken) =>

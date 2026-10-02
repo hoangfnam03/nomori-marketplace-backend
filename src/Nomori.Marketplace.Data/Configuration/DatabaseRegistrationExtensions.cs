@@ -1,6 +1,7 @@
 using FluentMigrator.Runner;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Nomori.Marketplace.Core.Cart;
 using Nomori.Marketplace.Core.Catalog;
 using Nomori.Marketplace.Core.Configuration;
 using Nomori.Marketplace.Core.Customers;
@@ -8,6 +9,7 @@ using Nomori.Marketplace.Core.Media;
 using Nomori.Marketplace.Core.Security;
 using Nomori.Marketplace.Core.Vendors;
 using Nomori.Marketplace.Core.Directory;
+using Nomori.Marketplace.Data.Cart;
 using Nomori.Marketplace.Data.Catalog;
 using Nomori.Marketplace.Data.Directory;
 using Nomori.Marketplace.Data.Customers;
@@ -37,6 +39,7 @@ public static class DatabaseRegistrationExtensions
         services.AddScoped<IInventoryStore, SqlInventoryStore>();
         services.AddScoped<IProductFacetStore, SqlProductFacetStore>();
         services.AddScoped<ICurrencyStore, SqlCurrencyStore>();
+        services.AddScoped<ICartStore, SqlCartStore>();
         services.AddScoped<ISpecificationAttributeStore, SqlSpecificationAttributeStore>();
         services.AddScoped<IVendorStore, SqlVendorStore>();
         services.AddScoped<IVendorApplicationStore, SqlVendorApplicationStore>();
