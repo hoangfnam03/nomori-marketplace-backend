@@ -319,6 +319,24 @@ public sealed class ProductOwnershipTests
             pictures[productId] = mediaAssetIds;
             return Task.CompletedTask;
         }
+
+        private readonly Dictionary<int, int[]> related = [];
+        private readonly Dictionary<int, int[]> manufacturers = [];
+
+        public Task UpdateContentAsync(Product product, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task<bool> IsSkuTakenAsync(int vendorId, string sku, int excludeProductId, CancellationToken cancellationToken) =>
+            Task.FromResult(Products.Any(p => !p.Deleted && p.VendorId == vendorId && p.Id != excludeProductId
+                && string.Equals(p.Sku, sku, StringComparison.OrdinalIgnoreCase)));
+
+        public Task<IReadOnlyList<int>> GetRelatedIdsAsync(int productId, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<int>>(related.GetValueOrDefault(productId) ?? []);
+
+        public Task SetRelatedAsync(int productId, int[] relatedProductIds, CancellationToken cancellationToken)
+        {
+            related[productId] = relatedProductIds;
+            return Task.CompletedTask;
+        }
     }
 
     internal sealed class NoMembers : IVendorMemberStore

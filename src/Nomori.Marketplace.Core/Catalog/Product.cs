@@ -20,6 +20,21 @@ public sealed class Product
     public int StockQuantity { get; set; }
     public ProductStatus Status { get; set; }
 
+    /// <summary>Stock keeping unit. Unique inside one shop among products that are not deleted.</summary>
+    public string? Sku { get; set; }
+
+    public string? Gtin { get; set; }
+    public string? ManufacturerPartNumber { get; set; }
+
+    /// <summary>Optional publication window; a missing bound is open. Only matters while the product is live.</summary>
+    public DateTime? AvailableStartUtc { get; set; }
+
+    public DateTime? AvailableEndUtc { get; set; }
+
+    /// <summary>True when <paramref name="nowUtc"/> is inside the publication window.</summary>
+    public bool IsAvailableAt(DateTime nowUtc) =>
+        (AvailableStartUtc is null || AvailableStartUtc <= nowUtc) && (AvailableEndUtc is null || nowUtc < AvailableEndUtc);
+
     /// <summary>True when the product is on sale. Derived from <see cref="Status"/>, so the two can never disagree.</summary>
     public bool Published => Status == ProductStatus.Live;
 
@@ -57,6 +72,9 @@ public sealed class ProductDetail
 
     /// <summary>Media asset ids in display order; the first is the main picture.</summary>
     public IReadOnlyList<int> PictureIds { get; set; } = [];
+
+    /// <summary>Related product ids in display order, as saved by the shop (not filtered for visibility).</summary>
+    public IReadOnlyList<int> RelatedProductIds { get; set; } = [];
 }
 
 public interface IProductStore
@@ -86,6 +104,18 @@ public interface IProductStore
     /// <summary>Replaces all pictures of a product in one transaction; the position in the array is the display order.</summary>
     Task SetPicturesAsync(int productId, int[] mediaAssetIds, CancellationToken cancellationToken);
     Task SetManufacturersAsync(int productId, int[] manufacturerIds, CancellationToken cancellationToken);
+
+    /// <summary>Writes the identifiers and the publication window only.</summary>
+    Task UpdateContentAsync(Product product, CancellationToken cancellationToken);
+
+    /// <summary>Whether another product of the shop (not deleted, not <paramref name="excludeProductId"/>) already uses the SKU, ignoring case.</summary>
+    Task<bool> IsSkuTakenAsync(int vendorId, string sku, int excludeProductId, CancellationToken cancellationToken);
+
+    /// <summary>Related product ids of a product in display order.</summary>
+    Task<IReadOnlyList<int>> GetRelatedIdsAsync(int productId, CancellationToken cancellationToken);
+
+    /// <summary>Replaces all related products of a product in one transaction; the position in the array is the display order.</summary>
+    Task SetRelatedAsync(int productId, int[] relatedProductIds, CancellationToken cancellationToken);
 }
 
 public interface IProductService
@@ -110,6 +140,15 @@ public interface IProductService
 
     /// <summary>Replaces the ordered pictures of a product of this shop (maximum 10; the first is the main picture).</summary>
     Task<CatalogResult<int[]>> SetPicturesForVendorAsync(int vendorId, int productId, int[]? pictureIds, int actorCustomerId, CancellationToken cancellationToken);
+
+    /// <summary>Replaces the ordered related products of a product of this shop (maximum 12, same shop only).</summary>
+    Task<CatalogResult<int[]>> SetRelatedForVendorAsync(int vendorId, int productId, int[]? relatedProductIds, int actorCustomerId, CancellationToken cancellationToken);
+
+    /// <summary>Copies a product of this shop into a new draft (no SKU, pictures, related products or schedule).</summary>
+    Task<CatalogResult<Product>> CopyForVendorAsync(int vendorId, int productId, int actorCustomerId, CancellationToken cancellationToken);
+
+    /// <summary>Related products a customer may see now: live, inside their window, shop active, in the saved order.</summary>
+    Task<IReadOnlyList<Product>> GetVisibleRelatedAsync(int productId, CancellationToken cancellationToken);
 
     /// <summary>Main picture id per product, for list screens. Products without pictures are absent.</summary>
     Task<IReadOnlyDictionary<int, int>> GetMainPictureIdsAsync(IReadOnlyCollection<int> productIds, CancellationToken cancellationToken);

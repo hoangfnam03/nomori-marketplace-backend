@@ -26,6 +26,8 @@ public sealed partial class ProductService(
 {
     private const int MaxReasonLength = 2000;
     private const int MaxPictures = 10;
+    private const int MaxRelated = 12;
+    private const int MaxNameLength = 400;
 
     public async Task<ProductDetail?> GetDetailAsync(int id, CancellationToken cancellationToken)
     {
@@ -50,7 +52,8 @@ public sealed partial class ProductService(
         }
 
         var pictureIds = await productStore.GetPictureIdsAsync(id, cancellationToken);
-        return new ProductDetail { Product = product, Categories = categories, Manufacturers = manufacturers, PictureIds = pictureIds };
+        var relatedIds = await productStore.GetRelatedIdsAsync(id, cancellationToken);
+        return new ProductDetail { Product = product, Categories = categories, Manufacturers = manufacturers, PictureIds = pictureIds, RelatedProductIds = relatedIds };
     }
 
     public async Task<PagedResult<Product>> GetListAsync(ProductQuery query, CancellationToken cancellationToken)
@@ -63,7 +66,7 @@ public sealed partial class ProductService(
 
     public async Task<CatalogResult<Product>> CreateAsync(CreateProductCommand command, int actorCustomerId, CancellationToken cancellationToken)
     {
-        var errors = Validate(command.Name, command.Price, command.OldPrice, command.StockQuantity);
+        var errors = Validate(command.Name, command.Price, command.OldPrice, command.StockQuantity, command.FullDescription);
         var selection = await taxonomy.ValidateSelectionAsync(command.CategoryIds, command.ManufacturerIds, TaxonomyAudience.Admin, cancellationToken);
         foreach (var error in selection.Errors) errors[error.Key] = error.Value;
 
@@ -87,7 +90,7 @@ public sealed partial class ProductService(
         {
             Name = command.Name.Trim(),
             ShortDescription = NullIfBlank(command.ShortDescription),
-            FullDescription = NullIfBlank(command.FullDescription),
+            FullDescription = HtmlContent.Sanitize(command.FullDescription),
             Price = command.Price,
             OldPrice = command.OldPrice,
             StockQuantity = command.StockQuantity,
@@ -108,7 +111,7 @@ public sealed partial class ProductService(
         var existing = await productStore.GetAsync(command.Id, cancellationToken);
         if (existing is null) return CatalogResult.Error<Product>(CatalogErrors.NotFound);
 
-        var errors = Validate(command.Name, command.Price, command.OldPrice, command.StockQuantity);
+        var errors = Validate(command.Name, command.Price, command.OldPrice, command.StockQuantity, command.FullDescription);
         var selection = await taxonomy.ValidateSelectionAsync(command.CategoryIds, command.ManufacturerIds, TaxonomyAudience.Admin, cancellationToken);
         foreach (var error in selection.Errors) errors[error.Key] = error.Value;
 
@@ -119,7 +122,7 @@ public sealed partial class ProductService(
 
         existing.Name = command.Name.Trim();
         existing.ShortDescription = NullIfBlank(command.ShortDescription);
-        existing.FullDescription = NullIfBlank(command.FullDescription);
+        existing.FullDescription = HtmlContent.Sanitize(command.FullDescription);
         existing.Price = command.Price;
         existing.OldPrice = command.OldPrice;
         existing.StockQuantity = command.StockQuantity;
@@ -185,7 +188,7 @@ public sealed partial class ProductService(
         if (vendor is null) return CatalogResult.Error<Product>(CatalogErrors.NotFound);
         if (!vendor.Active) return CatalogResult.Error<Product>(CatalogErrors.Forbidden);
 
-        var (errors, selection) = await ValidateSellerAsync(command, cancellationToken);
+        var (errors, selection) = await ValidateSellerAsync(vendorId, 0, command, cancellationToken);
         if (errors.Count > 0) return CatalogResult.Failure<Product>(errors);
 
         var now = clock.UtcNow;
@@ -193,12 +196,17 @@ public sealed partial class ProductService(
         {
             Name = command.Name.Trim(),
             ShortDescription = NullIfBlank(command.ShortDescription),
-            FullDescription = NullIfBlank(command.FullDescription),
+            FullDescription = HtmlContent.Sanitize(command.FullDescription),
             Price = command.Price,
             OldPrice = command.OldPrice,
             StockQuantity = command.StockQuantity,
             Status = ProductStatus.Draft,
             VendorId = vendorId,
+            Sku = NullIfBlank(command.Sku),
+            Gtin = NullIfBlank(command.Gtin),
+            ManufacturerPartNumber = NullIfBlank(command.ManufacturerPartNumber),
+            AvailableStartUtc = AsUtc(command.AvailableStartUtc),
+            AvailableEndUtc = AsUtc(command.AvailableEndUtc),
             // Admin-only fields: sellers start from the defaults.
             ShowOnHomepage = false,
             DisplayOrder = 0,
@@ -220,7 +228,7 @@ public sealed partial class ProductService(
         if (vendor is null) return CatalogResult.Error<Product>(CatalogErrors.NotFound);
         if (!vendor.Active) return CatalogResult.Error<Product>(CatalogErrors.Forbidden);
 
-        var (errors, selection) = await ValidateSellerAsync(command, cancellationToken);
+        var (errors, selection) = await ValidateSellerAsync(vendorId, productId, command, cancellationToken);
         // A product on sale must always keep a category.
         if (existing.Status == ProductStatus.Live && (selection?.CategoryIds.Length ?? 0) == 0 && !errors.ContainsKey("categoryIds"))
             errors["categoryIds"] = ["A product on sale needs at least one category. Stop selling it first."];
@@ -228,13 +236,19 @@ public sealed partial class ProductService(
 
         existing.Name = command.Name.Trim();
         existing.ShortDescription = NullIfBlank(command.ShortDescription);
-        existing.FullDescription = NullIfBlank(command.FullDescription);
+        existing.FullDescription = HtmlContent.Sanitize(command.FullDescription);
         existing.Price = command.Price;
         existing.OldPrice = command.OldPrice;
         existing.StockQuantity = command.StockQuantity;
+        existing.Sku = NullIfBlank(command.Sku);
+        existing.Gtin = NullIfBlank(command.Gtin);
+        existing.ManufacturerPartNumber = NullIfBlank(command.ManufacturerPartNumber);
+        existing.AvailableStartUtc = AsUtc(command.AvailableStartUtc);
+        existing.AvailableEndUtc = AsUtc(command.AvailableEndUtc);
         // Status, ShowOnHomepage and DisplayOrder keep their current values: sellers change status through their own actions.
         existing.UpdatedOnUtc = clock.UtcNow;
         await productStore.UpdateAsync(existing, cancellationToken);
+        await productStore.UpdateContentAsync(existing, cancellationToken);
         await productStore.SetCategoriesAsync(existing.Id, selection!.CategoryIds, cancellationToken);
         await productStore.SetManufacturersAsync(existing.Id, selection.ManufacturerIds, cancellationToken);
 
@@ -349,6 +363,83 @@ public sealed partial class ProductService(
         await auditLog.WriteAsync("product.pictures_changed", actorCustomerId, entityType: "Product", entityId: productId,
             details: new { productId, vendorId, count = ids.Length }, cancellationToken: cancellationToken);
         return CatalogResult.Success(ids);
+    }
+
+    // ---- Related products and copy ----
+
+    public async Task<CatalogResult<int[]>> SetRelatedForVendorAsync(
+        int vendorId, int productId, int[]? relatedProductIds, int actorCustomerId, CancellationToken cancellationToken)
+    {
+        var product = await productStore.GetAsync(productId, cancellationToken);
+        if (product is null || product.VendorId != vendorId) return CatalogResult.Error<int[]>(CatalogErrors.NotFound);
+
+        var vendor = await vendorStore.GetAsync(vendorId, cancellationToken);
+        if (vendor is null) return CatalogResult.Error<int[]>(CatalogErrors.NotFound);
+        if (!vendor.Active) return CatalogResult.Error<int[]>(CatalogErrors.Forbidden);
+
+        var ids = relatedProductIds ?? [];
+        if (ids.Length > MaxRelated)
+            return CatalogResult.Failure<int[]>("relatedProductIds", $"A product can have at most {MaxRelated} related products.");
+        if (ids.Distinct().Count() != ids.Length)
+            return CatalogResult.Failure<int[]>("relatedProductIds", "The same product is listed more than once.");
+
+        foreach (var id in ids)
+        {
+            // Own shop only; one message for every reason so ids of other shops are not probed.
+            var related = id != productId ? await productStore.GetAsync(id, cancellationToken) : null;
+            if (related is null || related.VendorId != vendorId)
+                return CatalogResult.Failure<int[]>("relatedProductIds", "A related product does not exist or cannot be used here.");
+        }
+
+        await productStore.SetRelatedAsync(productId, ids, cancellationToken);
+        await auditLog.WriteAsync("product.related_changed", actorCustomerId, entityType: "Product", entityId: productId,
+            details: new { productId, vendorId, count = ids.Length }, cancellationToken: cancellationToken);
+        return CatalogResult.Success(ids);
+    }
+
+    public async Task<CatalogResult<Product>> CopyForVendorAsync(int vendorId, int productId, int actorCustomerId, CancellationToken cancellationToken)
+    {
+        var (source, failure) = await LoadOwnedForWriteAsync(vendorId, productId, cancellationToken);
+        if (failure is not null) return failure;
+
+        var now = clock.UtcNow;
+        var name = "Copy of " + source!.Name;
+        var copy = new Product
+        {
+            Name = name.Length > MaxNameLength ? name[..MaxNameLength] : name,
+            ShortDescription = source.ShortDescription,
+            FullDescription = source.FullDescription,
+            Price = source.Price,
+            OldPrice = source.OldPrice,
+            StockQuantity = source.StockQuantity,
+            Status = ProductStatus.Draft,
+            VendorId = vendorId,
+            // The SKU is left empty on purpose: it must stay unique inside the shop.
+            Gtin = source.Gtin,
+            ManufacturerPartNumber = source.ManufacturerPartNumber,
+            CreatedOnUtc = now,
+            UpdatedOnUtc = now
+        };
+        var selection = new TaxonomySelection(
+            (await productStore.GetCategoryIdsAsync(productId, cancellationToken)).ToArray(),
+            (await productStore.GetManufacturerIdsAsync(productId, cancellationToken)).ToArray());
+        await InsertWithMappingsAsync(copy, selection, cancellationToken);
+
+        await auditLog.WriteAsync("product.copied", actorCustomerId, entityType: "Product", entityId: copy.Id,
+            details: new { productId = copy.Id, sourceProductId = productId, vendorId }, cancellationToken: cancellationToken);
+        return CatalogResult.Success(copy);
+    }
+
+    public async Task<IReadOnlyList<Product>> GetVisibleRelatedAsync(int productId, CancellationToken cancellationToken)
+    {
+        var now = clock.UtcNow;
+        var visible = new List<Product>();
+        foreach (var id in await productStore.GetRelatedIdsAsync(productId, cancellationToken))
+        {
+            var related = await productStore.GetAsync(id, cancellationToken);
+            if (related is { Status: ProductStatus.Live, VendorActive: true } && related.IsAvailableAt(now)) visible.Add(related);
+        }
+        return visible;
     }
 
     public Task<IReadOnlyDictionary<int, int>> GetMainPictureIdsAsync(IReadOnlyCollection<int> productIds, CancellationToken cancellationToken) =>
@@ -468,9 +559,23 @@ public sealed partial class ProductService(
     }
 
     private async Task<(Dictionary<string, string[]> Errors, TaxonomySelection? Selection)> ValidateSellerAsync(
-        SaveVendorProductCommand command, CancellationToken cancellationToken)
+        int vendorId, int productId, SaveVendorProductCommand command, CancellationToken cancellationToken)
     {
-        var errors = Validate(command.Name, command.Price, command.OldPrice, command.StockQuantity);
+        var errors = Validate(command.Name, command.Price, command.OldPrice, command.StockQuantity, command.FullDescription);
+
+        var sku = NullIfBlank(command.Sku);
+        if (sku is { Length: > 100 }) errors["sku"] = ["SKU cannot exceed 100 characters."];
+        else if (sku is not null && await productStore.IsSkuTakenAsync(vendorId, sku, productId, cancellationToken))
+            errors["sku"] = ["Another product of your shop already uses this SKU."];
+
+        var gtin = NullIfBlank(command.Gtin);
+        if (gtin is not null && (!gtin.All(char.IsAsciiDigit) || gtin.Length is not (8 or 12 or 13 or 14)))
+            errors["gtin"] = ["GTIN must be 8, 12, 13 or 14 digits."];
+        if (NullIfBlank(command.ManufacturerPartNumber) is { Length: > 100 })
+            errors["manufacturerPartNumber"] = ["Manufacturer part number cannot exceed 100 characters."];
+        if (command.AvailableStartUtc is { } start && command.AvailableEndUtc is { } end && end <= start)
+            errors["availableEndUtc"] = ["The end of the sale window must be after its start."];
+
         if (command.Price <= 0) errors["price"] = ["Price must be greater than 0."];
         if (command.OldPrice != 0 && command.OldPrice <= command.Price)
             errors["oldPrice"] = ["Old price must be greater than the price, or 0 for none."];
@@ -486,7 +591,7 @@ public sealed partial class ProductService(
         auditLog.WriteAsync(eventName, actorCustomerId, entityType: "Product", entityId: product.Id,
             details: new { productId = product.Id, vendorId = product.VendorId }, cancellationToken: cancellationToken);
 
-    private static Dictionary<string, string[]> Validate(string? name, decimal price, decimal oldPrice, int stockQuantity)
+    private static Dictionary<string, string[]> Validate(string? name, decimal price, decimal oldPrice, int stockQuantity, string? fullDescription = null)
     {
         var errors = new Dictionary<string, string[]>();
         if (string.IsNullOrWhiteSpace(name)) errors["name"] = ["Product name is required."];
@@ -494,8 +599,17 @@ public sealed partial class ProductService(
         if (price < 0) errors["price"] = ["Price cannot be negative."];
         if (oldPrice < 0) errors["oldPrice"] = ["Old price cannot be negative."];
         if (stockQuantity < 0) errors["stockQuantity"] = ["Stock quantity cannot be negative."];
+        if (fullDescription is { Length: > HtmlContent.MaxLength }) errors["fullDescription"] = [$"Description cannot exceed {HtmlContent.MaxLength} characters."];
         return errors;
     }
+
+    /// <summary>The window is compared with UTC clocks, so a local time is converted and an unspecified one is taken as UTC.</summary>
+    private static DateTime? AsUtc(DateTime? value) => value is null ? null : value.Value.Kind switch
+    {
+        DateTimeKind.Local => value.Value.ToUniversalTime(),
+        DateTimeKind.Unspecified => DateTime.SpecifyKind(value.Value, DateTimeKind.Utc),
+        _ => value.Value
+    };
 
     private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

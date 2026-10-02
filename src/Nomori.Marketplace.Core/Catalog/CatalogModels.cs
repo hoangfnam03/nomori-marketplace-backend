@@ -80,7 +80,12 @@ public sealed record SaveVendorProductCommand(
     decimal OldPrice,
     int StockQuantity,
     int[] CategoryIds,
-    int[] ManufacturerIds);
+    int[] ManufacturerIds,
+    string? Sku = null,
+    string? Gtin = null,
+    string? ManufacturerPartNumber = null,
+    DateTime? AvailableStartUtc = null,
+    DateTime? AvailableEndUtc = null);
 
 public sealed record UpdateProductCommand(
     int Id,
