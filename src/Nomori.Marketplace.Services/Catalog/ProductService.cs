@@ -12,6 +12,7 @@ namespace Nomori.Marketplace.Services.Catalog;
 
 public sealed partial class ProductService(
     IProductStore productStore,
+    IInventoryStore inventoryStore,
     ICategoryStore categoryStore,
     IManufacturerStore manufacturerStore,
     IVendorStore vendorStore,
@@ -102,6 +103,7 @@ public sealed partial class ProductService(
             UpdatedOnUtc = now
         };
         await InsertWithMappingsAsync(product, selection.Value!, cancellationToken);
+        await RecordInitialStockAsync(product, actorCustomerId, cancellationToken);
         await AuditAsync("product.created", actorCustomerId, product, cancellationToken);
         return CatalogResult.Success(product);
     }
@@ -125,7 +127,16 @@ public sealed partial class ProductService(
         existing.FullDescription = HtmlContent.Sanitize(command.FullDescription);
         existing.Price = command.Price;
         existing.OldPrice = command.OldPrice;
-        existing.StockQuantity = command.StockQuantity;
+        // Stock only changes through the ledger. With variants the stock belongs to the combinations and the field is ignored.
+        if (command.StockQuantity != existing.StockQuantity && !await productStore.HasVariantsAsync(existing.Id, cancellationToken))
+        {
+            var change = await inventoryStore.AdjustAsync(
+                new StockAdjustment(existing.Id, null, command.StockQuantity - existing.StockQuantity, StockReasons.AdminEdit, null, null, actorCustomerId),
+                clock.UtcNow, cancellationToken);
+            if (!change.Succeeded)
+                return CatalogResult.Failure<Product>("stockQuantity", "The stock cannot go below the quantity that is reserved or below zero.");
+            existing.StockQuantity = change.OnHand;
+        }
         ApplyPublishedFlag(existing, command.Published);
         existing.ShowOnHomepage = command.ShowOnHomepage;
         existing.DisplayOrder = command.DisplayOrder;
@@ -214,6 +225,7 @@ public sealed partial class ProductService(
             UpdatedOnUtc = now
         };
         await InsertWithMappingsAsync(product, selection!, cancellationToken);
+        await RecordInitialStockAsync(product, actorCustomerId, cancellationToken);
         await AuditAsync("product.created", actorCustomerId, product, cancellationToken);
         return CatalogResult.Success(product);
     }
@@ -239,8 +251,7 @@ public sealed partial class ProductService(
         existing.FullDescription = HtmlContent.Sanitize(command.FullDescription);
         existing.Price = command.Price;
         existing.OldPrice = command.OldPrice;
-        // With variants the stock is the sum of the combinations and only changes through the variants call.
-        if (!await productStore.HasVariantsAsync(existing.Id, cancellationToken)) existing.StockQuantity = command.StockQuantity;
+        // The stock is not part of a seller save: it changes through stock adjustments (or the variants call), which keep the ledger.
         existing.Sku = NullIfBlank(command.Sku);
         existing.Gtin = NullIfBlank(command.Gtin);
         existing.ManufacturerPartNumber = NullIfBlank(command.ManufacturerPartNumber);
@@ -425,6 +436,7 @@ public sealed partial class ProductService(
             (await productStore.GetCategoryIdsAsync(productId, cancellationToken)).ToArray(),
             (await productStore.GetManufacturerIdsAsync(productId, cancellationToken)).ToArray());
         await InsertWithMappingsAsync(copy, selection, cancellationToken);
+        await RecordInitialStockAsync(copy, actorCustomerId, cancellationToken);
 
         await auditLog.WriteAsync("product.copied", actorCustomerId, entityType: "Product", entityId: copy.Id,
             details: new { productId = copy.Id, sourceProductId = productId, vendorId }, cancellationToken: cancellationToken);
@@ -555,6 +567,16 @@ public sealed partial class ProductService(
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Failed to email shop members about product {ProductId}.")]
     private partial void LogNotificationFailed(Exception exception, int productId);
+
+    /// <summary>A new product starts with its stock; the ledger needs the first row so its history adds up.</summary>
+    private Task RecordInitialStockAsync(Product product, int actorCustomerId, CancellationToken cancellationToken) =>
+        product.StockQuantity == 0
+            ? Task.CompletedTask
+            : inventoryStore.RecordMovementAsync(new StockMovement
+            {
+                ProductId = product.Id, Delta = product.StockQuantity, QuantityAfter = product.StockQuantity,
+                Reason = StockReasons.Initial, ActorCustomerId = actorCustomerId, CreatedOnUtc = clock.UtcNow
+            }, cancellationToken);
 
     private async Task InsertWithMappingsAsync(Product product, TaxonomySelection selection, CancellationToken cancellationToken)
     {

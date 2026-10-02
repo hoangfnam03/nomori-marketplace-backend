@@ -18,6 +18,15 @@ public sealed class Product
     public decimal Price { get; set; }
     public decimal OldPrice { get; set; }
     public int StockQuantity { get; set; }
+
+    /// <summary>False for products with no stock limit (for example digital goods): always available, nothing is reserved.</summary>
+    public bool TrackInventory { get; set; } = true;
+
+    public int LowStockThreshold { get; set; } = InventoryLimits.DefaultThreshold;
+
+    /// <summary>Tracked and at or below the threshold.</summary>
+    public bool IsLowStock => StockRules.IsLow(TrackInventory, StockQuantity, LowStockThreshold);
+
     public ProductStatus Status { get; set; }
 
     /// <summary>Stock keeping unit. Unique inside one shop among products that are not deleted.</summary>

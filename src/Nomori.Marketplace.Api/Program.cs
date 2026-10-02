@@ -149,6 +149,7 @@ builder.Services.AddScoped<IProductService, ProductService>();
 builder.Services.AddScoped<IProductAttributeService, ProductAttributeService>();
 builder.Services.AddScoped<ISpecificationAttributeService, SpecificationAttributeService>();
 builder.Services.AddScoped<IVendorProductDetailsService, VendorProductDetailsService>();
+builder.Services.AddScoped<IInventoryService, InventoryService>();
 builder.Services.AddScoped<IVendorService, VendorService>();
 builder.Services.AddScoped<IVendorApplicationService, VendorApplicationService>();
 builder.Services.AddScoped<IVendorMemberService, VendorMemberService>();

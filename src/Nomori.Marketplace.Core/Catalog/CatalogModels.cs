@@ -16,6 +16,8 @@ public sealed record ProductQuery(
     ProductStatus? Status = null,
     /// <summary>When true, only products with a pending review request.</summary>
     bool? ReviewRequested = null,
+    /// <summary>When true, only tracked products at or below their low-stock threshold.</summary>
+    bool? LowStock = null,
     /// <summary>Hide products whose shop is inactive or deleted. Set for every public query.</summary>
     bool OnlyActiveShops = false);
 

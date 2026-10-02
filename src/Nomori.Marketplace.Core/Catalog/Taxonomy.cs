@@ -9,6 +9,9 @@ public static class CatalogErrors
     public const string ProductNotHidden = "product.not_hidden";
     public const string ProductAlreadyHidden = "product.already_hidden";
     public const string ProductInvalidTransition = "product.invalid_transition";
+    public const string InsufficientStock = "inventory.insufficient_stock";
+    public const string ReservationExpired = "inventory.reservation_expired";
+    public const string ActiveReservations = "inventory.active_reservations";
     public const string CategoryHasChildren = "category.has_children";
     public const string CategoryInUse = "category.in_use";
     public const string ManufacturerInUse = "manufacturer.in_use";
