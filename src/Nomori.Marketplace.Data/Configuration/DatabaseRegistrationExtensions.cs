@@ -40,6 +40,7 @@ public static class DatabaseRegistrationExtensions
         services.AddScoped<IProductFacetStore, SqlProductFacetStore>();
         services.AddScoped<ICurrencyStore, SqlCurrencyStore>();
         services.AddScoped<ICartStore, SqlCartStore>();
+        services.AddScoped<IDirectoryStore, SqlDirectoryStore>();
         services.AddScoped<ISpecificationAttributeStore, SqlSpecificationAttributeStore>();
         services.AddScoped<IVendorStore, SqlVendorStore>();
         services.AddScoped<IVendorApplicationStore, SqlVendorApplicationStore>();

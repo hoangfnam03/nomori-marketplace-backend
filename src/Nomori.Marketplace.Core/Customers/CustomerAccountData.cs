@@ -11,6 +11,10 @@ public sealed class CustomerAddress
     public string? Address2 { get; set; }
     public string City { get; set; } = string.Empty;
     public string? StateProvince { get; set; }
+
+    /// <summary>The state chosen from the directory, when the country has states. <see cref="StateProvince"/> keeps its name at the time of saving.</summary>
+    public int? StateProvinceId { get; set; }
+
     public string CountryCode { get; set; } = string.Empty;
     public string? ZipPostalCode { get; set; }
     public string PhoneNumber { get; set; } = string.Empty;

@@ -8,6 +8,10 @@ public static class DirectoryErrors
     public const string CurrencyPrimaryLocked = "currency.primary_locked";
     public const string CurrencyPrimaryRequired = "currency.primary_required";
     public const string CurrencyCodeExists = "currency.code_exists";
+    public const string CountryCodeExists = "country.code_exists";
+    public const string CountryInUse = "country.in_use";
+    public const string StateCodeExists = "state.code_exists";
+    public const string StateInUse = "state.in_use";
 }
 
 public static class CurrencyLimits

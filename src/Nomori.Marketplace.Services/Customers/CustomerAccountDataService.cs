@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Options;
 using Nomori.Marketplace.Core.Customers;
+using Nomori.Marketplace.Core.Directory;
 using Nomori.Marketplace.Core.Email;
 using Nomori.Marketplace.Core.Security;
 using Nomori.Marketplace.Core.Time;
@@ -9,7 +10,7 @@ using Nomori.Marketplace.Services.Authentication;
 
 namespace Nomori.Marketplace.Services.Customers;
 
-public sealed class CustomerAccountDataService(ICustomerAccountDataStore store, ICustomerIdentityStore identityStore, IPasswordHasher passwordHasher, IEmailSender emailSender, IAuditLogService auditLog, IClock clock, IOptions<SecurityOptions> security, IOptions<EmailOptions> email) : ICustomerAccountDataService
+public sealed class CustomerAccountDataService(ICustomerAccountDataStore store, IDirectoryService directory, ICustomerIdentityStore identityStore, IPasswordHasher passwordHasher, IEmailSender emailSender, IAuditLogService auditLog, IClock clock, IOptions<SecurityOptions> security, IOptions<EmailOptions> email) : ICustomerAccountDataService
 {
     public Task<IReadOnlyList<CustomerAddress>> GetAddressesAsync(int customerId, CancellationToken cancellationToken) => store.GetAddressesAsync(customerId, cancellationToken);
     public async Task<(CustomerAddress? Address, IReadOnlyDictionary<string, string[]> Errors)> SaveAddressAsync(CustomerAddress address, CancellationToken cancellationToken)
@@ -20,9 +21,13 @@ public sealed class CustomerAccountDataService(ICustomerAccountDataStore store, 
         if (address.LastName.Length is < 1 or > 100) errors["lastName"] = ["Last name is required and must be at most 100 characters."];
         if (address.Address1.Length is < 1 or > 200) errors["address1"] = ["Address line 1 is required and must be at most 200 characters."];
         if (address.City.Length is < 1 or > 100) errors["city"] = ["City is required and must be at most 100 characters."];
-        if (address.CountryCode.Length != 2 || !address.CountryCode.All(char.IsLetter)) errors["countryCode"] = ["Country must be a two-letter ISO code."];
+        // Country, state and postal code follow the directory (F07-C). Addresses saved earlier are only checked again when edited.
+        var location = await directory.ResolveAddressAsync(address.CountryCode, address.StateProvinceId, address.StateProvince, address.ZipPostalCode, AddressUse.Any, cancellationToken);
+        foreach (var error in location.Errors) errors[error.Key] = error.Value;
         if (address.PhoneNumber.Length is < 1 or > 32 || address.PhoneNumber.Any(c => !char.IsDigit(c) && !"+ -()".Contains(c))) errors["phoneNumber"] = ["Phone number is required and contains unsupported characters."];
         if (errors.Count > 0) return (null, errors);
+        var resolved = location.Value!;
+        (address.CountryCode, address.StateProvinceId, address.StateProvince, address.ZipPostalCode) = (resolved.CountryCode, resolved.StateProvinceId, resolved.StateName, resolved.PostalCode);
         var isNew = address.Id == 0;
         address.Id = await store.SaveAddressAsync(address, cancellationToken);
         await auditLog.WriteAsync(isNew ? "customer.address_created" : "customer.address_updated", address.CustomerId, entityType: "CustomerAddress", entityId: address.Id, cancellationToken: cancellationToken);

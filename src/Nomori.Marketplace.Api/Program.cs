@@ -156,6 +156,7 @@ builder.Services.AddScoped<IVendorProductDetailsService, VendorProductDetailsSer
 builder.Services.AddScoped<IInventoryService, InventoryService>();
 builder.Services.AddScoped<ICatalogSearchService, CatalogSearchService>();
 builder.Services.AddScoped<ICurrencyService, CurrencyService>();
+builder.Services.AddScoped<IDirectoryService, DirectoryService>();
 builder.Services.AddScoped<IPriceCalculationService, PriceCalculationService>();
 builder.Services.AddScoped<ICartService, CartService>();
 builder.Services.AddScoped<IProductPricingService, ProductPricingService>();
