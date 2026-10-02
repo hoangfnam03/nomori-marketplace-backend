@@ -10,6 +10,7 @@ namespace Nomori.Marketplace.Api.Modules.Catalog;
 public sealed class CatalogController(
     ICategoryService categoryService,
     IProductService productService,
+    IInventoryService inventoryService,
     IManufacturerService manufacturerService) : ControllerBase
 {
     private const int MaxPageSize = 100;
@@ -63,6 +64,7 @@ public sealed class CatalogController(
         // The publication window is part of "public", same as in the list query.
         if (detail is null || !detail.Product.Published || !detail.Product.VendorActive || !detail.Product.IsAvailableAt(DateTime.UtcNow)) return NotFound();
 
+        var availability = await inventoryService.GetAvailabilityAsync(id, cancellationToken);
         var related = await productService.GetVisibleRelatedAsync(id, cancellationToken);
         var relatedPictures = await productService.GetMainPictureIdsAsync(related.Select(p => p.Id).ToList(), cancellationToken);
         return Ok(new ProductDetailResponse(
@@ -71,7 +73,9 @@ public sealed class CatalogController(
             detail.Categories.Select(ToCategoryResponse).ToList(),
             detail.Manufacturers.Select(ToManufacturerResponse).ToList(),
             detail.PictureIds,
-            related.Select(p => ToProductResponse(p, relatedPictures.GetValueOrDefault(p.Id))).ToList()));
+            related.Select(p => ToProductResponse(p, relatedPictures.GetValueOrDefault(p.Id))).ToList(),
+            availability?.TrackInventory ?? true,
+            availability?.Product ?? detail.Product.StockQuantity));
     }
 
     [HttpGet("manufacturers")]
@@ -143,7 +147,10 @@ public sealed record ProductDetailResponse(
     IReadOnlyList<CategoryResponse> Categories,
     IReadOnlyList<ManufacturerResponse> Manufacturers,
     IReadOnlyList<int> PictureIds,
-    IReadOnlyList<ProductResponse> RelatedProducts);
+    IReadOnlyList<ProductResponse> RelatedProducts,
+    bool TrackInventory,
+    /// <summary>What a customer can still buy: on hand minus active reservations. Meaningless when <see cref="TrackInventory"/> is false.</summary>
+    int AvailableQuantity);
 
 public sealed record ManufacturerResponse(
     int Id, string Name, string? Description,

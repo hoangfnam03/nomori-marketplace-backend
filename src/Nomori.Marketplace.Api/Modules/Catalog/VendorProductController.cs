@@ -25,6 +25,7 @@ public sealed class VendorProductController(
         [FromQuery] int pageSize = 20,
         [FromQuery] string? search = null,
         [FromQuery] string? status = null,
+        [FromQuery] bool? lowStock = null,
         CancellationToken cancellationToken = default)
     {
         if (await RequireMemberAsync(vendorId, cancellationToken) is null) return NotFound();
@@ -40,7 +41,7 @@ public sealed class VendorProductController(
             parsedStatus = value;
         }
 
-        var query = new ProductQuery(Math.Max(page, 1), Math.Clamp(pageSize, 1, MaxPageSize), Search: search, Status: parsedStatus);
+        var query = new ProductQuery(Math.Max(page, 1), Math.Clamp(pageSize, 1, MaxPageSize), Search: search, Status: parsedStatus, LowStock: lowStock);
         var result = await productService.GetListForVendorAsync(vendorId, query, cancellationToken);
         var mainPictures = await productService.GetMainPictureIdsAsync(result.Items.Select(p => p.Id).ToList(), cancellationToken);
         return Ok(new CatalogPagedResponse<VendorProductResponse>(
@@ -195,6 +196,7 @@ public sealed record VendorProductResponse(
     string Status, string? HiddenReason, DateTime? ReviewRequestedOnUtc,
     int[]? CategoryIds, int[]? ManufacturerIds, DateTime CreatedOnUtc, DateTime UpdatedOnUtc,
     int[]? PictureIds, int MainPictureId,
+    bool TrackInventory, int LowStockThreshold, bool IsLowStock,
     string? Sku, string? Gtin, string? ManufacturerPartNumber, DateTime? AvailableStartUtc, DateTime? AvailableEndUtc,
     int[]? RelatedProductIds)
 {
@@ -205,6 +207,7 @@ public sealed record VendorProductResponse(
         p.Id, p.VendorId, p.Name, p.ShortDescription, p.FullDescription, p.Price, p.OldPrice, p.StockQuantity, p.Published,
         ProductStatusNames.ToName(p.Status), p.Status == ProductStatus.HiddenByAdmin ? p.HiddenReason : null, p.ReviewRequestedOnUtc,
         categoryIds, manufacturerIds, p.CreatedOnUtc, p.UpdatedOnUtc, pictureIds, mainPictureId,
+        p.TrackInventory, p.LowStockThreshold, p.IsLowStock,
         p.Sku, p.Gtin, p.ManufacturerPartNumber, AsUtc(p.AvailableStartUtc), AsUtc(p.AvailableEndUtc), relatedProductIds);
 
     // Values read from SQL have no kind; mark them UTC so JSON carries a trailing Z.

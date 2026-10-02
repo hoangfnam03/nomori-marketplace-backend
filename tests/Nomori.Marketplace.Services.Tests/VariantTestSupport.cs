@@ -17,6 +17,9 @@ internal sealed class FakeAttributeStore : IProductAttributeStore
     private readonly List<ProductAttributeValue> values = [];
     private readonly List<ProductAttributeCombination> combinations = [];
 
+    public List<ProductAttributeCombination> Combinations => combinations;
+    public int? LastActor { get; private set; }
+
     public Task<IReadOnlyList<ProductAttributeSpec>> GetAllAttributesAsync(CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<ProductAttributeSpec>>(Attributes);
 
@@ -38,9 +41,10 @@ internal sealed class FakeAttributeStore : IProductAttributeStore
     public Task<bool> IsCombinationSkuTakenAsync(int vendorId, string sku, int excludeProductId, CancellationToken ct) =>
         Task.FromResult(TakenSkus.Contains(sku));
 
-    public Task ReplaceVariantsAsync(int productId, SaveVariantsCommand command, CancellationToken ct)
+    public Task ReplaceVariantsAsync(int productId, SaveVariantsCommand command, int? actorCustomerId, CancellationToken ct)
     {
         Saved[productId] = command;
+        LastActor = actorCustomerId;
         foreach (var mapping in mappings.Where(m => m.ProductId == productId).ToList())
         {
             values.RemoveAll(v => v.ProductAttributeMappingId == mapping.Id);

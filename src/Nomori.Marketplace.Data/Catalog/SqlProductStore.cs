@@ -9,7 +9,7 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
 {
     // Every read joins the owning shop so callers get its name and status without a second query.
     private const string SelectColumns =
-        "p.Id, p.Name, p.ShortDescription, p.FullDescription, p.Price, p.OldPrice, p.StockQuantity, p.Status, p.Deleted, p.VendorId, p.ShowOnHomepage, p.DisplayOrder, p.CreatedOnUtc, p.UpdatedOnUtc, v.Name, v.Active, p.StatusBeforeHidden, p.HiddenReason, p.HiddenOnUtc, p.HiddenByCustomerId, p.ReviewRequestedOnUtc, p.Sku, p.Gtin, p.ManufacturerPartNumber, p.AvailableStartUtc, p.AvailableEndUtc";
+        "p.Id, p.Name, p.ShortDescription, p.FullDescription, p.Price, p.OldPrice, p.StockQuantity, p.Status, p.Deleted, p.VendorId, p.ShowOnHomepage, p.DisplayOrder, p.CreatedOnUtc, p.UpdatedOnUtc, v.Name, v.Active, p.StatusBeforeHidden, p.HiddenReason, p.HiddenOnUtc, p.HiddenByCustomerId, p.ReviewRequestedOnUtc, p.Sku, p.Gtin, p.ManufacturerPartNumber, p.AvailableStartUtc, p.AvailableEndUtc, p.TrackInventory, p.LowStockThreshold";
 
     private const string FromClause = "FROM Product p INNER JOIN Vendor v ON v.Id = p.VendorId";
 
@@ -91,12 +91,13 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
         cmd.CommandText = """
             UPDATE Product SET
                 Name = @Name, ShortDescription = @ShortDescription, FullDescription = @FullDescription,
-                Price = @Price, OldPrice = @OldPrice, StockQuantity = @StockQuantity,
+                Price = @Price, OldPrice = @OldPrice,
                 ShowOnHomepage = @ShowOnHomepage,
                 DisplayOrder = @DisplayOrder, UpdatedOnUtc = @UpdatedOnUtc
             WHERE Id = @Id AND Deleted = 0
             """;
-        // The owner, the lifecycle fields and the content fields are deliberately not updated here: see SetVendorAsync, UpdateLifecycleAsync and UpdateContentAsync.
+        // The owner, the lifecycle fields, the content fields and the stock are deliberately not updated here: see SetVendorAsync, UpdateLifecycleAsync,
+        // UpdateContentAsync and the inventory store (stock only changes through the ledger).
         cmd.Parameters.AddWithValue("@Id", product.Id);
         AddWriteParams(cmd, product);
         await cmd.ExecuteNonQueryAsync(cancellationToken);
@@ -349,6 +350,7 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
         if (q.VendorId.HasValue) parts.Add("p.VendorId = @VendorId");
         if (q.Status.HasValue) parts.Add("p.Status = @Status");
         if (q.ReviewRequested == true) parts.Add("p.ReviewRequestedOnUtc IS NOT NULL");
+        if (q.LowStock == true) parts.Add("p.TrackInventory = 1 AND p.StockQuantity <= p.LowStockThreshold");
         // Products of deactivated or deleted shops are not shown to the public.
         if (q.OnlyActiveShops)
         {
@@ -434,6 +436,8 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
         Gtin = r.IsDBNull(22) ? null : r.GetString(22),
         ManufacturerPartNumber = r.IsDBNull(23) ? null : r.GetString(23),
         AvailableStartUtc = r.IsDBNull(24) ? null : r.GetDateTime(24),
-        AvailableEndUtc = r.IsDBNull(25) ? null : r.GetDateTime(25)
+        AvailableEndUtc = r.IsDBNull(25) ? null : r.GetDateTime(25),
+        TrackInventory = r.GetBoolean(26),
+        LowStockThreshold = r.GetInt32(27)
     };
 }

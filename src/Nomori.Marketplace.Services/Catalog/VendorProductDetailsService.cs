@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using Nomori.Marketplace.Core.Catalog;
 using Nomori.Marketplace.Core.Security;
+using Nomori.Marketplace.Core.Time;
 using Nomori.Marketplace.Core.Vendors;
 
 namespace Nomori.Marketplace.Services.Catalog;
@@ -11,7 +12,9 @@ public sealed partial class VendorProductDetailsService(
     IProductAttributeStore attributeStore,
     IProductAttributeService attributeService,
     ISpecificationAttributeStore specStore,
-    IAuditLogService auditLog) : IVendorProductDetailsService
+    IInventoryStore inventoryStore,
+    IAuditLogService auditLog,
+    IClock clock) : IVendorProductDetailsService
 {
     [GeneratedRegex("^#[0-9A-Fa-f]{6}$")]
     private static partial Regex ColorPattern();
@@ -110,10 +113,14 @@ public sealed partial class VendorProductDetailsService(
         var (product, failure) = await LoadAsync<ProductAttributeDetail>(vendorId, productId, forWrite: true, cancellationToken);
         if (failure is not null) return failure;
 
+        // Saving replaces the combinations, so a hold on one of them would be lost.
+        if (await inventoryStore.HasActiveReservationsAsync(productId, clock.UtcNow, cancellationToken))
+            return CatalogResult.Error<ProductAttributeDetail>(CatalogErrors.ActiveReservations);
+
         var (errors, normalized) = await ValidateVariantsAsync(vendorId, product!, command, cancellationToken);
         if (errors.Count > 0) return CatalogResult.Failure<ProductAttributeDetail>(errors);
 
-        await attributeStore.ReplaceVariantsAsync(productId, normalized!, cancellationToken);
+        await attributeStore.ReplaceVariantsAsync(productId, normalized!, actorCustomerId, cancellationToken);
         await auditLog.WriteAsync("product.variants_changed", actorCustomerId, entityType: "Product", entityId: productId,
             details: new { productId, vendorId, attributes = normalized!.Attributes.Count, combinations = normalized.Combinations.Count },
             cancellationToken: cancellationToken);

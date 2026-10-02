@@ -335,7 +335,7 @@ public sealed class SqlProductAttributeStore(IOptions<DatabaseOptions> options) 
         return await cmd.ExecuteScalarAsync(ct) is not null;
     }
 
-    public async Task ReplaceVariantsAsync(int productId, SaveVariantsCommand command, CancellationToken ct)
+    public async Task ReplaceVariantsAsync(int productId, SaveVariantsCommand command, int? actorCustomerId, CancellationToken ct)
     {
         await using var connection = await OpenAsync(ct);
         await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(ct);
@@ -348,6 +348,8 @@ public sealed class SqlProductAttributeStore(IOptions<DatabaseOptions> options) 
             foreach (var (name, value) in parameters) cmd.Parameters.AddWithValue(name, value ?? DBNull.Value);
             return (int)(await cmd.ExecuteScalarAsync(ct))!;
         }
+
+        var stockBefore = await InsertAsync("SELECT StockQuantity FROM Product WITH (UPDLOCK) WHERE Id = @P", ("@P", productId));
 
         // Values go with their mapping (cascade). Combinations are removed explicitly.
         await InsertAsync("DELETE FROM ProductAttributeCombination WHERE ProductId = @P; DELETE FROM ProductAttributeMapping WHERE ProductId = @P; SELECT 0",
@@ -396,8 +398,19 @@ public sealed class SqlProductAttributeStore(IOptions<DatabaseOptions> options) 
 
         if (command.Combinations.Count > 0)
         {
+            var stockAfter = command.Combinations.Sum(c => c.StockQuantity);
             await InsertAsync("UPDATE Product SET StockQuantity = @Stock, UpdatedOnUtc = SYSUTCDATETIME() WHERE Id = @P; SELECT 0",
-                ("@Stock", command.Combinations.Sum(c => c.StockQuantity)), ("@P", productId));
+                ("@Stock", stockAfter), ("@P", productId));
+
+            // The ledger records the change of the product total; the combinations themselves are new rows.
+            if (stockAfter != stockBefore)
+            {
+                await InsertAsync("""
+                    INSERT INTO StockMovement (ProductId, CombinationId, Delta, QuantityAfter, Reason, Reference, Note, ActorCustomerId, CreatedOnUtc)
+                    OUTPUT INSERTED.Id VALUES (@P, NULL, @Delta, @After, 'variants_saved', NULL, NULL, @Actor, SYSUTCDATETIME())
+                    """,
+                    ("@P", productId), ("@Delta", stockAfter - stockBefore), ("@After", stockAfter), ("@Actor", actorCustomerId));
+            }
         }
 
         await transaction.CommitAsync(ct);

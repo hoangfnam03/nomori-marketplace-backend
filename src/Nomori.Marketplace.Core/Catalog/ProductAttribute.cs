@@ -128,9 +128,9 @@ public interface IProductAttributeStore
 
     /// <summary>
     /// Replaces every mapping, value and combination of a product in one transaction and sets the product stock to the sum of the
-    /// combination stocks (left alone when there are no combinations). Inputs are already validated.
+    /// combination stocks (left alone when there are no combinations), with one ledger row for the change. Inputs are already validated.
     /// </summary>
-    Task ReplaceVariantsAsync(int productId, SaveVariantsCommand command, CancellationToken ct);
+    Task ReplaceVariantsAsync(int productId, SaveVariantsCommand command, int? actorCustomerId, CancellationToken ct);
 
     /// <summary>Whether a product SKU or a combination SKU of another product of the shop already uses the value, ignoring case.</summary>
     Task<bool> IsCombinationSkuTakenAsync(int vendorId, string sku, int excludeProductId, CancellationToken ct);

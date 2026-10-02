@@ -24,7 +24,7 @@ public sealed class ProductContentTests
         }
 
         public ProductService Create() => new(
-            Products, new UnusedCategoryStore(), new UnusedManufacturerStore(), Vendors, new NoMembers(), new FakeMediaStore(), new FakeTaxonomy(), Audit,
+            Products, new FakeInventoryStore(Products), new UnusedCategoryStore(), new UnusedManufacturerStore(), Vendors, new NoMembers(), new FakeMediaStore(), new FakeTaxonomy(), Audit,
             new RecordingEmailSender(), TestOptions.Email(false), NullLog<ProductService>.Instance, new TestClock());
     }
 

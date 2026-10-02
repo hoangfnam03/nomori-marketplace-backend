@@ -19,10 +19,12 @@ public sealed class ProductVariantsTests
         public FakeProductStore Products { get; } = new();
         public FakeAttributeStore Attributes { get; } = new();
         public FakeSpecificationStore Specs { get; } = new();
+        public FakeInventoryStore Inventory { get; }
         public RecordingAuditLog Audit { get; } = new();
 
         public Fixture()
         {
+            Inventory = new FakeInventoryStore(Products, Attributes);
             Vendors.Vendors.Add(new Vendor { Id = Shop, Name = "Shop", Active = true });
             Vendors.Vendors.Add(new Vendor { Id = OtherShop, Name = "Other", Active = true });
             foreach (var (id, name) in new[] { (Color, "Color"), (Size, "Size"), (3, "Material"), (4, "Style") })
@@ -32,10 +34,10 @@ public sealed class ProductVariantsTests
         }
 
         public VendorProductDetailsService Create() => new(
-            Products, Vendors, Attributes, new ProductAttributeService(Attributes), Specs, Audit);
+            Products, Vendors, Attributes, new ProductAttributeService(Attributes), Specs, Inventory, Audit, new TestClock());
 
         public ProductService CreateProducts() => new(
-            Products, new UnusedCategoryStore(), new UnusedManufacturerStore(), Vendors, new NoMembers(), new FakeMediaStore(), new FakeTaxonomy(), Audit,
+            Products, Inventory, new UnusedCategoryStore(), new UnusedManufacturerStore(), Vendors, new NoMembers(), new FakeMediaStore(), new FakeTaxonomy(), Audit,
             new RecordingEmailSender(), TestOptions.Email(false), NullLog<ProductService>.Instance, new TestClock());
 
         public async Task<int> DraftAsync(int vendorId = Shop, decimal price = 10)
@@ -219,22 +221,6 @@ public sealed class ProductVariantsTests
     }
 
     // ---- Stock rule and public visibility ----
-
-    [Fact]
-    public async Task SellerSaveKeepsTheStockWhileTheProductHasVariants()
-    {
-        var f = new Fixture();
-        var products = f.CreateProducts();
-        var id = await f.DraftAsync();
-        f.Products.ProductsWithVariants.Add(id);
-
-        var saved = await products.UpdateForVendorAsync(Shop, id, new SaveVendorProductCommand("Shirt", null, null, 10, 0, 999, [1], []), Seller, CancellationToken.None);
-        Assert.Equal(3, saved.Value!.StockQuantity);
-
-        f.Products.ProductsWithVariants.Clear();
-        saved = await products.UpdateForVendorAsync(Shop, id, new SaveVendorProductCommand("Shirt", null, null, 10, 0, 999, [1], []), Seller, CancellationToken.None);
-        Assert.Equal(999, saved.Value!.StockQuantity);
-    }
 
     [Fact]
     public async Task OnlyVisibleProductsArePublic()

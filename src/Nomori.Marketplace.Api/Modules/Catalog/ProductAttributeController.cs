@@ -11,7 +11,7 @@ namespace Nomori.Marketplace.Api.Modules.Catalog;
 [ApiController]
 [Route("api/v1/products/{productId:int}/attributes")]
 [AllowAnonymous]
-public sealed class ProductAttributePublicController(IProductAttributeService service, IProductService productService) : ControllerBase
+public sealed class ProductAttributePublicController(IProductAttributeService service, IProductService productService, IInventoryService inventoryService) : ControllerBase
 {
     [HttpGet]
     public async Task<IActionResult> GetAttributes(int productId, CancellationToken cancellationToken)
@@ -20,10 +20,12 @@ public sealed class ProductAttributePublicController(IProductAttributeService se
         if (await productService.GetPublicProductAsync(productId, cancellationToken) is null) return NotFound();
 
         var detail = await service.GetProductAttributeDetailAsync(productId, cancellationToken);
-        return Ok(ToPublicResponse(detail));
+        var availability = await inventoryService.GetAvailabilityAsync(productId, cancellationToken);
+        return Ok(ToPublicResponse(detail, availability));
     }
 
-    private static object ToPublicResponse(ProductAttributeDetail d) => new
+    // The stock shown is what can still be bought (on hand minus active reservations), not the stored quantity.
+    private static object ToPublicResponse(ProductAttributeDetail d, Availability? availability) => new
     {
         mappings = d.Mappings.Select(m => new
         {
@@ -47,7 +49,7 @@ public sealed class ProductAttributePublicController(IProductAttributeService se
         {
             c.Id,
             c.AttributesJson,
-            c.StockQuantity,
+            StockQuantity = availability?.Combinations.GetValueOrDefault(c.Id, c.StockQuantity) ?? c.StockQuantity,
             c.AllowOutOfStockOrders,
             c.Sku,
             c.OverriddenPrice
