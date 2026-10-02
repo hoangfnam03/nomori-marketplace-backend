@@ -330,6 +330,36 @@ public sealed class SqlSpecificationAttributeStore(IOptions<DatabaseOptions> opt
         }
     }
 
+    public async Task ReplaceProductOptionSpecsAsync(int productId, int[] optionIds, CancellationToken ct)
+    {
+        await using var conn = await OpenAsync(ct);
+        await using var transaction = (SqlTransaction)await conn.BeginTransactionAsync(ct);
+
+        await using (var deleteCmd = conn.CreateCommand())
+        {
+            deleteCmd.Transaction = transaction;
+            deleteCmd.CommandText = "DELETE FROM ProductSpecificationAttribute WHERE ProductId = @ProductId AND AttributeType = 0";
+            deleteCmd.Parameters.AddWithValue("@ProductId", productId);
+            await deleteCmd.ExecuteNonQueryAsync(ct);
+        }
+
+        for (var i = 0; i < optionIds.Length; i++)
+        {
+            await using var insertCmd = conn.CreateCommand();
+            insertCmd.Transaction = transaction;
+            insertCmd.CommandText = """
+                INSERT INTO ProductSpecificationAttribute (ProductId, AttributeType, SpecificationAttributeOptionId, CustomValue, AllowFiltering, ShowOnProductPage, DisplayOrder)
+                VALUES (@ProductId, 0, @OptionId, NULL, 1, 1, @DisplayOrder)
+                """;
+            insertCmd.Parameters.AddWithValue("@ProductId", productId);
+            insertCmd.Parameters.AddWithValue("@OptionId", optionIds[i]);
+            insertCmd.Parameters.AddWithValue("@DisplayOrder", i);
+            await insertCmd.ExecuteNonQueryAsync(ct);
+        }
+
+        await transaction.CommitAsync(ct);
+    }
+
     // ---- Helpers ----
 
     private async Task<SqlConnection> OpenAsync(CancellationToken ct)

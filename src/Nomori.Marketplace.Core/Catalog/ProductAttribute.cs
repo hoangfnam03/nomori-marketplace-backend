@@ -125,6 +125,15 @@ public interface IProductAttributeStore
     Task<int> InsertCombinationAsync(ProductAttributeCombination combo, CancellationToken ct);
     Task UpdateCombinationAsync(ProductAttributeCombination combo, CancellationToken ct);
     Task DeleteCombinationAsync(int id, CancellationToken ct);
+
+    /// <summary>
+    /// Replaces every mapping, value and combination of a product in one transaction and sets the product stock to the sum of the
+    /// combination stocks (left alone when there are no combinations). Inputs are already validated.
+    /// </summary>
+    Task ReplaceVariantsAsync(int productId, SaveVariantsCommand command, CancellationToken ct);
+
+    /// <summary>Whether a product SKU or a combination SKU of another product of the shop already uses the value, ignoring case.</summary>
+    Task<bool> IsCombinationSkuTakenAsync(int vendorId, string sku, int excludeProductId, CancellationToken ct);
 }
 
 // Service interface

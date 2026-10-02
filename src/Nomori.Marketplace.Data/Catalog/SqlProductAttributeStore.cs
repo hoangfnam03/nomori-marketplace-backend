@@ -318,6 +318,91 @@ public sealed class SqlProductAttributeStore(IOptions<DatabaseOptions> options) 
         DisplayOrder = r.GetInt32(6)
     };
 
+    public async Task<bool> IsCombinationSkuTakenAsync(int vendorId, string sku, int excludeProductId, CancellationToken ct)
+    {
+        await using var connection = await OpenAsync(ct);
+        await using var cmd = connection.CreateCommand();
+        // Any product SKU of the shop (the product's own included), and combination SKUs of the shop's other products.
+        cmd.CommandText = """
+            SELECT TOP 1 1 FROM Product WHERE VendorId = @VendorId AND Sku = @Sku AND Deleted = 0
+            UNION ALL
+            SELECT TOP 1 1 FROM ProductAttributeCombination c INNER JOIN Product p ON p.Id = c.ProductId
+            WHERE p.VendorId = @VendorId AND c.Sku = @Sku AND p.Deleted = 0 AND p.Id <> @ExcludeId
+            """;
+        cmd.Parameters.AddWithValue("@VendorId", vendorId);
+        cmd.Parameters.AddWithValue("@Sku", sku);
+        cmd.Parameters.AddWithValue("@ExcludeId", excludeProductId);
+        return await cmd.ExecuteScalarAsync(ct) is not null;
+    }
+
+    public async Task ReplaceVariantsAsync(int productId, SaveVariantsCommand command, CancellationToken ct)
+    {
+        await using var connection = await OpenAsync(ct);
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(ct);
+
+        async Task<int> InsertAsync(string sql, params (string Name, object? Value)[] parameters)
+        {
+            await using var cmd = connection.CreateCommand();
+            cmd.Transaction = transaction;
+            cmd.CommandText = sql;
+            foreach (var (name, value) in parameters) cmd.Parameters.AddWithValue(name, value ?? DBNull.Value);
+            return (int)(await cmd.ExecuteScalarAsync(ct))!;
+        }
+
+        // Values go with their mapping (cascade). Combinations are removed explicitly.
+        await InsertAsync("DELETE FROM ProductAttributeCombination WHERE ProductId = @P; DELETE FROM ProductAttributeMapping WHERE ProductId = @P; SELECT 0",
+            ("@P", productId));
+
+        var valueIds = new List<int[]>();
+        var mappingIds = new List<int>();
+        for (var a = 0; a < command.Attributes.Count; a++)
+        {
+            var attribute = command.Attributes[a];
+            var mappingId = await InsertAsync("""
+                INSERT INTO ProductAttributeMapping (ProductId, ProductAttributeId, TextPrompt, IsRequired, ControlType, DisplayOrder)
+                OUTPUT INSERTED.Id VALUES (@P, @AttributeId, NULL, @Required, @ControlType, @Order)
+                """,
+                ("@P", productId), ("@AttributeId", attribute.ProductAttributeId), ("@Required", attribute.IsRequired),
+                ("@ControlType", (int)(attribute.Values.Any(v => v.ColorSquaresRgb is not null) ? AttributeControlType.ColorSquares : AttributeControlType.DropdownList)),
+                ("@Order", a));
+            mappingIds.Add(mappingId);
+
+            var ids = new int[attribute.Values.Count];
+            for (var v = 0; v < ids.Length; v++)
+            {
+                var value = attribute.Values[v];
+                ids[v] = await InsertAsync("""
+                    INSERT INTO ProductAttributeValue (ProductAttributeMappingId, Name, ColorSquaresRgb, PriceAdjustment, IsPreSelected, DisplayOrder)
+                    OUTPUT INSERTED.Id VALUES (@MappingId, @Name, @Color, @Adjustment, 0, @Order)
+                    """,
+                    ("@MappingId", mappingId), ("@Name", value.Name), ("@Color", value.ColorSquaresRgb), ("@Adjustment", value.PriceAdjustment), ("@Order", v));
+            }
+            valueIds.Add(ids);
+        }
+
+        foreach (var combination in command.Combinations)
+        {
+            // The key maps each mapping id to the chosen value id.
+            var key = new Dictionary<string, int>();
+            for (var a = 0; a < mappingIds.Count; a++) key[mappingIds[a].ToString(System.Globalization.CultureInfo.InvariantCulture)] = valueIds[a][combination.ValueIndexes[a]];
+
+            await InsertAsync("""
+                INSERT INTO ProductAttributeCombination (ProductId, AttributesJson, StockQuantity, AllowOutOfStockOrders, Sku, OverriddenPrice)
+                OUTPUT INSERTED.Id VALUES (@P, @Json, @Stock, 0, @Sku, @Price)
+                """,
+                ("@P", productId), ("@Json", System.Text.Json.JsonSerializer.Serialize(key)), ("@Stock", combination.StockQuantity),
+                ("@Sku", combination.Sku), ("@Price", combination.OverriddenPrice));
+        }
+
+        if (command.Combinations.Count > 0)
+        {
+            await InsertAsync("UPDATE Product SET StockQuantity = @Stock, UpdatedOnUtc = SYSUTCDATETIME() WHERE Id = @P; SELECT 0",
+                ("@Stock", command.Combinations.Sum(c => c.StockQuantity)), ("@P", productId));
+        }
+
+        await transaction.CommitAsync(ct);
+    }
+
     private static ProductAttributeCombination ReadCombination(SqlDataReader r) => new()
     {
         Id = r.GetInt32(0),

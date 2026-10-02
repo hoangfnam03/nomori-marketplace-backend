@@ -117,11 +117,26 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    public async Task<bool> HasVariantsAsync(int productId, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT TOP 1 1 FROM ProductAttributeCombination WHERE ProductId = @ProductId";
+        cmd.Parameters.AddWithValue("@ProductId", productId);
+        return await cmd.ExecuteScalarAsync(cancellationToken) is not null;
+    }
+
     public async Task<bool> IsSkuTakenAsync(int vendorId, string sku, int excludeProductId, CancellationToken cancellationToken)
     {
         await using var connection = await OpenAsync(cancellationToken);
         await using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT TOP 1 1 FROM Product WHERE VendorId = @VendorId AND Sku = @Sku AND Deleted = 0 AND Id <> @ExcludeId";
+        // A combination SKU of another product of the shop counts too.
+        cmd.CommandText = """
+            SELECT TOP 1 1 FROM Product WHERE VendorId = @VendorId AND Sku = @Sku AND Deleted = 0 AND Id <> @ExcludeId
+            UNION ALL
+            SELECT TOP 1 1 FROM ProductAttributeCombination c INNER JOIN Product p ON p.Id = c.ProductId
+            WHERE p.VendorId = @VendorId AND c.Sku = @Sku AND p.Deleted = 0 AND p.Id <> @ExcludeId
+            """;
         cmd.Parameters.AddWithValue("@VendorId", vendorId);
         cmd.Parameters.AddWithValue("@Sku", sku);
         cmd.Parameters.AddWithValue("@ExcludeId", excludeProductId);

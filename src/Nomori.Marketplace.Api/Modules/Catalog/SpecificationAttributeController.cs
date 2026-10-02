@@ -11,21 +11,25 @@ namespace Nomori.Marketplace.Api.Modules.Catalog;
 [ApiController]
 [Route("api/v1/products/{productId:int}/specs")]
 [AllowAnonymous]
-public sealed class ProductSpecPublicController(ISpecificationAttributeService service) : ControllerBase
+public sealed class ProductSpecPublicController(ISpecificationAttributeService service, IProductService productService) : ControllerBase
 {
     [HttpGet]
     public async Task<IActionResult> GetSpecs(int productId, CancellationToken cancellationToken) =>
-        Ok(await service.GetProductSpecDetailAsync(productId, cancellationToken));
+        await productService.GetPublicProductAsync(productId, cancellationToken) is null
+            ? NotFound()
+            : Ok(await service.GetProductSpecDetailAsync(productId, cancellationToken));
 }
 
 [ApiController]
 [Route("api/v1/products/{productId:int}/tags")]
 [AllowAnonymous]
-public sealed class ProductTagPublicController(ISpecificationAttributeService service) : ControllerBase
+public sealed class ProductTagPublicController(ISpecificationAttributeService service, IProductService productService) : ControllerBase
 {
     [HttpGet]
     public async Task<IActionResult> GetTags(int productId, CancellationToken cancellationToken) =>
-        Ok(await service.GetProductTagsAsync(productId, cancellationToken));
+        await productService.GetPublicProductAsync(productId, cancellationToken) is null
+            ? NotFound()
+            : Ok(await service.GetProductTagsAsync(productId, cancellationToken));
 }
 
 // ---- Admin: global spec attribute definitions ----
