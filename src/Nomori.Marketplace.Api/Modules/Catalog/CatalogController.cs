@@ -10,6 +10,7 @@ namespace Nomori.Marketplace.Api.Modules.Catalog;
 public sealed class CatalogController(
     ICategoryService categoryService,
     IProductService productService,
+    ICatalogSearchService searchService,
     IInventoryService inventoryService,
     IManufacturerService manufacturerService) : ControllerBase
 {
@@ -45,15 +46,31 @@ public sealed class CatalogController(
     [HttpGet("products")]
     public async Task<IActionResult> GetProducts([FromQuery] ProductListRequest request, CancellationToken cancellationToken)
     {
-        var query = new ProductQuery(
-            Math.Max(request.Page, 1), Math.Clamp(request.PageSize, 1, MaxPageSize),
-            request.CategoryId, request.ManufacturerId,
-            request.MinPrice, request.MaxPrice,
-            request.Search, request.Sort,
-            Published: true, VendorId: request.VendorId, OnlyActiveShops: true);
-        var result = await productService.GetListAsync(query, cancellationToken);
+        // Validation, category descendants and every public rule live in the search service.
+        var search = await searchService.SearchAsync(request.ToSearch(), cancellationToken);
+        if (!search.Succeeded) return this.ToFailure(search);
+
+        var result = search.Value!;
         var mainPictures = await productService.GetMainPictureIdsAsync(result.Items.Select(p => p.Id).ToList(), cancellationToken);
         return Ok(ToPagedResponse(result, p => ToProductResponse(p, mainPictures.GetValueOrDefault(p.Id))));
+    }
+
+    /// <summary>Counts for the filter panel, for the same query string as the list (paging and sort are ignored).</summary>
+    [HttpGet("products/facets")]
+    public async Task<IActionResult> GetFacets([FromQuery] ProductListRequest request, CancellationToken cancellationToken)
+    {
+        var result = await searchService.GetFacetsAsync(request.ToSearch(), cancellationToken);
+        return result.Succeeded ? Ok(result.Value) : this.ToFailure(result);
+    }
+
+    /// <summary>Up to 8 visible products for the text typed so far; nothing for fewer than 2 characters.</summary>
+    [HttpGet("products/suggest")]
+    public async Task<IActionResult> Suggest([FromQuery] string? q, CancellationToken cancellationToken)
+    {
+        var result = await searchService.SuggestAsync(q, cancellationToken);
+        var items = result.Value ?? [];
+        var pictures = await productService.GetMainPictureIdsAsync(items.Select(p => p.Id).ToList(), cancellationToken);
+        return Ok(items.Select(p => new ProductSuggestionResponse(p.Id, p.Name, p.Price, pictures.GetValueOrDefault(p.Id))));
     }
 
     [HttpGet("products/{id:int}")]
@@ -105,20 +122,37 @@ public sealed class CatalogController(
     private static CategoryTreeNodeResponse ToTreeNodeResponse(CategoryTreeNode node) =>
         new(node.Id, node.Name, node.ParentCategoryId, node.DisplayOrder, node.Children.Select(ToTreeNodeResponse).ToList());
 
+    // In stock on the list means: not tracked, or something on hand. The exact available quantity is on the detail.
     private static ProductResponse ToProductResponse(Product p, int mainPictureId) =>
-        new(p.Id, p.Name, p.ShortDescription, p.Price, p.OldPrice, p.StockQuantity, p.ShowOnHomepage, p.DisplayOrder, p.CreatedOnUtc, p.VendorId, p.VendorName, mainPictureId);
+        new(p.Id, p.Name, p.ShortDescription, p.Price, p.OldPrice, p.StockQuantity, p.ShowOnHomepage, p.DisplayOrder, p.CreatedOnUtc, p.VendorId, p.VendorName, mainPictureId,
+            !p.TrackInventory || p.StockQuantity > 0);
 
     private static ManufacturerResponse ToManufacturerResponse(Manufacturer m) =>
         new(m.Id, m.Name, m.Description, m.PictureId, m.DisplayOrder);
 }
 
+/// <summary>
+/// Query string of the public list. Repeat a key for several values, for example <c>manufacturerIds=1&amp;manufacturerIds=2</c>.
+/// Without a <c>sort</c> a search is ordered by relevance and everything else by the featured order.
+/// </summary>
 public sealed record ProductListRequest(
     int Page = 1, int PageSize = 20,
-    int? CategoryId = null, int? ManufacturerId = null,
+    int? CategoryId = null, int? ManufacturerId = null, int[]? ManufacturerIds = null,
     decimal? MinPrice = null, decimal? MaxPrice = null,
     string? Search = null,
-    ProductSortOrder Sort = ProductSortOrder.DisplayOrder,
-    int? VendorId = null);
+    ProductSortOrder? Sort = null,
+    int? VendorId = null,
+    bool InStock = false,
+    string[]? Tags = null,
+    int[]? SpecOptionIds = null)
+{
+    public CatalogSearchRequest ToSearch() => new(
+        Search, CategoryId,
+        ManufacturerId is { } single ? [.. (ManufacturerIds ?? []), single] : ManufacturerIds,
+        MinPrice, MaxPrice, InStock, Tags, SpecOptionIds, Sort, Page, PageSize, VendorId);
+}
+
+public sealed record ProductSuggestionResponse(int Id, string Name, decimal Price, int MainPictureId);
 
 public sealed record CatalogPagedResponse<T>(
     IReadOnlyList<T> Items,
@@ -140,7 +174,7 @@ public sealed record ProductResponse(
     int Id, string Name, string? ShortDescription,
     decimal Price, decimal OldPrice, int StockQuantity,
     bool ShowOnHomepage, int DisplayOrder, DateTime CreatedOnUtc,
-    int VendorId, string? VendorName, int MainPictureId);
+    int VendorId, string? VendorName, int MainPictureId, bool InStock);
 
 public sealed record ProductDetailResponse(
     ProductResponse Product, string? FullDescription,

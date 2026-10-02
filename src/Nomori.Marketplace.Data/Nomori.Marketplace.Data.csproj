@@ -11,6 +11,10 @@
     <ProjectReference Include="..\Nomori.Marketplace.Core\Nomori.Marketplace.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Nomori.Marketplace.Data.Tests" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>

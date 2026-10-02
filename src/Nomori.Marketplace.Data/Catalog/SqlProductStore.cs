@@ -26,17 +26,17 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
     public async Task<(IReadOnlyList<Product> Items, int TotalCount)> GetPagedAsync(ProductQuery query, CancellationToken cancellationToken)
     {
         await using var connection = await OpenAsync(cancellationToken);
-        var (where, sort) = BuildFilter(query);
+        var filter = ProductFilter.Build(query);
 
         await using var countCmd = connection.CreateCommand();
-        countCmd.CommandText = $"SELECT COUNT(*) {FromClause} WHERE {where}";
-        AddFilterParams(countCmd, query);
+        countCmd.CommandText = $"SELECT COUNT(*) {FromClause} WHERE {filter.Where}";
+        filter.Apply(countCmd);
         var totalCount = (int)(await countCmd.ExecuteScalarAsync(cancellationToken))!;
 
         await using var cmd = connection.CreateCommand();
         var offset = (query.Page - 1) * query.PageSize;
-        cmd.CommandText = $"SELECT {SelectColumns} {FromClause} WHERE {where} ORDER BY {sort} OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY";
-        AddFilterParams(cmd, query);
+        cmd.CommandText = $"SELECT {SelectColumns} {FromClause} WHERE {filter.Where} ORDER BY {filter.Sort} OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY";
+        filter.Apply(cmd);
         cmd.Parameters.AddWithValue("@Offset", offset);
         cmd.Parameters.AddWithValue("@PageSize", query.PageSize);
 
@@ -334,54 +334,6 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
         var connection = new SqlConnection(options.Value.ConnectionString);
         await connection.OpenAsync(cancellationToken);
         return connection;
-    }
-
-    private static (string Where, string Sort) BuildFilter(ProductQuery q)
-    {
-        var parts = new List<string> { "p.Deleted = 0" };
-        if (q.CategoryId.HasValue)
-            parts.Add("p.Id IN (SELECT ProductId FROM ProductCategory WHERE CategoryId = @CategoryId)");
-        if (q.ManufacturerId.HasValue)
-            parts.Add("p.Id IN (SELECT ProductId FROM ProductManufacturer WHERE ManufacturerId = @ManufacturerId)");
-        if (q.MinPrice.HasValue) parts.Add("p.Price >= @MinPrice");
-        if (q.MaxPrice.HasValue) parts.Add("p.Price <= @MaxPrice");
-        if (!string.IsNullOrWhiteSpace(q.Search)) parts.Add("(p.Name LIKE @Search OR p.ShortDescription LIKE @Search OR p.Sku LIKE @Search)");
-        if (q.Published.HasValue) parts.Add("p.Published = @Published");
-        if (q.VendorId.HasValue) parts.Add("p.VendorId = @VendorId");
-        if (q.Status.HasValue) parts.Add("p.Status = @Status");
-        if (q.ReviewRequested == true) parts.Add("p.ReviewRequestedOnUtc IS NOT NULL");
-        if (q.LowStock == true) parts.Add("p.TrackInventory = 1 AND p.StockQuantity <= p.LowStockThreshold");
-        // Products of deactivated or deleted shops are not shown to the public.
-        if (q.OnlyActiveShops)
-        {
-            parts.Add("v.Active = 1 AND v.Deleted = 0");
-            // The publication window applies to every public read.
-            parts.Add("(p.AvailableStartUtc IS NULL OR p.AvailableStartUtc <= SYSUTCDATETIME()) AND (p.AvailableEndUtc IS NULL OR p.AvailableEndUtc > SYSUTCDATETIME())");
-        }
-
-        var sort = q.Sort switch
-        {
-            ProductSortOrder.NameAsc => "p.Name ASC",
-            ProductSortOrder.NameDesc => "p.Name DESC",
-            ProductSortOrder.PriceAsc => "p.Price ASC",
-            ProductSortOrder.PriceDesc => "p.Price DESC",
-            ProductSortOrder.Newest => "p.CreatedOnUtc DESC",
-            _ => "p.DisplayOrder ASC, p.Name ASC"
-        };
-
-        return (string.Join(" AND ", parts), sort);
-    }
-
-    private static void AddFilterParams(SqlCommand cmd, ProductQuery q)
-    {
-        if (q.CategoryId.HasValue) cmd.Parameters.AddWithValue("@CategoryId", q.CategoryId.Value);
-        if (q.ManufacturerId.HasValue) cmd.Parameters.AddWithValue("@ManufacturerId", q.ManufacturerId.Value);
-        if (q.MinPrice.HasValue) cmd.Parameters.AddWithValue("@MinPrice", q.MinPrice.Value);
-        if (q.MaxPrice.HasValue) cmd.Parameters.AddWithValue("@MaxPrice", q.MaxPrice.Value);
-        if (!string.IsNullOrWhiteSpace(q.Search)) cmd.Parameters.AddWithValue("@Search", $"%{q.Search}%");
-        if (q.Published.HasValue) cmd.Parameters.AddWithValue("@Published", q.Published.Value);
-        if (q.VendorId.HasValue) cmd.Parameters.AddWithValue("@VendorId", q.VendorId.Value);
-        if (q.Status.HasValue) cmd.Parameters.AddWithValue("@Status", (int)q.Status.Value);
     }
 
     private static void AddContentParams(SqlCommand cmd, Product p)

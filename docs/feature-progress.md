@@ -2,7 +2,7 @@
 
 Tài liệu theo dõi (trace) tiến độ so với `nopCommerce/docs/nomori-complete-feature-map.md`. Cập nhật mỗi khi xong hoặc hoãn một slice.
 
-- **Cập nhật lần cuối:** 2026-10-08
+- **Cập nhật lần cuối:** 2026-10-09
 - **Quy ước:** mỗi slice có tài liệu thiết kế trong `docs/modules/` (mục 7 của feature map). Code chỉ sinh sau khi có tài liệu.
 - **Trạng thái:** `Xong` (backend + Angular), `Một phần` (còn slice con chưa làm), `Hoãn` (có quyết định), `Chưa làm`.
 - **Lưu ý về kiểm chứng:** tất cả slice đều có unit test cho service và migration. Các store SQL và luồng HTTP/Angular **chưa có test tự động**, cần test tay theo guide trong tài liệu từng module.
@@ -24,7 +24,7 @@ Tài liệu theo dõi (trace) tiến độ so với `nopCommerce/docs/nomori-com
 | F10 | Sản phẩm, quyền sở hữu | Một phần | `modules/f10a-product-ownership.md`, `modules/f10b-product-lifecycle.md`, `modules/f10c-product-content.md` | **F10-A xong, đã merge** (`VendorId` bắt buộc, shop nền tảng, API seller, chuyển shop). **F10-B xong, đã merge** (chưa test tay trên DB thật): 4 trạng thái (nháp, đang bán, ngừng bán, bị admin ẩn), seller đăng bán/ngừng bán, admin ẩn kèm lý do và email, bỏ ẩn khôi phục trạng thái cũ, yêu cầu xem lại. **F10-C xong** (chờ test tay và merge, xem `modules/f10c-product-content.md`): mô tả HTML lọc an toàn, SKU/GTIN/MPN (SKU duy nhất theo shop), lịch đăng bán, sản phẩm liên quan (cùng shop, tối đa 12), copy sản phẩm. Cặp F10 đóng lại ở slice này |
 | F11 | Biến thể, thuộc tính, thông số | Một phần | `modules/f11a-product-pictures.md`, `modules/f11b-product-variants-specs-tags.md` | **F11-B xong** (chờ test tay và merge): seller tự quản lý biến thể (tối đa 3 thuộc tính, 20 giá trị, 100 tổ hợp, SKU duy nhất theo shop, tồn kho sản phẩm = tổng tồn kho tổ hợp), thông số và tag; API công khai về thuộc tính/thông số/tag chỉ trả sản phẩm đang hiển thị; storefront chọn giá trị và hiện giá, tồn kho của tổ hợp. **F11-A xong, đã merge** (PR #13; chưa test tay trên DB thật): ảnh sản phẩm có thứ tự (tối đa 10, ảnh đầu là ảnh chính), đăng bán cần ít nhất 1 ảnh, ảnh hiện ở danh sách seller, storefront. Product attribute và specification attribute đã có. Chưa có: ảnh theo tổ hợp và copy kèm biến thể (F11-C), tier price (F14) |
 | F12 | Tồn kho | Một phần | `modules/f12a-inventory.md` | **F12-A xong** (chờ test tay và merge): sổ cái tồn kho (`StockMovement`), điều chỉnh tồn kho nguyên tử không âm, giữ chỗ (reserve, release, commit, tự hết hạn) cho giỏ hàng và thanh toán, ngưỡng cảnh báo sắp hết, tuỳ chọn không theo dõi tồn kho, tồn kho khả dụng ở storefront. Chưa có: HTTP cho reserve/commit (làm cùng F16/F17), back in stock, backorder, nhiều kho (F12-B, F12-C) |
-| F13 | Tìm kiếm, lọc | Chưa làm | | |
+| F13 | Tìm kiếm, lọc | Một phần | `modules/f13a-catalog-search.md` | **F13-A xong** (chờ test tay và merge): tìm kiếm văn bản nhiều từ (tên, mô tả ngắn, SKU, tag, nhà sản xuất; ký tự `%`, `_` được coi là chữ thường), danh mục kèm danh mục con, lọc nhà sản xuất, khoảng giá, còn hàng, tag, thông số kỹ thuật; sắp xếp theo độ khớp; facet (số lượng) cho bảng lọc; gợi ý khi gõ. Chưa có: so sánh sản phẩm, đã xem gần đây, thống kê từ khoá (F13-B), search engine và cache (F13-C) |
 | F14–F31 | Giá, khuyến mãi, giỏ hàng, đặt hàng, thanh toán, vận chuyển, đổi trả, thông báo, CMS, SEO, affiliate, báo cáo, import/export, plugin, job nền, theme, AI | Chưa làm | | Xem feature map |
 
 ## 2. Quyết định đã chốt
@@ -49,9 +49,10 @@ Theo mục 6 của feature map (M05 recovery plan):
 4. ~~F10-B Vòng đời sản phẩm~~ (xong, đã merge)
 5. ~~F11-A Ảnh sản phẩm~~ (xong, đã merge)
 5b. ~~F10-C Nội dung sản phẩm~~ (xong, chờ test tay và merge). 5c. ~~F11-B Biến thể, thông số, tag của seller~~ (xong, đã merge)
-5d. ~~F12-A Tồn kho: sổ cái, giữ chỗ~~ (xong, chờ test tay và merge). Tiếp theo: **F13-A** tìm kiếm, lọc theo thông số, tag và còn hàng. Xem `modules/vendor-products-prd.md` (US-A3, A4).
+5d. ~~F12-A Tồn kho: sổ cái, giữ chỗ~~ (xong, đã merge)
+5e. ~~F13-A Tìm kiếm, lọc, facet, gợi ý~~ (xong, chờ test tay và merge). Tiếp theo: **F07** (tiền tệ, đơn vị, múi giờ) trước F14 giá, rồi giỏ hàng (F16) dùng giữ chỗ tồn kho của F12-A. Xem `modules/vendor-products-prd.md` (US-A3, A4).
 6. F13-A Tìm kiếm.
-7. F07 (phần tiền tệ, đơn vị, múi giờ) trước F14.
+7. F07 (phần tiền tệ, đơn vị, múi giờ) trước F14, sau đó F14 giá, F16 giỏ hàng.
 8. Quay lại F05: `vendor-shop-settings`, `vendor-products`, `vendor-orders`, `vendor-settlement`.
 
 ## 4. Nợ kỹ thuật và việc treo
@@ -73,7 +74,7 @@ Theo mục 6 của feature map (M05 recovery plan):
 | Hàng giữ chỗ hết hạn chưa được dọn khỏi bảng `StockReservation` | `modules/f12a-inventory.md` | F29 |
 | Test service (`Services.Tests`) không chạy được trên máy này do Windows App Control chặn DLL; code compile, cần chạy `dotnet test` trên máy khác hoặc CI | | Môi trường |
 | Sản phẩm cũ chưa publish được chuyển thành "nháp" (không phân biệt được với "ngừng bán") | `modules/f10b-product-lifecycle.md` | Ghi chú triển khai |
-| Xem sản phẩm công khai theo category chưa gồm category con, chưa cache | `modules/f09a-taxonomy.md` | F13 |
+| Tìm kiếm dùng `LIKE '%từ%'` (không dùng index), facet là nhiều truy vấn mỗi lần, chưa cache; `inStock` ở danh sách là tồn kho thực, không trừ hàng đang giữ chỗ | `modules/f13a-catalog-search.md` | F13-C |
 | Test tích hợp API (`Api.Tests`) rất ít; không có test E2E | | F26/F29 |
 
 ## 5. Nhật ký
@@ -89,3 +90,4 @@ Theo mục 6 của feature map (M05 recovery plan):
 | 2026-10-06 | `feat/product-content/foundation` | F10-C: cột `Sku`, `Gtin`, `ManufacturerPartNumber`, lịch đăng bán, bảng `ProductRelation`, lọc HTML mô tả (HtmlSanitizer), API `PUT .../related` và `POST .../copy`, storefront hiện mô tả HTML và sản phẩm liên quan, form seller có SKU/GTIN/lịch/liên quan/Copy (BE + FE). Chưa commit |
 | 2026-10-07 | `feat/product-variants/foundation` | F11-B: API seller cho biến thể, thông số, tag (`PUT .../variants`, `.../specs`, `.../tags`, `GET .../product-options`), kiểm tra tổ hợp, SKU duy nhất gồm cả SKU tổ hợp, tồn kho sản phẩm = tổng tổ hợp, **sửa lỗ hổng:** API công khai `/products/{id}/attributes|specs|tags` trước đây trả cả sản phẩm nháp/bị ẩn. Trang seller `/vendor/products/:id/details`, storefront chọn biến thể (BE + FE). **Sửa lỗi:** storefront đọc sai dạng dữ liệu thuộc tính công khai (`m.mapping.id`). Chưa commit |
 | 2026-10-08 | `feat/inventory/foundation` | F12-A: migration `StockMovement`, `StockReservation`, `TrackInventory`, `LowStockThreshold`; `IInventoryStore`/`IInventoryService` (adjust, reserve, release, commit, availability) với `StockRules` thuần; API seller `GET .../inventory`, `POST .../stock-adjustments`, `PUT .../inventory-settings`, `GET .../stock-movements`, lọc `lowStock`; lưu sản phẩm của seller không còn sửa tồn kho (chỉ qua sổ cái), admin sửa qua delta; lưu biến thể bị chặn khi có hàng đang giữ chỗ; storefront hiện tồn kho khả dụng. Mục Inventory ở `/vendor/products/:id/details`, badge sắp hết hàng (BE + FE). Chưa commit |
+| 2026-10-09 | `feat/search/foundation` | F13-A: `ICatalogSearchService`, bộ dựng SQL dùng chung `ProductFilter` (luật công khai luôn áp dụng, tham số hoá, escape `LIKE`), `GET /catalog/products` mở rộng (danh mục kèm con, nhà sản xuất, giá, còn hàng, tag, thông số, độ khớp), `GET /catalog/products/facets` và `/suggest`, migration index tag và thông số. Trang danh sách storefront có bảng lọc, chip bộ lọc, URL đồng bộ; ô tìm kiếm có gợi ý bằng bàn phím (BE + FE). **Sửa lỗi:** trang danh sách storefront trước đây không gửi từ khoá tìm kiếm lên API. Chưa commit |
