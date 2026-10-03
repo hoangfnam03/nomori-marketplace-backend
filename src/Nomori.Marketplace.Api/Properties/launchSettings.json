@@ -1,4 +1,4 @@
-﻿{
+{
   "$schema": "https://json.schemastore.org/launchsettings.json",
   "profiles": {
     "http": {
@@ -7,7 +7,11 @@
       "launchBrowser": false,
       "applicationUrl": "http://localhost:5214",
       "environmentVariables": {
-        "ASPNETCORE_ENVIRONMENT": "Development"
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "Media__Storage__Provider": "S3",
+        "Media__Storage__S3__Endpoint": "http://localhost:9000",
+        "Media__Storage__S3__AccessKey": "nomori-api",
+        "Media__Storage__S3__SecretKey": "nomori-api-dev-only"
       }
     },
     "https": {
@@ -16,7 +20,11 @@
       "launchBrowser": false,
       "applicationUrl": "https://localhost:7014;http://localhost:5214",
       "environmentVariables": {
-        "ASPNETCORE_ENVIRONMENT": "Development"
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "Media__Storage__Provider": "S3",
+        "Media__Storage__S3__Endpoint": "http://localhost:9000",
+        "Media__Storage__S3__AccessKey": "nomori-api",
+        "Media__Storage__S3__SecretKey": "nomori-api-dev-only"
       }
     }
   }

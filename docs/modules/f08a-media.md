@@ -193,15 +193,14 @@ Image bytes can live in S3-compatible object storage (MinIO locally). Metadata, 
 | `Media:Storage:S3:UploadUrlLifetimeMinutes` | `10` | 1 to 60 |
 | `Media:Storage:S3:RedirectCacheSeconds` | `86400` | Cache lifetime of the `302` from `/api/v1/media/{id}` |
 
-Local setup:
+Local setup: the `http` and `https` launch profiles set these keys as environment variables (`Media__Storage__Provider=S3`, endpoint `http://localhost:9000`, and the dev-only `nomori-api` key that `minio-init` creates). Start MinIO and then the API:
 
 ```powershell
 docker compose -f infra/docker-compose.yml up -d
-dotnet user-secrets --project src/Nomori.Marketplace.Api set "Media:Storage:Provider" "S3"
-dotnet user-secrets --project src/Nomori.Marketplace.Api set "Media:Storage:S3:Endpoint" "http://localhost:9000"
-dotnet user-secrets --project src/Nomori.Marketplace.Api set "Media:Storage:S3:AccessKey" "nomori-api"
-dotnet user-secrets --project src/Nomori.Marketplace.Api set "Media:Storage:S3:SecretKey" "nomori-api-dev-only"
+dotnet run --project src/Nomori.Marketplace.Api --launch-profile https
 ```
+
+To run without Docker, set `Media__Storage__Provider=Database` in the profile; images uploaded to MinIO then return `404`. Outside development, set the same `Media__Storage__*` environment variables with a real key, never committed.
 
 `minio-init` creates the bucket, makes only `public/` anonymously readable, expires `pending/` after one day, and creates the `nomori-api` user with access to this bucket only. CORS allows `http://localhost:4200`. The compose file uses the `pgsty/minio` build because MinIO stopped publishing community images.
 

@@ -55,7 +55,7 @@ See `docs/database-guidelines.md` for the local SQL Server and SSMS workflow. Th
 
 ## Object storage (optional)
 
-Images are stored in SQL Server by default. To store them in MinIO instead, start it with Docker and set `Media:Storage:*` as described in `docs/modules/f08a-media.md` section 14:
+The `http` and `https` launch profiles store images in MinIO (`Media__Storage__*` environment variables), so start it before the API. Without these variables images are stored in SQL Server. Details: `docs/modules/f08a-media.md` section 14.
 
 ```powershell
 docker compose -f infra/docker-compose.yml up -d
