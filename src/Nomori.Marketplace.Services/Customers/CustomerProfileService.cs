@@ -1,11 +1,14 @@
 using Nomori.Marketplace.Core.Customers;
+using Nomori.Marketplace.Core.Media;
 using Nomori.Marketplace.Core.Security;
 using Nomori.Marketplace.Core.Time;
+using Nomori.Marketplace.Services.Media;
 
 namespace Nomori.Marketplace.Services.Customers;
 
 public sealed class CustomerProfileService(
     ICustomerProfileStore profileStore,
+    IMediaStore mediaStore,
     IAuditLogService auditLog,
     IClock clock) : ICustomerProfileService
 {
@@ -31,6 +34,11 @@ public sealed class CustomerProfileService(
         var gender = Normalize(command.Gender)?.ToLowerInvariant();
         var phone = Normalize(command.Phone);
         var errors = Validate(firstName, lastName, gender, command.DateOfBirth, phone);
+        // Null keeps the current avatar, 0 removes it.
+        var avatar = command.AvatarPictureId ?? current.AvatarPictureId;
+        if (avatar != current.AvatarPictureId)
+            await MediaAttachment.ValidateAsync(mediaStore, avatar, MediaPurpose.CustomerAvatar, null, errors, cancellationToken,
+                field: "avatarPictureId", ownerCustomerId: current.CustomerId);
         if (errors.Count > 0)
             return CustomerProfileUpdateResult.Failure(errors);
 
@@ -44,7 +52,8 @@ public sealed class CustomerProfileService(
             LastName = lastName,
             Gender = gender,
             DateOfBirth = command.DateOfBirth?.Date,
-            Phone = phone
+            Phone = phone,
+            AvatarPictureId = avatar
         };
         await profileStore.UpdateAsync(updated, cancellationToken);
 
@@ -54,6 +63,7 @@ public sealed class CustomerProfileService(
         if (!string.Equals(current.Gender, updated.Gender, StringComparison.Ordinal)) changedFields.Add("gender");
         if (current.DateOfBirth?.Date != updated.DateOfBirth?.Date) changedFields.Add("dateOfBirth");
         if (!string.Equals(current.Phone, updated.Phone, StringComparison.Ordinal)) changedFields.Add("phone");
+        if (current.AvatarPictureId != updated.AvatarPictureId) changedFields.Add("avatar");
 
         await auditLog.WriteAsync(
             "customer.profile_updated",

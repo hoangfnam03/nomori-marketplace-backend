@@ -196,6 +196,23 @@ public sealed class MediaServiceTests
     }
 
     [Fact]
+    public async Task AnyCustomerUploadsTheirOwnAvatarAndOnlyTheyManageIt()
+    {
+        var f = new Fixture();
+        var service = f.Create();
+
+        var avatar = await service.UploadAsync(new UploadMediaCommand(MediaPurpose.CustomerAvatar, null, Png), Customer, CancellationToken.None);
+        Assert.True(avatar.Succeeded);
+        Assert.Null(avatar.Value!.VendorId);
+        Assert.Contains("vendorId", (await service.UploadAsync(new UploadMediaCommand(MediaPurpose.CustomerAvatar, 5, Png), ShopMember, CancellationToken.None)).Errors.Keys);
+
+        // Administrators cannot delete someone else's avatar.
+        var admin = new MediaCaller(99, CanManageCatalog: true, CanManageVendors: true, MemberVendorId: null);
+        Assert.Equal(MediaErrors.NotFound, (await service.DeleteAsync(avatar.Value.Id, admin, CancellationToken.None)).ErrorCode);
+        Assert.True((await service.DeleteAsync(avatar.Value.Id, Customer, CancellationToken.None)).Succeeded);
+    }
+
+    [Fact]
     public async Task DeleteRespectsOwnershipAndUsage()
     {
         var f = new Fixture();

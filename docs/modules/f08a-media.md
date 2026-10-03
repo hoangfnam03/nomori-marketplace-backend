@@ -22,6 +22,7 @@ The feature map (F08) says product images, shop logos, customer uploads, invoice
 | `manufacturer` | Permission `catalog.manage` | uploader |
 | `vendorLogo` | Member of a vendor (uploads for their own vendor), or administrator with `vendor.manage` (must pass `vendorId`) | uploader + vendor |
 | `product` | Member of a vendor (own vendor only) | uploader + vendor |
+| `customerAvatar` | Any signed-in customer, for themselves (no `vendorId`). Only the uploader can delete it | uploader |
 
 | Action | Who |
 |---|---|

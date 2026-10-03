@@ -5,7 +5,8 @@ public enum MediaPurpose
     Category = 0,
     Manufacturer = 1,
     VendorLogo = 2,
-    Product = 3
+    Product = 3,
+    CustomerAvatar = 4
 }
 
 public enum MediaVisibility
@@ -138,7 +139,7 @@ public interface IMediaStore
     Task<MediaContent?> GetContentAsync(int id, CancellationToken cancellationToken);
     Task<bool> DeleteAsync(int id, CancellationToken cancellationToken);
 
-    /// <summary>True when a category, manufacturer or vendor still points at the asset.</summary>
+    /// <summary>True when a category, manufacturer, vendor, product or customer avatar still points at the asset.</summary>
     Task<bool> IsReferencedAsync(int id, CancellationToken cancellationToken);
 }
 

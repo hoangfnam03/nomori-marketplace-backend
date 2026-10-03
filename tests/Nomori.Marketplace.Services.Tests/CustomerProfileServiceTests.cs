@@ -18,7 +18,7 @@ public sealed class CustomerProfileServiceTests
             Username = "customer"
         });
         var audit = new CapturingAuditLogService();
-        var service = new CustomerProfileService(store, audit, new FixedClock());
+        var service = new CustomerProfileService(store, new FakeMediaStore(), audit, new FixedClock());
 
         var result = await service.UpdateAsync(new UpdateCustomerProfileCommand(
             7,
@@ -43,7 +43,7 @@ public sealed class CustomerProfileServiceTests
     {
         var store = new InMemoryProfileStore(new CustomerProfile { CustomerId = 7, Email = "customer@example.com" });
         var audit = new CapturingAuditLogService();
-        var service = new CustomerProfileService(store, audit, new FixedClock());
+        var service = new CustomerProfileService(store, new FakeMediaStore(), audit, new FixedClock());
 
         var result = await service.UpdateAsync(new UpdateCustomerProfileCommand(
             7,
@@ -60,6 +60,38 @@ public sealed class CustomerProfileServiceTests
         Assert.False(store.WasUpdated);
         Assert.Null(audit.EventName);
     }
+
+    [Fact]
+    public async Task AvatarMustBeTheCustomersOwnUploadAndCanBeRemoved()
+    {
+        var media = new FakeMediaStore();
+        var own = await media.InsertAsync(Avatar(uploadedBy: 7), [1], CancellationToken.None);
+        var someoneElses = await media.InsertAsync(Avatar(uploadedBy: 8), [1], CancellationToken.None);
+        var logo = await media.InsertAsync(new Nomori.Marketplace.Core.Media.MediaAsset
+            { Purpose = Nomori.Marketplace.Core.Media.MediaPurpose.VendorLogo, UploadedByCustomerId = 7 }, [1], CancellationToken.None);
+        var store = new InMemoryProfileStore(new CustomerProfile { CustomerId = 7, Email = "customer@example.com" });
+        var audit = new CapturingAuditLogService();
+        var service = new CustomerProfileService(store, media, audit, new FixedClock());
+        UpdateCustomerProfileCommand WithAvatar(int? id) => new(7, null, null, null, null, null, id);
+
+        Assert.Contains("avatarPictureId", (await service.UpdateAsync(WithAvatar(someoneElses), CancellationToken.None)).Errors.Keys);
+        Assert.Contains("avatarPictureId", (await service.UpdateAsync(WithAvatar(logo), CancellationToken.None)).Errors.Keys);
+        Assert.Contains("avatarPictureId", (await service.UpdateAsync(WithAvatar(999), CancellationToken.None)).Errors.Keys);
+        Assert.False(store.WasUpdated);
+
+        Assert.True((await service.UpdateAsync(WithAvatar(own), CancellationToken.None)).Succeeded);
+        Assert.Equal(own, store.Profile!.AvatarPictureId);
+        Assert.Contains("avatar", audit.ChangedFields);
+
+        // Null keeps the avatar; 0 removes it.
+        Assert.True((await service.UpdateAsync(WithAvatar(null), CancellationToken.None)).Succeeded);
+        Assert.Equal(own, store.Profile!.AvatarPictureId);
+        Assert.True((await service.UpdateAsync(WithAvatar(0), CancellationToken.None)).Succeeded);
+        Assert.Equal(0, store.Profile!.AvatarPictureId);
+    }
+
+    private static Nomori.Marketplace.Core.Media.MediaAsset Avatar(int uploadedBy) =>
+        new() { Purpose = Nomori.Marketplace.Core.Media.MediaPurpose.CustomerAvatar, UploadedByCustomerId = uploadedBy };
 
     private sealed class FixedClock : IClock
     {
