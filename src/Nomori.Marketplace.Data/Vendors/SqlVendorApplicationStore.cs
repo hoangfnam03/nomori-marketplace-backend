@@ -170,9 +170,9 @@ public sealed class SqlVendorApplicationStore(IOptions<DatabaseOptions> options)
         {
             vendorCmd.Transaction = transaction;
             vendorCmd.CommandText = """
-                INSERT INTO Vendor (Name, Email, Description, PictureId, AddressId, AdminComment, Active, Deleted, DisplayOrder, CreatedOnUtc, UpdatedOnUtc)
+                INSERT INTO Vendor (Name, Email, Description, PhoneNumber, TaxCode, BusinessAddress, PictureId, AddressId, AdminComment, Active, Deleted, DisplayOrder, CreatedOnUtc, UpdatedOnUtc)
                 OUTPUT INSERTED.Id
-                SELECT @ShopName, @Email, a.Description, 0, 0, @AdminComment, 1, 0, 0, @NowUtc, @NowUtc
+                SELECT @ShopName, @Email, a.Description, a.PhoneNumber, a.TaxCode, a.BusinessAddress, 0, 0, @AdminComment, 1, 0, 0, @NowUtc, @NowUtc
                 FROM VendorApplication a WHERE a.Id = @Id
                 """;
             vendorCmd.Parameters.AddWithValue("@Id", id);

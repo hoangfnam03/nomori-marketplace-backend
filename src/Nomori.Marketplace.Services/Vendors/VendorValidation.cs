@@ -7,6 +7,8 @@ internal static partial class VendorValidation
 {
     public const int MaxNameLength = 400;
     public const int MaxEmailLength = 320;
+    public const int MaxTaxCodeLength = 50;
+    public const int MaxBusinessAddressLength = 1000;
 
     [GeneratedRegex(@"^[0-9\s+\-()]+$")]
     private static partial Regex PhonePattern();

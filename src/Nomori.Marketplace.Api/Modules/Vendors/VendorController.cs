@@ -53,18 +53,22 @@ public sealed class VendorController(IVendorService vendorService, IVendorAccess
         return Ok(VendorResponse.From(vendor, caller));
     }
 
+    /// <summary>
+    /// Administrators edit any vendor. A shop member edits the profile of their own shop; sending
+    /// <c>adminComment</c>, <c>active</c> or <c>displayOrder</c> is refused with 403.
+    /// </summary>
     [HttpPut("{id:int}")]
     [ValidateAntiForgeryToken]
     [Authorize]
-    [HasPermission(PermissionCodes.VendorManage)]
     public async Task<IActionResult> UpdateVendor(int id, UpdateVendorRequest request, CancellationToken cancellationToken)
     {
+        var caller = await accessContext.GetCallerAsync(cancellationToken);
         var result = await vendorService.UpdateAsync(
-            new UpdateVendorCommand(id, request.Name, request.Email, request.Description, request.AdminComment, request.Active, request.DisplayOrder, request.PictureId),
-            cancellationToken);
+            new UpdateVendorCommand(id, request.Name, request.Email, request.PhoneNumber, request.Description, request.TaxCode,
+                request.BusinessAddress, request.PictureId, request.AdminComment, request.Active, request.DisplayOrder),
+            caller, cancellationToken);
         if (!result.Succeeded) return this.ToFailure(result, "Vendor update failed");
 
-        var caller = await accessContext.GetCallerAsync(cancellationToken);
         return Ok(VendorResponse.From(result.Value!, caller));
     }
 
@@ -88,14 +92,18 @@ public sealed class VendorController(IVendorService vendorService, IVendorAccess
     private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }
 
+/// <summary>Profile fields replace the stored values. The last three are for administrators; leave them out to keep the current values.</summary>
 public sealed record UpdateVendorRequest(
     string Name,
     string Email,
+    string? PhoneNumber = null,
     string? Description = null,
+    string? TaxCode = null,
+    string? BusinessAddress = null,
+    int? PictureId = null,
     string? AdminComment = null,
-    bool Active = true,
-    int DisplayOrder = 0,
-    int? PictureId = null);
+    bool? Active = null,
+    int? DisplayOrder = null);
 
 public sealed record VendorPagedResponse(
     IReadOnlyList<VendorResponse> Items,
@@ -104,7 +112,8 @@ public sealed record VendorPagedResponse(
 /// <summary>Fields other than the first six are <c>null</c> unless the caller is an administrator or a member of this vendor.</summary>
 public sealed record VendorResponse(
     int Id, string Name, string Email, string? Description, int PictureId, int DisplayOrder,
-    bool? Active, int? AddressId, DateTime? CreatedOnUtc, DateTime? UpdatedOnUtc, string? AdminComment)
+    bool? Active, int? AddressId, DateTime? CreatedOnUtc, DateTime? UpdatedOnUtc, string? AdminComment,
+    string? PhoneNumber, string? TaxCode, string? BusinessAddress)
 {
     public static VendorResponse From(Vendor v, VendorCaller caller)
     {
@@ -115,6 +124,9 @@ public sealed record VendorResponse(
             privileged ? v.AddressId : null,
             privileged ? v.CreatedOnUtc : null,
             privileged ? v.UpdatedOnUtc : null,
-            caller.IsAdmin ? v.AdminComment : null);
+            caller.IsAdmin ? v.AdminComment : null,
+            privileged ? v.PhoneNumber : null,
+            privileged ? v.TaxCode : null,
+            privileged ? v.BusinessAddress : null);
     }
 }

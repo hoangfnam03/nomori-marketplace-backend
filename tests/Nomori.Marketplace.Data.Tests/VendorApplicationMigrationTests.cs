@@ -14,4 +14,14 @@ public sealed class VendorApplicationMigrationTests
         Assert.Equal(202609260001, application.Version);
         Assert.True(application.Version > vendor.Version);
     }
+
+    [Fact]
+    public void ProfileMigrationRunsAfterApplicationsSoItCanCopyFromThem()
+    {
+        var application = typeof(VendorApplicationMigration).GetCustomAttributes(typeof(MigrationAttribute), false).Cast<MigrationAttribute>().Single();
+        var profile = typeof(VendorProfileMigration).GetCustomAttributes(typeof(MigrationAttribute), false).Cast<MigrationAttribute>().Single();
+
+        Assert.Equal(202610140001, profile.Version);
+        Assert.True(profile.Version > application.Version);
+    }
 }

@@ -8,7 +8,7 @@ namespace Nomori.Marketplace.Data.Vendors;
 public sealed class SqlVendorStore(IOptions<DatabaseOptions> options) : IVendorStore
 {
     private const string SelectColumns =
-        "Id, Name, Email, Description, PictureId, AddressId, AdminComment, Active, Deleted, DisplayOrder, CreatedOnUtc, UpdatedOnUtc, IsPlatformShop";
+        "Id, Name, Email, Description, PictureId, AddressId, AdminComment, Active, Deleted, DisplayOrder, CreatedOnUtc, UpdatedOnUtc, IsPlatformShop, PhoneNumber, TaxCode, BusinessAddress";
 
     public async Task<Vendor?> GetAsync(int id, CancellationToken cancellationToken)
     {
@@ -26,7 +26,8 @@ public sealed class SqlVendorStore(IOptions<DatabaseOptions> options) : IVendorS
         await using var cmd = connection.CreateCommand();
         cmd.CommandText = """
             SELECT v.Id, v.Name, v.Email, v.Description, v.PictureId, v.AddressId,
-                   v.AdminComment, v.Active, v.Deleted, v.DisplayOrder, v.CreatedOnUtc, v.UpdatedOnUtc, v.IsPlatformShop
+                   v.AdminComment, v.Active, v.Deleted, v.DisplayOrder, v.CreatedOnUtc, v.UpdatedOnUtc, v.IsPlatformShop,
+                   v.PhoneNumber, v.TaxCode, v.BusinessAddress
             FROM Vendor v
             INNER JOIN Customer c ON c.VendorId = v.Id
             WHERE c.Id = @CustomerId AND v.Deleted = 0
@@ -76,12 +77,28 @@ public sealed class SqlVendorStore(IOptions<DatabaseOptions> options) : IVendorS
             UPDATE Vendor SET
                 Name = @Name, Email = @Email, Description = @Description,
                 PictureId = @PictureId, AddressId = @AddressId, AdminComment = @AdminComment,
-                Active = @Active, DisplayOrder = @DisplayOrder, UpdatedOnUtc = @UpdatedOnUtc
+                Active = @Active, DisplayOrder = @DisplayOrder, UpdatedOnUtc = @UpdatedOnUtc,
+                PhoneNumber = @PhoneNumber, TaxCode = @TaxCode, BusinessAddress = @BusinessAddress
             WHERE Id = @Id AND Deleted = 0
             """;
         cmd.Parameters.AddWithValue("@Id", vendor.Id);
         AddWriteParams(cmd, vendor);
         await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<bool> NameExistsAsync(string name, int excludeVendorId, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT CASE WHEN EXISTS (
+                SELECT 1 FROM Vendor
+                WHERE Deleted = 0 AND Id <> @Id AND UPPER(LTRIM(RTRIM(Name))) = UPPER(@Name)
+            ) THEN 1 ELSE 0 END
+            """;
+        cmd.Parameters.AddWithValue("@Id", excludeVendorId);
+        cmd.Parameters.AddWithValue("@Name", name.Trim());
+        return (int)(await cmd.ExecuteScalarAsync(cancellationToken))! == 1;
     }
 
     public async Task<IReadOnlyList<int>?> DeleteAsync(int id, DateTime nowUtc, CancellationToken cancellationToken)
@@ -214,6 +231,9 @@ public sealed class SqlVendorStore(IOptions<DatabaseOptions> options) : IVendorS
         cmd.Parameters.AddWithValue("@DisplayOrder", v.DisplayOrder);
         cmd.Parameters.AddWithValue("@CreatedOnUtc", v.CreatedOnUtc);
         cmd.Parameters.AddWithValue("@UpdatedOnUtc", v.UpdatedOnUtc);
+        cmd.Parameters.AddWithValue("@PhoneNumber", (object?)v.PhoneNumber ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@TaxCode", (object?)v.TaxCode ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@BusinessAddress", (object?)v.BusinessAddress ?? DBNull.Value);
     }
 
     private static Vendor ReadVendor(SqlDataReader r) => new()
@@ -230,6 +250,9 @@ public sealed class SqlVendorStore(IOptions<DatabaseOptions> options) : IVendorS
         DisplayOrder = r.GetInt32(9),
         CreatedOnUtc = r.GetDateTime(10),
         UpdatedOnUtc = r.GetDateTime(11),
-        IsPlatformShop = r.GetBoolean(12)
+        IsPlatformShop = r.GetBoolean(12),
+        PhoneNumber = r.IsDBNull(13) ? null : r.GetString(13),
+        TaxCode = r.IsDBNull(14) ? null : r.GetString(14),
+        BusinessAddress = r.IsDBNull(15) ? null : r.GetString(15)
     };
 }

@@ -24,27 +24,57 @@ public sealed class VendorService(IVendorStore vendorStore, IMediaStore mediaSto
     public Task<Vendor?> GetPlatformShopAsync(CancellationToken cancellationToken) =>
         vendorStore.GetPlatformShopAsync(cancellationToken);
 
-    public async Task<VendorResult<Vendor>> UpdateAsync(UpdateVendorCommand command, CancellationToken cancellationToken)
+    public async Task<VendorResult<Vendor>> UpdateAsync(UpdateVendorCommand command, VendorCaller caller, CancellationToken cancellationToken)
     {
         var existing = await vendorStore.GetAsync(command.Id, cancellationToken);
-        if (existing is null) return VendorResult.Error<Vendor>(VendorErrors.NotFound);
+        // Members of other shops and customers are told the shop does not exist.
+        if (existing is null || !(caller.IsAdmin || caller.IsMemberOf(existing.Id)))
+            return VendorResult.Error<Vendor>(VendorErrors.NotFound);
 
-        var errors = Validate(command.Name, command.Email);
-        if (existing.IsPlatformShop && !command.Active)
+        // Locking, ordering and internal notes stay with administrators.
+        if (!caller.IsAdmin && (command.AdminComment is not null || command.Active is not null || command.DisplayOrder is not null))
+            return VendorResult.Error<Vendor>(VendorErrors.Forbidden);
+        if (!caller.IsAdmin && !existing.Active) return VendorResult.Error<Vendor>(VendorErrors.Inactive);
+
+        var errors = new Dictionary<string, string[]>();
+        var name = command.Name?.Trim() ?? string.Empty;
+        var email = VendorValidation.NormalizeEmail(command.Email);
+        var phone = VendorValidation.NullIfBlank(command.PhoneNumber);
+        VendorValidation.ValidateShopName(name, errors, "name");
+        VendorValidation.ValidateEmail(email, errors);
+        // Shops created before phone numbers were kept have none; an administrator may leave it empty, a member may not.
+        if (phone is not null || !caller.IsAdmin) VendorValidation.ValidatePhone(phone, errors);
+        VendorValidation.ValidateMaxLength(command.TaxCode, VendorValidation.MaxTaxCodeLength, "taxCode", "Tax code", errors);
+        VendorValidation.ValidateMaxLength(command.BusinessAddress, VendorValidation.MaxBusinessAddressLength, "businessAddress", "Business address", errors);
+        if (existing.IsPlatformShop && command.Active == false)
             errors["active"] = ["The platform shop cannot be deactivated."];
         if (command.PictureId is { } pictureId && pictureId != existing.PictureId)
             await MediaAttachment.ValidateAsync(mediaStore, pictureId, MediaPurpose.VendorLogo, existing.Id, errors, cancellationToken);
+        if (!errors.ContainsKey("name") && await vendorStore.NameExistsAsync(name, existing.Id, cancellationToken))
+            errors["name"] = ["Another shop already uses this name."];
         if (errors.Count > 0) return VendorResult.Failure<Vendor>(errors);
 
-        existing.Name = command.Name.Trim();
-        existing.Email = command.Email.Trim().ToLowerInvariant();
+        var before = Snapshot(existing);
+        existing.Name = name;
+        existing.Email = email;
+        existing.PhoneNumber = phone;
         existing.Description = VendorValidation.NullIfBlank(command.Description);
-        existing.AdminComment = VendorValidation.NullIfBlank(command.AdminComment);
-        existing.Active = command.Active;
-        existing.DisplayOrder = command.DisplayOrder;
+        existing.TaxCode = VendorValidation.NullIfBlank(command.TaxCode);
+        existing.BusinessAddress = VendorValidation.NullIfBlank(command.BusinessAddress);
         if (command.PictureId is { } newPicture) existing.PictureId = newPicture;
+        if (command.AdminComment is not null) existing.AdminComment = VendorValidation.NullIfBlank(command.AdminComment);
+        if (command.Active is { } active) existing.Active = active;
+        if (command.DisplayOrder is { } displayOrder) existing.DisplayOrder = displayOrder;
+
+        var changed = Snapshot(existing).Where(field => before[field.Key] != field.Value).Select(field => field.Key).ToList();
+        if (changed.Count == 0) return VendorResult.Success(existing);
+
         existing.UpdatedOnUtc = clock.UtcNow;
         await vendorStore.UpdateAsync(existing, cancellationToken);
+        // Field names only: the values may be personal data.
+        await auditLog.WriteAsync("vendor.updated", caller.CustomerId, entityType: "Vendor", entityId: existing.Id,
+            details: new { vendorId = existing.Id, fields = changed, byAdmin = caller.IsAdmin },
+            cancellationToken: cancellationToken);
         return VendorResult.Success(existing);
     }
 
@@ -83,13 +113,17 @@ public sealed class VendorService(IVendorStore vendorStore, IMediaStore mediaSto
     public Task<bool> DeleteNoteAsync(int vendorId, int noteId, CancellationToken cancellationToken) =>
         vendorStore.DeleteNoteAsync(vendorId, noteId, cancellationToken);
 
-    private static Dictionary<string, string[]> Validate(string name, string email)
+    private static Dictionary<string, string?> Snapshot(Vendor v) => new()
     {
-        var errors = new Dictionary<string, string[]>();
-        if (string.IsNullOrWhiteSpace(name)) errors["name"] = ["Vendor name is required."];
-        else if (name.Trim().Length > VendorValidation.MaxNameLength) errors["name"] = [$"Vendor name cannot exceed {VendorValidation.MaxNameLength} characters."];
-        if (string.IsNullOrWhiteSpace(email)) errors["email"] = ["Vendor email is required."];
-        else if (email.Trim().Length > VendorValidation.MaxEmailLength) errors["email"] = [$"Vendor email cannot exceed {VendorValidation.MaxEmailLength} characters."];
-        return errors;
-    }
+        ["name"] = v.Name,
+        ["email"] = v.Email,
+        ["phoneNumber"] = v.PhoneNumber,
+        ["description"] = v.Description,
+        ["taxCode"] = v.TaxCode,
+        ["businessAddress"] = v.BusinessAddress,
+        ["pictureId"] = v.PictureId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        ["adminComment"] = v.AdminComment,
+        ["active"] = v.Active ? "true" : "false",
+        ["displayOrder"] = v.DisplayOrder.ToString(System.Globalization.CultureInfo.InvariantCulture)
+    };
 }

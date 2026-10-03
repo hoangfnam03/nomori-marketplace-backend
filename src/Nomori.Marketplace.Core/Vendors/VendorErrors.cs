@@ -17,6 +17,9 @@ public static class VendorErrors
 
     public const string PlatformShop = "vendor.platform_shop";
 
+    /// <summary>The shop was switched off by an administrator; its members cannot change it until it is switched back on.</summary>
+    public const string Inactive = "vendor.inactive";
+
     public const string MemberEmailAlreadyExists = "vendor_member.email_already_exists";
     public const string MemberLimitReached = "vendor_member.limit_reached";
     public const string MemberAlreadyActive = "vendor_member.already_active";

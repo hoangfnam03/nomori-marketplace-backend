@@ -103,7 +103,7 @@ Có **16 endpoint** cho module Vendors, thay cho 24 endpoint nếu tách route a
 | **Vendor** | | | | |
 | 6 | `GET` | `/vendors` | Mọi người | |
 | 7 | `GET` | `/vendors/{id}` | Mọi người | |
-| 8 | `PUT` | `/vendors/{id}` | Admin | có |
+| 8 | `PUT` | `/vendors/{id}` | Admin, thành viên của `{id}` (chỉ thông tin shop) | có |
 | 9 | `DELETE` | `/vendors/{id}` | Admin | có |
 | **Thành viên** | | | | |
 | 10 | `GET` | `/vendors/{id}/members` | Thành viên của `{id}`, admin | |
@@ -342,22 +342,34 @@ Vendor đã xóa (`Deleted = 1`) không hiện với bất kỳ ai.
 
 ### 4.3. `PUT /vendors/{id}`: sửa vendor
 
-`[Authorize]`, `[HasPermission(PermissionCodes.VendorManage)]`. Chỉ admin được gọi. Việc người bán tự sửa thông tin shop thuộc module sau.
+`[Authorize]`. Quyền xét trong service theo `VendorCaller`:
 
-**Request** `UpdateVendorRequest`
+- **Admin** (`vendor.manage`) sửa mọi vendor và mọi field.
+- **Thành viên của `{id}`** sửa thông tin shop của mình (module [Cài đặt shop](vendor-shop-settings-prd.md), US-A1, A2). Gửi `adminComment`, `active` hoặc `displayOrder` thì nhận `403`. Shop đang `active = false` thì nhận `409 vendor.inactive`.
+- Người khác nhận `404`.
+
+**Request** `UpdateVendorRequest`. Các field thông tin shop thay hẳn giá trị đang lưu (gửi `null` là xóa). Ba field cuối chỉ dành cho admin; bỏ trống thì giữ nguyên giá trị.
 
 | Field | Kiểu | Bắt buộc | Quy tắc |
 |---|---|---|---|
-| `name` | string | có | trim; 1–400 ký tự |
-| `email` | string | có | trim, chuyển thành chữ thường; tối đa 320 ký tự |
+| `name` | string | có | trim; 1–400 ký tự; không trùng tên shop khác (không phân biệt hoa thường) |
+| `email` | string | có | trim, chữ thường; email hợp lệ; tối đa 320 ký tự |
+| `phoneNumber` | string \| null | thành viên: có; admin: không | chữ số, khoảng trắng, `+ - ( )`; tối đa 50 ký tự |
 | `description` | string \| null | không | |
-| `adminComment` | string \| null | không | |
-| `active` | bool | không | mặc định `true` |
-| `displayOrder` | int | không | mặc định `0` |
+| `taxCode` | string \| null | không | tối đa 50 ký tự |
+| `businessAddress` | string \| null | không | tối đa 1000 ký tự |
+| `pictureId` | int \| null | không | `0` là bỏ logo; khác `0` phải là ảnh purpose `vendorLogo` của chính shop này. `null` giữ nguyên |
+| `adminComment` | string \| null | không | chỉ admin |
+| `active` | bool \| null | không | chỉ admin; shop nền tảng không tắt được |
+| `displayOrder` | int \| null | không | chỉ admin |
 
-**Response `200`**: `VendorResponse`.
+Lưu thành công ghi audit `vendor.updated` với danh sách tên field đã đổi (không ghi giá trị). Lưu mà không đổi gì thì không ghi.
 
-**Lỗi**: `400 errors.*`; `401`; `403`; `404`.
+**Response `200`**: `VendorResponse`. `phoneNumber`, `taxCode`, `businessAddress` chỉ trả cho admin và thành viên của shop; storefront không thấy.
+
+**Lỗi**: `400 errors.*`; `401`; `403`; `404`; `409 vendor.inactive`.
+
+**Dữ liệu**: migration `202610140001 VendorProfileMigration` thêm `Vendor.PhoneNumber`, `TaxCode`, `BusinessAddress` và chép từ đơn đăng ký đã duyệt. Khi duyệt đơn mới, ba field này được chép sang shop.
 
 ### 4.4. `DELETE /vendors/{id}`: xóa vendor
 
