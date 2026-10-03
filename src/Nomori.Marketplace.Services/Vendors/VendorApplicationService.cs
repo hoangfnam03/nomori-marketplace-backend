@@ -240,8 +240,8 @@ public sealed partial class VendorApplicationService(
         VendorValidation.ValidateShopName(shopName, errors);
         VendorValidation.ValidateEmail(normalizedEmail, errors);
         VendorValidation.ValidatePhone(phoneNumber, errors);
-        VendorValidation.ValidateMaxLength(taxCode, 50, "taxCode", "Tax code", errors);
-        VendorValidation.ValidateMaxLength(businessAddress, 1000, "businessAddress", "Business address", errors);
+        VendorValidation.ValidateMaxLength(taxCode, VendorValidation.MaxTaxCodeLength, "taxCode", "Tax code", errors);
+        VendorValidation.ValidateMaxLength(businessAddress, VendorValidation.MaxBusinessAddressLength, "businessAddress", "Business address", errors);
 
         var name = shopName?.Trim() ?? string.Empty;
         if (!errors.ContainsKey("shopName") && await applicationStore.ShopNameExistsAsync(name, excludeApplicationId, cancellationToken))

@@ -6,6 +6,12 @@ public sealed class Vendor
     public string Name { get; set; } = string.Empty;
     public string Email { get; set; } = string.Empty;
     public string? Description { get; set; }
+
+    /// <summary>Contact and business details. Shown to administrators and the shop's members only, never on the storefront.</summary>
+    public string? PhoneNumber { get; set; }
+    public string? TaxCode { get; set; }
+    public string? BusinessAddress { get; set; }
+
     public int PictureId { get; set; }
     public int AddressId { get; set; }
     public string? AdminComment { get; set; }
@@ -38,15 +44,22 @@ public sealed record VendorQuery(
     bool? Active = null,
     int? IncludeInactiveVendorId = null);
 
+/// <summary>
+/// Replaces the shop profile. The last three fields are for administrators only: null keeps the current value,
+/// and a shop member who sends any of them is refused.
+/// </summary>
 public sealed record UpdateVendorCommand(
     int Id,
     string Name,
     string Email,
+    string? PhoneNumber,
     string? Description,
-    string? AdminComment,
-    bool Active,
-    int DisplayOrder,
-    int? PictureId = null);
+    string? TaxCode,
+    string? BusinessAddress,
+    int? PictureId = null,
+    string? AdminComment = null,
+    bool? Active = null,
+    int? DisplayOrder = null);
 
 /// <summary>
 /// Outcome of a vendor operation. <see cref="Errors"/> are field validation errors (400);
@@ -80,6 +93,9 @@ public interface IVendorStore
     Task<(IReadOnlyList<Vendor> Items, int TotalCount)> GetPagedAsync(VendorQuery query, CancellationToken cancellationToken);
     Task UpdateAsync(Vendor vendor, CancellationToken cancellationToken);
 
+    /// <summary>True when another live vendor already uses this name, ignoring case and surrounding spaces.</summary>
+    Task<bool> NameExistsAsync(string name, int excludeVendorId, CancellationToken cancellationToken);
+
     /// <summary>
     /// Soft-deletes the vendor and, in the same transaction, unlinks every member, removes their Vendors role
     /// and sets RequireReLogin. Returns the former member ids, or null when the vendor does not exist.
@@ -97,7 +113,8 @@ public interface IVendorService
     Task<Vendor?> GetAsync(int id, CancellationToken cancellationToken);
     Task<Vendor?> GetCurrentVendorAsync(int customerId, CancellationToken cancellationToken);
     Task<Catalog.PagedResult<Vendor>> GetListAsync(VendorQuery query, CancellationToken cancellationToken);
-    Task<VendorResult<Vendor>> UpdateAsync(UpdateVendorCommand command, CancellationToken cancellationToken);
+    /// <summary>Administrators update any vendor; a member updates the profile of their own shop. Others get not_found.</summary>
+    Task<VendorResult<Vendor>> UpdateAsync(UpdateVendorCommand command, VendorCaller caller, CancellationToken cancellationToken);
     Task<VendorResult<bool>> DeleteAsync(int id, int actorCustomerId, CancellationToken cancellationToken);
     Task<Vendor?> GetPlatformShopAsync(CancellationToken cancellationToken);
 

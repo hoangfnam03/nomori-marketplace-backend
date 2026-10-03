@@ -223,10 +223,12 @@ public sealed class ProductOwnershipTests
         Assert.Equal(VendorErrors.PlatformShop, (await service.DeleteAsync(Platform, Actor, CancellationToken.None)).ErrorCode);
         Assert.False(f.Vendors.DeleteCalled);
 
-        var deactivate = await service.UpdateAsync(new UpdateVendorCommand(Platform, "Nomori Official", "p@example.com", null, null, false, 0), CancellationToken.None);
+        var deactivate = await service.UpdateAsync(new UpdateVendorCommand(Platform, "Nomori Official", "p@example.com", null, null, null, null, Active: false), PlatformAdmin, CancellationToken.None);
         Assert.Contains("active", deactivate.Errors.Keys);
-        Assert.True((await service.UpdateAsync(new UpdateVendorCommand(Platform, "Nomori Official", "p@example.com", null, null, true, 0), CancellationToken.None)).Succeeded);
+        Assert.True((await service.UpdateAsync(new UpdateVendorCommand(Platform, "Nomori Official", "p@example.com", null, null, null, null, Active: true), PlatformAdmin, CancellationToken.None)).Succeeded);
     }
+
+    private static readonly VendorCaller PlatformAdmin = new(Actor, IsAdmin: true, MemberVendorId: null);
 
     // ---- Fakes ----
 
