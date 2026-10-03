@@ -38,7 +38,8 @@ public sealed class CustomerProfileController(
             request.LastName,
             request.Gender,
             request.DateOfBirth,
-            request.Phone), cancellationToken);
+            request.Phone,
+            request.AvatarPictureId), cancellationToken);
         if (!result.Succeeded)
             return BadRequest(new ValidationProblemDetails(result.Errors.ToDictionary(pair => pair.Key, pair => pair.Value)));
 
@@ -57,7 +58,8 @@ public sealed class CustomerProfileController(
         profile.LastName,
         profile.Gender,
         profile.DateOfBirth,
-        profile.Phone);
+        profile.Phone,
+        profile.AvatarPictureId);
 }
 
 public sealed record UpdateCustomerProfileRequest(
@@ -65,7 +67,8 @@ public sealed record UpdateCustomerProfileRequest(
     string? LastName,
     string? Gender,
     DateTime? DateOfBirth,
-    string? Phone);
+    string? Phone,
+    int? AvatarPictureId = null);
 
 public sealed record CustomerProfileResponse(
     int CustomerId,
@@ -76,4 +79,5 @@ public sealed record CustomerProfileResponse(
     string? LastName,
     string? Gender,
     DateTime? DateOfBirth,
-    string? Phone);
+    string? Phone,
+    int AvatarPictureId);

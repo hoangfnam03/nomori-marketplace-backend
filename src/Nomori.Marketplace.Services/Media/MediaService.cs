@@ -175,7 +175,7 @@ public sealed partial class MediaService(
         return MediaResult.Success(true);
     }
 
-    private const string PurposeMessage = "Purpose must be category, manufacturer, vendorLogo or product.";
+    private const string PurposeMessage = "Purpose must be category, manufacturer, vendorLogo, product or customerAvatar.";
     private const string EmptyMessage = "The file is empty.";
     private string TooLargeMessage => $"The file is larger than {MaxBytes / (1024 * 1024)} MB.";
 
@@ -273,6 +273,11 @@ public sealed partial class MediaService(
                 if (requestedVendorId is not null) return (null, MediaResult.Failure<T>("vendorId", "Vendor id is not used for this purpose."));
                 return (null, null);
 
+            case MediaPurpose.CustomerAvatar:
+                // Every signed-in customer may upload their own avatar; it belongs to no shop.
+                if (requestedVendorId is not null) return (null, MediaResult.Failure<T>("vendorId", "Vendor id is not used for this purpose."));
+                return (null, null);
+
             case MediaPurpose.Product:
                 // Only shop members upload product images, and only for their own shop.
                 if (caller.MemberVendorId is not { } productVendor
@@ -300,6 +305,8 @@ public sealed partial class MediaService(
     private static bool CanManage(MediaAsset asset, MediaCaller caller)
     {
         if (asset.UploadedByCustomerId == caller.CustomerId) return true;
+        // An avatar is personal: only the customer who uploaded it manages it.
+        if (asset.Purpose == MediaPurpose.CustomerAvatar) return false;
         if (asset.VendorId is not null && asset.VendorId == caller.MemberVendorId) return true;
         return asset.Purpose is MediaPurpose.Category or MediaPurpose.Manufacturer
             ? caller.CanManageCatalog

@@ -62,6 +62,8 @@ Migration `202609210003 CustomerProfileMigration` adds these nullable columns to
 - `DateOfBirth` (`datetime2`)
 - `Phone` (`nvarchar(32)`)
 
+Migration `202610150001 CustomerAvatarMigration` adds `AvatarPictureId` (`int`, default `0`): a media asset with purpose `customerAvatar`. `0` means no avatar; the client then shows a default avatar.
+
 The first slice keeps these fields on `Customer` because they are one-to-one identity/profile data. A separate profile table can be introduced later if the profile grows substantially.
 
 ## Business rules
@@ -72,6 +74,7 @@ The first slice keeps these fields on `Customer` because they are one-to-one ide
 - Gender accepts `male`, `female`, `other` or `unspecified`.
 - Date of birth must be between `1900-01-01` and the current UTC date.
 - Phone accepts digits, spaces, `+`, `-`, parentheses and is limited to 32 characters.
+- `avatarPictureId` is optional: leave it out to keep the current avatar, send `0` to remove it. Any other value must be a `customerAvatar` image uploaded by the same customer, otherwise `400 errors.avatarPictureId`. An image in use as an avatar cannot be deleted (`409 media.in_use`).
 - Successful updates record `customer.profile_updated` with changed field names only; personal values are not copied into audit metadata.
 
 ## API
@@ -89,9 +92,12 @@ PUT /api/v1/customer/profile
   "lastName": "Nomori",
   "gender": "unspecified",
   "dateOfBirth": "1995-04-12",
-  "phone": "+84 901 234 567"
+  "phone": "+84 901 234 567",
+  "avatarPictureId": 42
 }
 ```
+
+The response also returns `avatarPictureId`. `GET /api/v1/auth/session` returns `firstName`, `lastName` and `avatarPictureId`, so the header can show the name and avatar without loading the profile.
 
 Failure responses use `ProblemDetails`/`ValidationProblemDetails`: anonymous `401`, insufficient permission `403`, invalid field `400`, and missing customer `404`.
 

@@ -11,7 +11,7 @@ public sealed class SqlCustomerProfileStore(IOptions<DatabaseOptions> databaseOp
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT Id, Email, EmailVerified, Username, FirstName, LastName, Gender, DateOfBirth, Phone FROM Customer WHERE Id = @CustomerId AND Deleted = 0";
+        command.CommandText = "SELECT Id, Email, EmailVerified, Username, FirstName, LastName, Gender, DateOfBirth, Phone, AvatarPictureId FROM Customer WHERE Id = @CustomerId AND Deleted = 0";
         command.Parameters.AddWithValue("@CustomerId", customerId);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? Read(reader) : null;
@@ -21,13 +21,14 @@ public sealed class SqlCustomerProfileStore(IOptions<DatabaseOptions> databaseOp
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandText = "UPDATE Customer SET FirstName = @FirstName, LastName = @LastName, Gender = @Gender, DateOfBirth = @DateOfBirth, Phone = @Phone WHERE Id = @CustomerId AND Deleted = 0";
+        command.CommandText = "UPDATE Customer SET FirstName = @FirstName, LastName = @LastName, Gender = @Gender, DateOfBirth = @DateOfBirth, Phone = @Phone, AvatarPictureId = @AvatarPictureId WHERE Id = @CustomerId AND Deleted = 0";
         command.Parameters.AddWithValue("@CustomerId", profile.CustomerId);
         command.Parameters.AddWithValue("@FirstName", (object?)profile.FirstName ?? DBNull.Value);
         command.Parameters.AddWithValue("@LastName", (object?)profile.LastName ?? DBNull.Value);
         command.Parameters.AddWithValue("@Gender", (object?)profile.Gender ?? DBNull.Value);
         command.Parameters.AddWithValue("@DateOfBirth", (object?)profile.DateOfBirth ?? DBNull.Value);
         command.Parameters.AddWithValue("@Phone", (object?)profile.Phone ?? DBNull.Value);
+        command.Parameters.AddWithValue("@AvatarPictureId", profile.AvatarPictureId);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -48,6 +49,7 @@ public sealed class SqlCustomerProfileStore(IOptions<DatabaseOptions> databaseOp
         LastName = reader.IsDBNull(5) ? null : reader.GetString(5),
         Gender = reader.IsDBNull(6) ? null : reader.GetString(6),
         DateOfBirth = reader.IsDBNull(7) ? null : reader.GetDateTime(7),
-        Phone = reader.IsDBNull(8) ? null : reader.GetString(8)
+        Phone = reader.IsDBNull(8) ? null : reader.GetString(8),
+        AvatarPictureId = reader.GetInt32(9)
     };
 }

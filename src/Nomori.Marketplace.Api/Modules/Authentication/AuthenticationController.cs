@@ -24,6 +24,7 @@ public sealed class AuthenticationController(
     IPermissionService permissionService,
     IPasswordPolicy passwordPolicy,
     ICustomerIdentityStore identityStore,
+    ICustomerProfileStore profileStore,
     IEmailVerificationService emailVerificationService,
     IEmailOtpService emailOtpService,
     IAuditLogService auditLog,
@@ -116,11 +117,14 @@ public sealed class AuthenticationController(
     public async Task<IActionResult> Session(CancellationToken cancellationToken)
     {
         if (!currentUser.IsAuthenticated || !int.TryParse(currentUser.Subject, out var customerId))
-            return Ok(new SessionResponse(false, null, null, null, null, null));
+            return Ok(new SessionResponse(false, null, null, null, null, null, null, null, null));
 
         var customer = await identityStore.FindByIdAsync(customerId, cancellationToken);
         var vendor = await vendorStore.GetByCustomerIdAsync(customerId, cancellationToken);
-        return Ok(new SessionResponse(true, customerId, currentUser.Email, customer?.EmailVerified, customer?.EmailOtpEnabled, vendor?.Id));
+        // Names let the client greet the user by name; how they are joined depends on the language, so the client does it.
+        var profile = await profileStore.GetAsync(customerId, cancellationToken);
+        return Ok(new SessionResponse(true, customerId, currentUser.Email, customer?.EmailVerified, customer?.EmailOtpEnabled, vendor?.Id,
+            NullIfBlank(profile?.FirstName), NullIfBlank(profile?.LastName), profile?.AvatarPictureId ?? 0));
     }
 
     [HttpGet("permissions")]
@@ -306,6 +310,8 @@ public sealed class AuthenticationController(
         return new BadRequestObjectResult(problem);
     }
 
+    private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
     private string? ClientIp() => HttpContext.Connection.RemoteIpAddress?.ToString();
 
 }
@@ -314,7 +320,9 @@ public sealed record RegisterRequest(string Email, string Password);
 
 public sealed record LoginRequest(string Email, string Password, bool RememberMe = false);
 
-public sealed record SessionResponse(bool IsAuthenticated, int? CustomerId, string? Email, bool? EmailVerified, bool? EmailOtpEnabled, int? VendorId);
+public sealed record SessionResponse(
+    bool IsAuthenticated, int? CustomerId, string? Email, bool? EmailVerified, bool? EmailOtpEnabled, int? VendorId,
+    string? FirstName, string? LastName, int? AvatarPictureId);
 
 public sealed record RegistrationResponse(int CustomerId, string Email, bool EmailVerified, string? VerificationToken);
 

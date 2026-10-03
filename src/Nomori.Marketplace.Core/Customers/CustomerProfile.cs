@@ -19,6 +19,9 @@ public sealed class CustomerProfile
     public DateTime? DateOfBirth { get; set; }
 
     public string? Phone { get; set; }
+
+    /// <summary>Media asset shown as the avatar; 0 means none, and the client shows a default avatar.</summary>
+    public int AvatarPictureId { get; set; }
 }
 
 public sealed record UpdateCustomerProfileCommand(
@@ -27,7 +30,8 @@ public sealed record UpdateCustomerProfileCommand(
     string? LastName,
     string? Gender,
     DateTime? DateOfBirth,
-    string? Phone);
+    string? Phone,
+    int? AvatarPictureId = null);
 
 public sealed record CustomerProfileValidationResult(bool Succeeded, IReadOnlyDictionary<string, string[]> Errors)
 {
