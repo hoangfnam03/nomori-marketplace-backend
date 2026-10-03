@@ -29,7 +29,10 @@ public sealed class ProductOwnershipMigration : Migration
 
         // The old key was ON DELETE SET NULL, which would null a now-required column. Shops are soft-deleted, so no action is needed.
         Delete.ForeignKey("FK_Product_Vendor").OnTable("Product");
+        // SQL Server refuses to alter a column that an index uses, so the index from VendorMigration is rebuilt around the change.
+        Delete.Index("IX_Product_VendorId").OnTable("Product");
         Alter.Table("Product").AlterColumn("VendorId").AsInt32().NotNullable();
+        Create.Index("IX_Product_VendorId").OnTable("Product").OnColumn("VendorId").Ascending();
         Create.ForeignKey("FK_Product_Vendor")
             .FromTable("Product").ForeignColumn("VendorId")
             .ToTable("Vendor").PrimaryColumn("Id");
@@ -38,7 +41,9 @@ public sealed class ProductOwnershipMigration : Migration
     public override void Down()
     {
         Delete.ForeignKey("FK_Product_Vendor").OnTable("Product");
+        Delete.Index("IX_Product_VendorId").OnTable("Product");
         Alter.Table("Product").AlterColumn("VendorId").AsInt32().Nullable();
+        Create.Index("IX_Product_VendorId").OnTable("Product").OnColumn("VendorId").Ascending();
         Create.ForeignKey("FK_Product_Vendor")
             .FromTable("Product").ForeignColumn("VendorId")
             .ToTable("Vendor").PrimaryColumn("Id")

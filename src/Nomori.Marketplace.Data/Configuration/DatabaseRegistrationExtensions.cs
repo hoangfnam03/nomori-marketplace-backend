@@ -46,6 +46,13 @@ public static class DatabaseRegistrationExtensions
         services.AddScoped<IVendorApplicationStore, SqlVendorApplicationStore>();
         services.AddScoped<IVendorMemberStore, SqlVendorMemberStore>();
         services.AddScoped<IMediaStore, SqlMediaStore>();
+        services.AddScoped<IMediaUploadStore, SqlMediaUploadStore>();
+
+        var storageOptions = configuration.GetSection(MediaStorageOptions.SectionName).Get<MediaStorageOptions>() ?? new MediaStorageOptions();
+        if (storageOptions.UsesObjectStorage)
+            services.AddSingleton<IMediaObjectStorage, MinioMediaObjectStorage>();
+        else
+            services.AddSingleton<IMediaObjectStorage, DisabledMediaObjectStorage>();
 
         var databaseOptions = configuration.GetSection(DatabaseOptions.SectionName).Get<DatabaseOptions>() ?? new DatabaseOptions();
         if (!string.Equals(databaseOptions.Provider, "SqlServer", StringComparison.OrdinalIgnoreCase))

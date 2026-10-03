@@ -53,6 +53,14 @@ dotnet run --project src/Nomori.Marketplace.DbMigrator -- migrate
 
 See `docs/database-guidelines.md` for the local SQL Server and SSMS workflow. The API does not run schema migrations automatically at startup.
 
+## Object storage (optional)
+
+The `http` and `https` launch profiles store images in MinIO (`Media__Storage__*` environment variables), so start it before the API. Without these variables images are stored in SQL Server. Details: `docs/modules/f08a-media.md` section 14.
+
+```powershell
+docker compose -f infra/docker-compose.yml up -d
+```
+
 ## Validate
 
 ```powershell
