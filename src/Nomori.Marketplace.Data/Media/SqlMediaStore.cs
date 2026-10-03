@@ -8,19 +8,22 @@ namespace Nomori.Marketplace.Data.Media;
 public sealed class SqlMediaStore(IOptions<DatabaseOptions> options) : IMediaStore
 {
     private const string SelectColumns =
-        "Id, Purpose, Visibility, MimeType, SizeBytes, Sha256, UploadedByCustomerId, VendorId, CreatedOnUtc";
+        "Id, Purpose, Visibility, MimeType, SizeBytes, Sha256, UploadedByCustomerId, VendorId, CreatedOnUtc, StorageProvider, StorageKey";
 
-    public async Task<int> InsertAsync(MediaAsset asset, byte[] data, CancellationToken cancellationToken)
+    public async Task<int> InsertAsync(MediaAsset asset, byte[]? data, CancellationToken cancellationToken)
     {
+        if ((asset.StorageProvider == MediaStorageProvider.Database) != (data is not null))
+            throw new ArgumentException("Database assets need data; object storage assets must not carry it.", nameof(data));
+
         await using var connection = await OpenAsync(cancellationToken);
         await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
 
         await using var assetCmd = connection.CreateCommand();
         assetCmd.Transaction = transaction;
         assetCmd.CommandText = """
-            INSERT INTO MediaAsset (Purpose, Visibility, MimeType, SizeBytes, Sha256, UploadedByCustomerId, VendorId, CreatedOnUtc)
+            INSERT INTO MediaAsset (Purpose, Visibility, MimeType, SizeBytes, Sha256, UploadedByCustomerId, VendorId, CreatedOnUtc, StorageProvider, StorageKey)
             OUTPUT INSERTED.Id
-            VALUES (@Purpose, @Visibility, @MimeType, @SizeBytes, @Sha256, @UploadedBy, @VendorId, @CreatedOnUtc)
+            VALUES (@Purpose, @Visibility, @MimeType, @SizeBytes, @Sha256, @UploadedBy, @VendorId, @CreatedOnUtc, @StorageProvider, @StorageKey)
             """;
         assetCmd.Parameters.AddWithValue("@Purpose", (int)asset.Purpose);
         assetCmd.Parameters.AddWithValue("@Visibility", (int)asset.Visibility);
@@ -30,14 +33,19 @@ public sealed class SqlMediaStore(IOptions<DatabaseOptions> options) : IMediaSto
         assetCmd.Parameters.AddWithValue("@UploadedBy", asset.UploadedByCustomerId);
         assetCmd.Parameters.AddWithValue("@VendorId", (object?)asset.VendorId ?? DBNull.Value);
         assetCmd.Parameters.AddWithValue("@CreatedOnUtc", asset.CreatedOnUtc);
+        assetCmd.Parameters.AddWithValue("@StorageProvider", (int)asset.StorageProvider);
+        assetCmd.Parameters.AddWithValue("@StorageKey", (object?)asset.StorageKey ?? DBNull.Value);
         var id = (int)(await assetCmd.ExecuteScalarAsync(cancellationToken))!;
 
-        await using var binaryCmd = connection.CreateCommand();
-        binaryCmd.Transaction = transaction;
-        binaryCmd.CommandText = "INSERT INTO MediaAssetBinary (MediaAssetId, Data) VALUES (@Id, @Data)";
-        binaryCmd.Parameters.AddWithValue("@Id", id);
-        binaryCmd.Parameters.Add("@Data", System.Data.SqlDbType.VarBinary, -1).Value = data;
-        await binaryCmd.ExecuteNonQueryAsync(cancellationToken);
+        if (data is not null)
+        {
+            await using var binaryCmd = connection.CreateCommand();
+            binaryCmd.Transaction = transaction;
+            binaryCmd.CommandText = "INSERT INTO MediaAssetBinary (MediaAssetId, Data) VALUES (@Id, @Data)";
+            binaryCmd.Parameters.AddWithValue("@Id", id);
+            binaryCmd.Parameters.Add("@Data", System.Data.SqlDbType.VarBinary, -1).Value = data;
+            await binaryCmd.ExecuteNonQueryAsync(cancellationToken);
+        }
 
         await transaction.CommitAsync(cancellationToken);
         return id;
@@ -110,6 +118,8 @@ public sealed class SqlMediaStore(IOptions<DatabaseOptions> options) : IMediaSto
         Sha256 = r.GetString(5).Trim(),
         UploadedByCustomerId = r.GetInt32(6),
         VendorId = r.IsDBNull(7) ? null : r.GetInt32(7),
-        CreatedOnUtc = r.GetDateTime(8)
+        CreatedOnUtc = r.GetDateTime(8),
+        StorageProvider = (MediaStorageProvider)r.GetInt32(9),
+        StorageKey = r.IsDBNull(10) ? null : r.GetString(10)
     };
 }

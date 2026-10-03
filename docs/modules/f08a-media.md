@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Module ID** | F08-A (slice of F08 "Media, downloads, video and file safety") |
-| **Status** | Backend and Angular implemented. SQL store not yet run against a real database. |
+| **Status** | Backend and Angular implemented. Object storage (section 14) on `feat/media/object-storage`. |
 | **Branch** | `feat/media/foundation` (backend and frontend) |
 | **Depends on** | F00, F03 (done), F05 (vendor membership) |
 | **Unblocks** | F09-A (category/manufacturer images), F10-A/F11 (product images), shop logo in the later `vendor-shop-settings` slice |
@@ -50,7 +50,7 @@ The vendor id of a member always comes from the session, never from the request.
 | Videos, 3D objects | Not needed for marketplace MVP | F08-B / F11 |
 | Private media, digital downloads, invoices | Needs authorised, non-public delivery. The `Visibility` column exists; only `public` is accepted. | F08-C |
 | Malware scanning, EXIF stripping | Needs a scanner integration | F08-B |
-| External object storage (Azure Blob, S3, CDN) | Interface is ready; provider work later | F28 |
+| External object storage (Azure Blob, CDN) | S3-compatible storage (MinIO) is done, see section 14; Azure Blob and a CDN in front are later | F28 |
 | Per-shop storage quota, upload rate limit | Needs product decision | F08-B |
 | Orphan cleanup job (uploaded but never attached) | Needs background jobs | F29 |
 | Product picture mapping (`ProductPicture`) and ordering | Belongs with product images | F11 |
@@ -173,4 +173,101 @@ Run the migrator before starting the API. No existing data changes. Angular admi
 | Orphan cleanup; storage quotas | F29 / F08-B |
 | Product picture mapping | F11 |
 | Vendor logo editing by the shop itself | `vendor-shop-settings` (F05) |
-| Serving large files through the database is acceptable for small images only; move bytes to object storage before volume grows | F28 |
+| Copy existing database images to object storage (they keep working from SQL Server until then) | F28 |
+| Background cleanup of `MediaUpload` rows that were never completed | F29 |
+
+## 14. Object storage and direct uploads (F08-B)
+
+Image bytes can live in S3-compatible object storage (MinIO locally). Metadata, authorization and the image id stay in SQL Server, so pages keep using `/api/v1/media/{id}`.
+
+### Configuration
+
+| Key | Default | Notes |
+|---|---|---|
+| `Media:Storage:Provider` | `Database` | `Database` keeps bytes in `MediaAssetBinary`; `S3` uses object storage |
+| `Media:Storage:S3:Endpoint` | | Address the API uses, for example `http://localhost:9000` |
+| `Media:Storage:S3:PublicEndpoint` | `Endpoint` | Address browsers use. Presigned posts are signed for this host |
+| `Media:Storage:S3:Bucket` | `nomori-media` | |
+| `Media:Storage:S3:Region` | `us-east-1` | Set so the SDK signs without asking the server |
+| `Media:Storage:S3:AccessKey`, `SecretKey` | | User secrets or environment variables only |
+| `Media:Storage:S3:UploadUrlLifetimeMinutes` | `10` | 1 to 60 |
+| `Media:Storage:S3:RedirectCacheSeconds` | `86400` | Cache lifetime of the `302` from `/api/v1/media/{id}` |
+
+Local setup:
+
+```powershell
+docker compose -f infra/docker-compose.yml up -d
+dotnet user-secrets --project src/Nomori.Marketplace.Api set "Media:Storage:Provider" "S3"
+dotnet user-secrets --project src/Nomori.Marketplace.Api set "Media:Storage:S3:Endpoint" "http://localhost:9000"
+dotnet user-secrets --project src/Nomori.Marketplace.Api set "Media:Storage:S3:AccessKey" "nomori-api"
+dotnet user-secrets --project src/Nomori.Marketplace.Api set "Media:Storage:S3:SecretKey" "nomori-api-dev-only"
+```
+
+`minio-init` creates the bucket, makes only `public/` anonymously readable, expires `pending/` after one day, and creates the `nomori-api` user with access to this bucket only. CORS allows `http://localhost:4200`. The compose file uses the `pgsty/minio` build because MinIO stopped publishing community images.
+
+### Bucket layout
+
+| Prefix | Content | Read access |
+|---|---|---|
+| `pending/{uploadId}` | Bytes posted by a browser, not yet validated | None (deleted after completion, expired after 1 day) |
+| `public/{purpose}/{yyyy}/{MM}/{random}.{ext}` | Validated images | Anonymous, `Cache-Control: public, max-age=31536000, immutable` |
+
+Keys are never reused, so the long cache lifetime is safe.
+
+### Direct upload flow
+
+```text
+Browser                      API                                   Object storage
+  | POST /media/uploads        |                                        |
+  | {purpose, vendorId, size}  | authorize (section 2), check size      |
+  |                            | MediaUpload row, presigned POST:       |
+  |<-- {uploadId, url, fields} |   key = pending/{id}, 1..size bytes    |
+  | POST url (fields + file) --------------------------------------------> 204
+  | POST /media/uploads/{id}/complete                                   |
+  |                            | owner and expiry check, re-authorize   |
+  |                            | read bytes, size + signature check --->|
+  |                            | put public/... with sniffed type ----->|
+  |                            | delete pending/{id}, insert MediaAsset |
+  |<-- 201 MediaResponse       |                                        |
+```
+
+- The policy admits one key and at most the announced size. Storage refuses other keys (`403`) and larger bodies (`400 EntityTooLarge`).
+- Completion is idempotent: a retried request returns the same asset. If two requests race, the first to link the upload wins and the other removes its copy.
+- Completion stays open 30 minutes after the presigned post expires; after that it returns `409 media.upload_expired`.
+- Only the account that started an upload can complete it; anyone else gets `404`. Authorization is checked again, so a member who left the shop is refused.
+- Bytes that fail validation are deleted from `pending/` straight away.
+- `POST /api/v1/media` (multipart) still works with either provider. With `S3` it stores the validated bytes in `public/`.
+
+### API additions
+
+| # | Method | Route | Who | CSRF |
+|---|---|---|---|---|
+| 4 | `POST` | `/api/v1/media/uploads` (`{ purpose, vendorId?, sizeBytes }`) | per section 2 | yes |
+| 5 | `POST` | `/api/v1/media/uploads/{id}/complete` | the account that created the upload | yes |
+
+`GET /api/v1/media/{id}` returns `302` to the public object URL for object storage images (`Cache-Control: public, max-age=86400`), and serves database images as before.
+
+| Status | When |
+|---|---|
+| `409` `media.direct_upload_unavailable` | Provider is `Database`; clients fall back to `POST /api/v1/media` |
+| `409` `media.upload_expired` | Completion more than 30 minutes after the presigned post expired |
+| `400` (`errors.file`) | Size out of range, nothing uploaded yet, or not a JPEG/PNG/GIF/WebP signature |
+
+### Data model
+
+Migration `202610130001 MediaObjectStorageMigration`:
+
+- `MediaAsset.StorageProvider int not null default 0` (`0` database, `1` object storage) and `MediaAsset.StorageKey nvarchar(400) null`.
+- `MediaUpload`: `Id uniqueidentifier` PK, `Purpose`, `VendorId`, `CustomerId` (FK `Customer`), `ObjectKey`, `ExpiresOnUtc`, `CreatedOnUtc`, `MediaAssetId` (FK `MediaAsset`, `ON DELETE SET NULL`).
+
+Existing assets keep `StorageProvider = 0` and are still served from SQL Server, whichever provider is configured.
+
+### Angular
+
+`MediaApiService.upload()` keeps its signature. It creates the upload, posts the file to storage with an `HttpClient` that bypasses the interceptors (no CSRF header, no cookies to another origin), and completes it. On `409 media.direct_upload_unavailable` it falls back to the multipart upload. A storage `EntityTooLarge` is reported as status `413`.
+
+### Tests
+
+- Unit (`MediaServiceTests`): unavailable with the database provider; authorization and size checks on create; the policy size; completion copying to a public key with the sniffed type; idempotency; another caller; a missing file; bad bytes; expiry; lost shop membership; multipart upload and delete with object storage.
+- Angular (`media-api.service.spec.ts`): direct flow, fallback, `EntityTooLarge` to `413`, API validation errors passed through.
+- Manual, against MinIO: presigned POST accepted; oversize body and changed key refused; `pending/` not public; `public/` served as `image/png` with the immutable cache header; CORS preflight from `http://localhost:4200`; `302` from `/api/v1/media/{id}`; SQL stores round trip.

@@ -110,7 +110,7 @@ internal sealed class FakeMediaStore : Nomori.Marketplace.Core.Media.IMediaStore
     public Dictionary<int, Nomori.Marketplace.Core.Media.MediaAsset> Assets { get; } = [];
     public HashSet<int> Referenced { get; } = [];
 
-    public Task<int> InsertAsync(Nomori.Marketplace.Core.Media.MediaAsset asset, byte[] data, CancellationToken cancellationToken)
+    public Task<int> InsertAsync(Nomori.Marketplace.Core.Media.MediaAsset asset, byte[]? data, CancellationToken cancellationToken)
     {
         asset.Id = nextId++;
         Assets[asset.Id] = asset;

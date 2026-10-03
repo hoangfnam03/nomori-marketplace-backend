@@ -66,6 +66,19 @@ builder.Services.AddOptions<MediaOptions>()
     .Bind(builder.Configuration.GetSection(MediaOptions.SectionName))
     .Validate(options => options.MaxUploadBytes is > 0 and <= 20 * 1024 * 1024, "Media:MaxUploadBytes must be between 1 byte and 20 MiB.")
     .ValidateOnStart();
+builder.Services.AddOptions<MediaStorageOptions>()
+    .Bind(builder.Configuration.GetSection(MediaStorageOptions.SectionName))
+    .Validate(options => options.UsesObjectStorage || string.Equals(options.Provider, "Database", StringComparison.OrdinalIgnoreCase),
+        "Media:Storage:Provider must be Database or S3.")
+    .Validate(options => !options.UsesObjectStorage
+        || (Uri.TryCreate(options.S3.Endpoint, UriKind.Absolute, out _)
+            && (string.IsNullOrWhiteSpace(options.S3.PublicEndpoint) || Uri.TryCreate(options.S3.PublicEndpoint, UriKind.Absolute, out _))
+            && !string.IsNullOrWhiteSpace(options.S3.Bucket)
+            && !string.IsNullOrWhiteSpace(options.S3.AccessKey)
+            && !string.IsNullOrWhiteSpace(options.S3.SecretKey)
+            && options.S3.UploadUrlLifetimeMinutes is > 0 and <= 60),
+        "Media:Storage:S3 needs absolute Endpoint (and PublicEndpoint if set), Bucket, AccessKey, SecretKey and UploadUrlLifetimeMinutes between 1 and 60.")
+    .ValidateOnStart();
 builder.Services.AddOptions<VendorOptions>()
     .Bind(builder.Configuration.GetSection(VendorOptions.SectionName))
     .Validate(options => options.MaxMembersPerVendor >= 1, "Vendor:MaxMembersPerVendor must be at least 1.")
@@ -102,7 +115,7 @@ builder.Services.AddOpenApi(options =>
             "/api/v1/admin/authorization/customers/{customerId}/roles",
             "/api/v1/customer/profile"
             ,"/api/v1/customer/addresses", "/api/v1/customer/attributes", "/api/v1/customer/email-change/request"
-            ,"/api/v1/media", "/api/v1/media/{id}", "/api/v1/vendors/{vendorId}/products", "/api/v1/vendors/{vendorId}/products/{id}", "/api/v1/admin/catalog/products/{id}/transfer", "/api/v1/admin/catalog/products/{id}/hide", "/api/v1/admin/catalog/products/{id}/unhide", "/api/v1/vendors/{vendorId}/products/{id}/status", "/api/v1/vendors/{vendorId}/products/{id}/review-request", "/api/v1/vendor-applications", "/api/v1/vendor-applications/{id}", "/api/v1/vendor-applications/{id}/status",
+            ,"/api/v1/media", "/api/v1/media/{id}", "/api/v1/media/uploads", "/api/v1/media/uploads/{id}/complete", "/api/v1/vendors/{vendorId}/products", "/api/v1/vendors/{vendorId}/products/{id}", "/api/v1/admin/catalog/products/{id}/transfer", "/api/v1/admin/catalog/products/{id}/hide", "/api/v1/admin/catalog/products/{id}/unhide", "/api/v1/vendors/{vendorId}/products/{id}/status", "/api/v1/vendors/{vendorId}/products/{id}/review-request", "/api/v1/vendor-applications", "/api/v1/vendor-applications/{id}", "/api/v1/vendor-applications/{id}/status",
             "/api/v1/vendors/{id}", "/api/v1/vendors/{id}/members", "/api/v1/vendors/{id}/members/{customerId}",
             "/api/v1/vendors/{id}/members/{customerId}/setup-email", "/api/v1/vendors/{id}/notes", "/api/v1/vendors/{id}/notes/{noteId}"
         };

@@ -1,0 +1,62 @@
+# Local object storage for media (F08-B). Start with:  docker compose -f infra/docker-compose.yml up -d
+# S3 API: http://localhost:9000   Console: http://localhost:9001
+# Images: the pgsty build of MinIO (upstream stopped publishing community images in 2025).
+# The API connects with the nomori-api access key created by minio-init, never with the root account.
+name: nomori
+
+services:
+  minio:
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-nomori-root}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-nomori-root-dev-only}
+      # The browser posts files straight to MinIO from the Angular dev server.
+      MINIO_API_CORS_ALLOW_ORIGIN: ${MINIO_CORS_ORIGIN:-http://localhost:4200}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # One-shot setup; safe to run again.
+  minio-init:
+    image: pgsty/mc:RELEASE.2026-09-16T00-00-00Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-nomori-root}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-nomori-root-dev-only}
+      MEDIA_BUCKET: ${MEDIA_BUCKET:-nomori-media}
+      MEDIA_ACCESS_KEY: ${MEDIA_ACCESS_KEY:-nomori-api}
+      MEDIA_SECRET_KEY: ${MEDIA_SECRET_KEY:-nomori-api-dev-only}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
+        mc mb --ignore-existing "local/$$MEDIA_BUCKET"
+        # Validated images are public; uploads waiting for validation are not.
+        mc anonymous set download "local/$$MEDIA_BUCKET/public"
+        # Uploads that were never completed disappear after a day.
+        echo '{"Rules":[{"ID":"expire-pending","Status":"Enabled","Filter":{"Prefix":"pending/"},"Expiration":{"Days":1}}]}' \
+          | mc ilm import "local/$$MEDIA_BUCKET"
+        # ListBucket lets the API tell a missing object (404) from a forbidden one; the SDK also checks the bucket first.
+        cat > /tmp/nomori-api.json <<EOF
+        {"Version":"2012-10-17","Statement":[
+          {"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","s3:DeleteObject"],"Resource":["arn:aws:s3:::$$MEDIA_BUCKET/*"]},
+          {"Effect":"Allow","Action":["s3:ListBucket","s3:GetBucketLocation"],"Resource":["arn:aws:s3:::$$MEDIA_BUCKET"]}]}
+        EOF
+        mc admin policy create local nomori-api /tmp/nomori-api.json
+        mc admin user add local "$$MEDIA_ACCESS_KEY" "$$MEDIA_SECRET_KEY"
+        mc admin policy attach local nomori-api --user "$$MEDIA_ACCESS_KEY" || true
+        echo "MinIO ready: bucket $$MEDIA_BUCKET, access key $$MEDIA_ACCESS_KEY"
+
+volumes:
+  minio-data:

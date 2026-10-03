@@ -21,14 +21,88 @@ public sealed class MediaServiceTests
     private sealed class Fixture
     {
         public FakeMediaStore Store { get; } = new();
+        public FakeUploadStore Uploads { get; } = new();
+        public FakeObjectStorage Objects { get; } = new();
         public FakeVendorStore Vendors { get; } = new();
         public RecordingAuditLog Audit { get; } = new();
+        public MutableClock Clock { get; } = new();
         public int MaxBytes { get; set; } = 1024;
 
-        public Fixture() => Vendors.Vendors.Add(new Vendor { Id = 5, Name = "Shop" });
+        public Fixture(bool objectStorage = false)
+        {
+            Vendors.Vendors.Add(new Vendor { Id = 5, Name = "Shop" });
+            Objects.IsEnabled = objectStorage;
+        }
 
-        public MediaService Create() => new(Store, Vendors, Audit, new TestClock(), Options.Create(new MediaOptions { MaxUploadBytes = MaxBytes }));
+        public MediaService Create() => new(Store, Uploads, Objects, Vendors, Audit, Clock,
+            Options.Create(new MediaOptions { MaxUploadBytes = MaxBytes }),
+            Options.Create(new MediaStorageOptions { Provider = Objects.IsEnabled ? "S3" : "Database", S3 = new MediaS3Options { UploadUrlLifetimeMinutes = 10 } }),
+            NullLog<MediaService>.Instance);
     }
+
+    private sealed class MutableClock : Nomori.Marketplace.Core.Time.IClock
+    {
+        public DateTime UtcNow { get; set; } = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+    }
+
+    private sealed class FakeUploadStore : IMediaUploadStore
+    {
+        public Dictionary<Guid, MediaUpload> Uploads { get; } = [];
+
+        public Task InsertAsync(MediaUpload upload, CancellationToken cancellationToken)
+        {
+            Uploads[upload.Id] = upload;
+            return Task.CompletedTask;
+        }
+
+        public Task<MediaUpload?> GetAsync(Guid id, CancellationToken cancellationToken) => Task.FromResult(Uploads.GetValueOrDefault(id));
+
+        public Task<bool> MarkCompletedAsync(Guid id, int mediaAssetId, CancellationToken cancellationToken)
+        {
+            if (Uploads[id].MediaAssetId is not null) return Task.FromResult(false);
+            Uploads[id].MediaAssetId = mediaAssetId;
+            return Task.FromResult(true);
+        }
+    }
+
+    private sealed class FakeObjectStorage : IMediaObjectStorage
+    {
+        public bool IsEnabled { get; set; }
+        public Dictionary<string, (byte[] Data, string ContentType)> Objects { get; } = [];
+        public long LastPolicyMaxBytes { get; private set; }
+
+        public Task<(string Url, IReadOnlyDictionary<string, string> Fields)> CreatePresignedPostAsync(string objectKey, long maxBytes, DateTime expiresOnUtc)
+        {
+            LastPolicyMaxBytes = maxBytes;
+            return Task.FromResult<(string, IReadOnlyDictionary<string, string>)>(
+                ("http://minio.test/bucket", new Dictionary<string, string> { ["key"] = objectKey, ["policy"] = "p" }));
+        }
+
+        public Task<StoredObject?> ReadAsync(string objectKey, int maxBytes, CancellationToken cancellationToken) =>
+            Task.FromResult(Objects.TryGetValue(objectKey, out var o)
+                ? new StoredObject(o.Data.Length, o.Data.Length > maxBytes ? null : o.Data)
+                : null);
+
+        public Task PutAsync(string objectKey, byte[] data, string contentType, CancellationToken cancellationToken)
+        {
+            Objects[objectKey] = (data, contentType);
+            return Task.CompletedTask;
+        }
+
+        public Task DeleteAsync(string objectKey, CancellationToken cancellationToken)
+        {
+            Objects.Remove(objectKey);
+            return Task.CompletedTask;
+        }
+
+        public string GetPublicUrl(string objectKey) => $"http://minio.test/bucket/{objectKey}";
+
+        /// <summary>What the browser does with the presigned POST.</summary>
+        public void BrowserPosts(MediaUploadTicket ticket, byte[] data) => Objects[ticket.Fields["key"]] = (data, "application/octet-stream");
+    }
+
+    private static async Task<MediaUploadTicket> StartAsync(MediaService service, MediaPurpose purpose, MediaCaller caller, long size) =>
+        (await service.CreateUploadAsync(new CreateMediaUploadCommand(purpose, null, size), caller, CancellationToken.None)).Value!;
 
     [Theory]
     [MemberData(nameof(Signatures))]
@@ -176,5 +250,116 @@ public sealed class MediaServiceTests
         Assert.False(await Valid(-1, MediaPurpose.Category, null));
         Assert.True(await Valid(logo, MediaPurpose.VendorLogo, 5));
         Assert.False(await Valid(logo, MediaPurpose.VendorLogo, 6));
+    }
+
+    [Fact]
+    public async Task DirectUploadIsUnavailableWithDatabaseStorage()
+    {
+        var service = new Fixture().Create();
+
+        Assert.Equal(MediaErrors.DirectUploadUnavailable,
+            (await service.CreateUploadAsync(new CreateMediaUploadCommand(MediaPurpose.Product, null, 10), ShopMember, CancellationToken.None)).ErrorCode);
+        Assert.Equal(MediaErrors.DirectUploadUnavailable, (await service.CompleteUploadAsync(Guid.NewGuid(), ShopMember, CancellationToken.None)).ErrorCode);
+    }
+
+    [Fact]
+    public async Task CreateUploadAuthorizesAndLimitsThePolicyToTheAnnouncedSize()
+    {
+        var f = new Fixture(objectStorage: true);
+        var service = f.Create();
+
+        Assert.Equal(MediaErrors.Forbidden,
+            (await service.CreateUploadAsync(new CreateMediaUploadCommand(MediaPurpose.Product, null, 10), Customer, CancellationToken.None)).ErrorCode);
+        Assert.Contains("file", (await service.CreateUploadAsync(new CreateMediaUploadCommand(MediaPurpose.Product, null, 0), ShopMember, CancellationToken.None)).Errors.Keys);
+        Assert.Contains("file", (await service.CreateUploadAsync(new CreateMediaUploadCommand(MediaPurpose.Product, null, 2000), ShopMember, CancellationToken.None)).Errors.Keys);
+        Assert.Contains("purpose", (await service.CreateUploadAsync(new CreateMediaUploadCommand(null, null, 10), ShopMember, CancellationToken.None)).Errors.Keys);
+        Assert.Empty(f.Uploads.Uploads);
+
+        var ticket = await StartAsync(service, MediaPurpose.Product, ShopMember, Png.Length);
+        var upload = f.Uploads.Uploads[ticket.UploadId];
+        Assert.Equal($"pending/{ticket.UploadId:N}", upload.ObjectKey);
+        Assert.Equal(5, upload.VendorId);
+        Assert.Equal(f.Clock.UtcNow.AddMinutes(10), ticket.ExpiresOnUtc);
+        Assert.Equal(Png.Length, f.Objects.LastPolicyMaxBytes);
+        Assert.Equal(Png.Length, ticket.MaxBytes);
+    }
+
+    [Fact]
+    public async Task CompleteValidatesCopiesToPublicKeyAndIsIdempotent()
+    {
+        var f = new Fixture(objectStorage: true);
+        var service = f.Create();
+        var ticket = await StartAsync(service, MediaPurpose.Product, ShopMember, Png.Length);
+        f.Objects.BrowserPosts(ticket, Png);
+
+        var result = await service.CompleteUploadAsync(ticket.UploadId, ShopMember, CancellationToken.None);
+
+        Assert.True(result.Succeeded);
+        var asset = f.Store.Assets[result.Value!.Id];
+        Assert.Equal(MediaStorageProvider.ObjectStorage, asset.StorageProvider);
+        Assert.StartsWith("public/product/2026/01/", asset.StorageKey);
+        Assert.EndsWith(".png", asset.StorageKey);
+        Assert.Equal("image/png", f.Objects.Objects[asset.StorageKey!].ContentType);
+        Assert.Equal(5, asset.VendorId);
+        Assert.DoesNotContain(f.Uploads.Uploads[ticket.UploadId].ObjectKey, f.Objects.Objects.Keys);
+        Assert.Contains("media.uploaded", f.Audit.Events);
+        Assert.Equal($"http://minio.test/bucket/{asset.StorageKey}", service.GetPublicUrl(asset));
+
+        var again = await service.CompleteUploadAsync(ticket.UploadId, ShopMember, CancellationToken.None);
+        Assert.Equal(asset.Id, again.Value!.Id);
+        Assert.Single(f.Store.Assets);
+    }
+
+    [Fact]
+    public async Task CompleteRejectsOtherCallersMissingBadAndExpiredFiles()
+    {
+        var f = new Fixture(objectStorage: true);
+        var service = f.Create();
+
+        var ticket = await StartAsync(service, MediaPurpose.Product, ShopMember, 20);
+        Assert.Equal(MediaErrors.NotFound, (await service.CompleteUploadAsync(ticket.UploadId, OtherShopMember, CancellationToken.None)).ErrorCode);
+        Assert.Equal(MediaErrors.NotFound, (await service.CompleteUploadAsync(Guid.NewGuid(), ShopMember, CancellationToken.None)).ErrorCode);
+        Assert.Contains("file", (await service.CompleteUploadAsync(ticket.UploadId, ShopMember, CancellationToken.None)).Errors.Keys);
+
+        f.Objects.BrowserPosts(ticket, "<svg onload=alert(1)/>"u8.ToArray());
+        Assert.Contains("file", (await service.CompleteUploadAsync(ticket.UploadId, ShopMember, CancellationToken.None)).Errors.Keys);
+        Assert.Empty(f.Objects.Objects);
+
+        var late = await StartAsync(service, MediaPurpose.Product, ShopMember, Png.Length);
+        f.Objects.BrowserPosts(late, Png);
+        f.Clock.UtcNow = late.ExpiresOnUtc.AddHours(1);
+        Assert.Equal(MediaErrors.UploadExpired, (await service.CompleteUploadAsync(late.UploadId, ShopMember, CancellationToken.None)).ErrorCode);
+
+        // A member who left the shop can no longer complete an upload they started for it.
+        f.Clock.UtcNow = late.ExpiresOnUtc;
+        var leftShop = ShopMember with { MemberVendorId = null };
+        Assert.Equal(MediaErrors.Forbidden, (await service.CompleteUploadAsync(late.UploadId, leftShop, CancellationToken.None)).ErrorCode);
+        Assert.Empty(f.Store.Assets);
+    }
+
+    [Fact]
+    public async Task MultipartUploadAndDeleteUseObjectStorageWhenEnabled()
+    {
+        var f = new Fixture(objectStorage: true);
+        var service = f.Create();
+
+        var asset = (await service.UploadAsync(new UploadMediaCommand(MediaPurpose.Category, null, Jpeg), CatalogAdmin, CancellationToken.None)).Value!;
+        Assert.Equal(MediaStorageProvider.ObjectStorage, asset.StorageProvider);
+        Assert.StartsWith("public/category/", asset.StorageKey);
+        Assert.Equal("image/jpeg", f.Objects.Objects[asset.StorageKey!].ContentType);
+
+        Assert.True((await service.DeleteAsync(asset.Id, CatalogAdmin, CancellationToken.None)).Succeeded);
+        Assert.Empty(f.Objects.Objects);
+    }
+
+    [Fact]
+    public async Task DatabaseAssetsHaveNoPublicObjectUrl()
+    {
+        var service = new Fixture().Create();
+        var asset = (await service.UploadAsync(new UploadMediaCommand(MediaPurpose.Category, null, Png), CatalogAdmin, CancellationToken.None)).Value!;
+
+        Assert.Equal(MediaStorageProvider.Database, asset.StorageProvider);
+        Assert.Null(asset.StorageKey);
+        Assert.Null(service.GetPublicUrl(asset));
     }
 }
