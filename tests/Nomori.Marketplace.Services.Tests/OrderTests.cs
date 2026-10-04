@@ -14,7 +14,7 @@ public sealed class OrderTests
     private const int Seller = 10;
     private const int Admin = 1;
 
-    private sealed class FakeOrderStore : IOrderStore
+    internal sealed class FakeOrderStore : IOrderStore
     {
         private int nextOrderId = 1;
         private int nextShopOrderId = 1;
@@ -50,6 +50,9 @@ public sealed class OrderTests
         }
 
         public Task<Order?> GetOrderAsync(int id, CancellationToken cancellationToken) => Task.FromResult(Orders.FirstOrDefault(o => o.Id == id));
+
+        public Task<Order?> GetByPlacementKeyAsync(string placementKey, CancellationToken cancellationToken) =>
+            Task.FromResult(Orders.FirstOrDefault(o => o.PlacementKey == placementKey));
 
         public Task<ShopOrder?> GetShopOrderAsync(int id, CancellationToken cancellationToken)
         {
@@ -112,6 +115,7 @@ public sealed class OrderTests
     {
         public FakeOrderStore Store { get; } = new();
         public FakeVendorStore Vendors { get; } = new();
+        public FakeStockService Stock { get; } = new();
         public RecordingAuditLog Audit { get; } = new();
 
         public Fixture()
@@ -120,7 +124,7 @@ public sealed class OrderTests
             Vendors.Vendors.Add(new Vendor { Id = OtherShop, Name = "Tea Co", Active = true });
         }
 
-        public OrderService Create(int decimals = 2) => new(Store, Vendors, new FakePrimaryCurrency(decimals), Audit, new TestClock());
+        public OrderService Create(int decimals = 2) => new(Store, Vendors, new FakePrimaryCurrency(decimals), Stock, Audit, new TestClock());
 
         /// <summary>An order with one shop order per given shop, owned by the buyer.</summary>
         public async Task<Order> PlaceAsync(string key = "k1", int customer = Buyer, params int[] shops)
@@ -611,5 +615,114 @@ public sealed class OrderTests
         var newest = (await f.Create().GetOrdersAsync(new OrderListQuery(null, null, null, null, null, null, 1, 1), CancellationToken.None)).Items[0];
         Assert.Single((await f.Create().GetOrderAsync(newest.Id, CancellationToken.None)).Value!.Order.ShopOrders);
         Assert.Equal(CatalogErrors.NotFound, (await f.Create().GetOrderAsync(999, CancellationToken.None)).ErrorCode);
+    }
+
+    // ---- Stock back on cancel ----
+
+    [Theory]
+    [InlineData(ShopOrderStatus.Pending)]
+    [InlineData(ShopOrderStatus.Confirmed)]
+    public async Task CancellingBeforeShippingGivesTheStockBackOnce(ShopOrderStatus status)
+    {
+        var f = new Fixture();
+        var order = await f.PlaceAsync();
+        var shop = Move(order, Shop, status);
+
+        await f.Create().CancelAsShopAsync(Shop, shop.Id, "Out of stock", Seller, CancellationToken.None);
+        // A second cancel is refused by the status machine, so it cannot give the stock back again.
+        await f.Create().CancelAsShopAsync(Shop, shop.Id, "Again", Seller, CancellationToken.None);
+
+        Assert.Equal([(1, 2), (2, 1)], f.Stock.Returns.Select(r => (r.ProductId, r.Quantity)));
+        Assert.All(f.Stock.Returns, r => Assert.Equal(shop.Number, r.Reference));
+        Assert.DoesNotContain("order.restock_failed", f.Audit.Events);
+    }
+
+    [Fact]
+    public async Task EveryoneWhoCancelsBeforeShippingGivesTheStockBack()
+    {
+        var f = new Fixture();
+        var order = await f.PlaceAsync();
+
+        await f.Create().CancelAsCustomerAsync(Buyer, order.ShopOrders[0].Id, "Changed my mind", CancellationToken.None);
+        Move(order, OtherShop, ShopOrderStatus.Confirmed);
+        await f.Create().CancelAsAdminAsync(order.ShopOrders[1].Id, "Fraud check", Admin, CancellationToken.None);
+
+        Assert.Equal(4, f.Stock.Returns.Count);
+        Assert.Equal([order.ShopOrders[0].Number, order.ShopOrders[1].Number], f.Stock.Returns.Select(r => r.Reference).Distinct());
+    }
+
+    [Theory]
+    [InlineData(ShopOrderStatus.Shipped)]
+    [InlineData(ShopOrderStatus.Delivered)]
+    public async Task AnAdministratorCancelAfterShippingDoesNotGiveStockBack(ShopOrderStatus status)
+    {
+        var f = new Fixture();
+        var order = await f.PlaceAsync();
+        var shop = Move(order, Shop, status);
+
+        var result = await f.Create().CancelAsAdminAsync(shop.Id, "Lost parcel", Admin, CancellationToken.None);
+
+        Assert.True(result.Succeeded);
+        Assert.Empty(f.Stock.Returns);
+    }
+
+    [Fact]
+    public async Task AFailingStockReturnIsAuditedAndTheCancelStaysDone()
+    {
+        var f = new Fixture();
+        f.Stock.FailReturns = true;
+        var order = await f.PlaceAsync();
+        var shop = order.ShopOrders[0];
+
+        var result = await f.Create().CancelAsShopAsync(Shop, shop.Id, "Out of stock", Seller, CancellationToken.None);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(ShopOrderStatus.Cancelled, shop.Status);
+        Assert.Contains("order.restock_failed", f.Audit.Events);
+    }
+
+    [Fact]
+    public async Task ProductsWithoutStockTrackingGiveNothingBack()
+    {
+        var f = new Fixture();
+        f.Stock.Untracked.Add(1);
+        var order = await f.PlaceAsync();
+
+        await f.Create().CancelAsShopAsync(Shop, order.ShopOrders[0].Id, "Out of stock", Seller, CancellationToken.None);
+
+        Assert.Equal([2], f.Stock.Returns.Select(r => r.ProductId));
+    }
+
+    [Fact]
+    public async Task TheSystemCancelsOnlyThePendingShopOrdersOfAnOrder()
+    {
+        var f = new Fixture();
+        var order = await f.PlaceAsync();
+        Move(order, OtherShop, ShopOrderStatus.Confirmed);
+
+        var result = await f.Create().CancelAsSystemAsync(order.Id, "Payment failed", CancellationToken.None);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal([ShopOrderStatus.Cancelled, ShopOrderStatus.Confirmed], result.Value!.ShopOrders.Select(s => s.Status));
+        var entry = f.Store.History.Last();
+        Assert.Equal((OrderActor.System, null, "Payment failed"), (entry.Actor, entry.ActorCustomerId, entry.Note));
+        Assert.Equal(CatalogErrors.NotFound, (await f.Create().CancelAsSystemAsync(999, "x", CancellationToken.None)).ErrorCode);
+    }
+
+    [Fact]
+    public async Task AnOrderCanBeFoundByItsPlacementKey()
+    {
+        var f = new Fixture();
+        var order = await f.PlaceAsync("find-me");
+
+        Assert.Equal(order.Id, (await f.Create().FindByPlacementKeyAsync("find-me", CancellationToken.None))!.Id);
+        Assert.Null(await f.Create().FindByPlacementKeyAsync("nope", CancellationToken.None));
+    }
+
+    [Fact]
+    public void OnlyStatusesBeforeShippingReturnStock()
+    {
+        foreach (var status in Enum.GetValues<ShopOrderStatus>())
+            Assert.Equal(status is ShopOrderStatus.Pending or ShopOrderStatus.Confirmed, OrderRules.ReturnsStock(status));
     }
 }

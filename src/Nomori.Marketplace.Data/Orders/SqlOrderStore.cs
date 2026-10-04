@@ -230,6 +230,8 @@ public sealed class SqlOrderStore(IOptions<DatabaseOptions> options) : IOrderSto
         return await LoadOrderAsync(connection, "o.Id = @P", id, cancellationToken);
     }
 
+    public Task<Order?> GetByPlacementKeyAsync(string placementKey, CancellationToken cancellationToken) => GetByKeyAsync(placementKey, cancellationToken);
+
     private async Task<Order?> GetByKeyAsync(string placementKey, CancellationToken cancellationToken)
     {
         await using var connection = await OpenAsync(cancellationToken);

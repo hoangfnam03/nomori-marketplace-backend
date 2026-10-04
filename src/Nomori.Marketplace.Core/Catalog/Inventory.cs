@@ -78,6 +78,9 @@ public sealed record InventoryChange(InventoryOutcome Outcome, int OnHand = 0)
 public sealed record StockAdjustment(
     int ProductId, int? CombinationId, int Delta, string Reason, string? Reference, string? Note, int? ActorCustomerId);
 
+/// <summary>Units of one product (or combination) that go back to stock, for example when a shop order is cancelled.</summary>
+public sealed record StockReturnLine(int ProductId, int? CombinationId, int Quantity);
+
 public sealed record StockReservationRequest(
     string Reference, int ProductId, int? CombinationId, int Quantity, DateTime ExpiresOnUtc);
 
@@ -139,6 +142,12 @@ public interface IInventoryService
 
     /// <summary>Turns the held stock of a reference into a sale.</summary>
     Task<CatalogResult<bool>> CommitAsync(string reference, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Puts sold units back on hand and writes one ledger row per line (reason <see cref="StockReasons.Return"/>). Products that do not track inventory are skipped.
+    /// Succeeds only when every line was put back; the lines that could be are kept either way.
+    /// </summary>
+    Task<CatalogResult<bool>> ReturnToStockAsync(string reference, IReadOnlyList<StockReturnLine> lines, CancellationToken cancellationToken);
 
     // ---- Public ----
 

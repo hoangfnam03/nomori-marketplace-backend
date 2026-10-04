@@ -60,7 +60,7 @@ public sealed class ShippingTests
         public Task<CartView> AcceptPricesAsync(int customerId, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
-    private sealed class StubAddresses : ICustomerAccountDataService
+    internal sealed class StubAddresses : ICustomerAccountDataService
     {
         public List<CustomerAddress> Addresses { get; } = [];
 

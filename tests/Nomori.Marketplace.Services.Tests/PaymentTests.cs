@@ -10,7 +10,7 @@ public sealed class PaymentTests
     private const int Admin = 1;
     private const int Buyer = 100;
 
-    private sealed class FakePaymentStore : IPaymentStore
+    internal sealed class FakePaymentStore : IPaymentStore
     {
         private int nextId = 1;
 
@@ -77,7 +77,7 @@ public sealed class PaymentTests
     }
 
     /// <summary>A gateway that can be told to fail.</summary>
-    private sealed class FlakyGateway : IPaymentProvider
+    internal sealed class FlakyGateway : IPaymentProvider
     {
         public bool FailInitiate { get; set; }
         public bool FailCapture { get; set; }
