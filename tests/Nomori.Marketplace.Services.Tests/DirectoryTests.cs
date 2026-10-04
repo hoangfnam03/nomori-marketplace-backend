@@ -8,7 +8,7 @@ public sealed class DirectoryTests
 {
     private const int Admin = 1;
 
-    private sealed class FakeDirectoryStore : IDirectoryStore
+    internal sealed class FakeDirectoryStore : IDirectoryStore
     {
         private int nextCountryId = 1;
         private int nextStateId = 1;
