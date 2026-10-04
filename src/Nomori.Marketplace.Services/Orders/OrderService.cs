@@ -35,6 +35,12 @@ public sealed class OrderService(
         if (shops.Count is 0 or > OrderLimits.MaxShops) errors["shops"] = [$"An order has 1 to {OrderLimits.MaxShops} shops."];
         else if (shops.Select(s => s.VendorId).Distinct().Count() != shops.Count) errors["shops"] = ["A shop can appear only once."];
 
+        // A discount amount needs the code and the funding that explain it.
+        var discount = command.Discount;
+        if (shops.Any(x => x.DiscountAmount != 0m)
+            && (string.IsNullOrWhiteSpace(discount?.Code) || discount.Code.Trim().Length > 32 || discount.Funding is not ("platform" or "shop")))
+            errors["discount"] = ["A discount needs its code and who funds it (platform or shop)."];
+
         var vendors = new Dictionary<int, Vendor>();
         foreach (var shop in shops)
         {
@@ -66,16 +72,22 @@ public sealed class OrderService(
                 LineTotal = OrderRules.LineTotal(l.UnitPrice, l.Quantity, currency.DecimalPlaces)
             }).ToList();
             var subtotal = lines.Sum(l => l.LineTotal);
+            // The discount of a shop order never exceeds what the shop sold.
+            if (shop.DiscountAmount < 0 || shop.DiscountAmount > subtotal || !CurrencyRules.HasValidScale(shop.DiscountAmount, currency.DecimalPlaces))
+                return CatalogResult.Failure<Order>("discount", "The discount of a shop cannot be negative or more than its items.");
             order.ShopOrders.Add(new ShopOrder
             {
                 VendorId = shop.VendorId, ShopName = vendors[shop.VendorId].Name, Status = ShopOrderStatus.Pending, Subtotal = subtotal,
-                ShippingFee = shop.ShippingFee, Total = subtotal + shop.ShippingFee, ShippingMethodName = shop.ShippingMethodName!.Trim(),
+                ShippingFee = shop.ShippingFee, DiscountAmount = shop.DiscountAmount, DiscountFunding = shop.DiscountAmount > 0 ? discount!.Funding : null,
+                Total = subtotal - shop.DiscountAmount + shop.ShippingFee, ShippingMethodName = shop.ShippingMethodName!.Trim(),
                 ShippingRateId = shop.ShippingRateId, CreatedOnUtc = now, UpdatedOnUtc = now, Lines = lines
             });
         }
         order.Subtotal = order.ShopOrders.Sum(s => s.Subtotal);
         order.ShippingTotal = order.ShopOrders.Sum(s => s.ShippingFee);
-        order.Total = order.Subtotal + order.ShippingTotal;
+        order.DiscountTotal = order.ShopOrders.Sum(s => s.DiscountAmount);
+        order.DiscountCode = order.DiscountTotal > 0 ? discount!.Code!.Trim().ToUpperInvariant() : null;
+        order.Total = order.Subtotal - order.DiscountTotal + order.ShippingTotal;
 
         var (saved, created) = await store.InsertAsync(order, cancellationToken);
         if (!created)

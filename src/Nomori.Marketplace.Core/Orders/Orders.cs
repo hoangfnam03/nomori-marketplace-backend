@@ -67,7 +67,15 @@ public sealed class Order
     public string CurrencyCode { get; set; } = string.Empty;
     public decimal Subtotal { get; set; }
     public decimal ShippingTotal { get; set; }
+
+    /// <summary>What the discount code took off the items, over all shop orders. Shipping is never discounted.</summary>
+    public decimal DiscountTotal { get; set; }
+
+    public string? DiscountCode { get; set; }
+
+    /// <summary>Items minus the discount plus shipping.</summary>
     public decimal Total { get; set; }
+
     public string PaymentMethod { get; set; } = string.Empty;
     public string? CustomerNote { get; set; }
 
@@ -97,6 +105,13 @@ public sealed class ShopOrder
     public ShopOrderStatus Status { get; set; }
     public decimal Subtotal { get; set; }
     public decimal ShippingFee { get; set; }
+
+    /// <summary>The part of the order's discount that falls on this shop order.</summary>
+    public decimal DiscountAmount { get; set; }
+
+    /// <summary>Who bears <see cref="DiscountAmount"/>: <c>platform</c> or <c>shop</c>; null when there is no discount. Settlement reads it.</summary>
+    public string? DiscountFunding { get; set; }
+
     public decimal Total { get; set; }
     public string ShippingMethodName { get; set; } = string.Empty;
     public int? ShippingRateId { get; set; }
@@ -142,12 +157,15 @@ public sealed record NewOrderLine(
     int ProductId, int? CombinationId, string? Name, string? VariantLabel, string? Sku, int PictureId, int Quantity, decimal UnitPrice);
 
 public sealed record NewShopOrder(
-    int VendorId, string? ShippingMethodName, int? ShippingRateId, decimal ShippingFee, IReadOnlyList<NewOrderLine>? Lines);
+    int VendorId, string? ShippingMethodName, int? ShippingRateId, decimal ShippingFee, IReadOnlyList<NewOrderLine>? Lines, decimal DiscountAmount = 0m);
+
+/// <summary>The code behind the discount amounts of the shop orders, and who funds it (<c>platform</c> or <c>shop</c>).</summary>
+public sealed record NewOrderDiscount(string? Code, string? Funding);
 
 /// <summary>What checkout decided. Totals are not part of it: the service computes them.</summary>
 public sealed record NewOrderCommand(
     int CustomerId, string? PlacementKey, string? PaymentMethod, string? CustomerNote, NewOrderRecipient? Recipient,
-    IReadOnlyList<NewShopOrder>? Shops);
+    IReadOnlyList<NewShopOrder>? Shops, NewOrderDiscount? Discount = null);
 
 public sealed record ShipCommand(string? Carrier, string? TrackingNumber);
 

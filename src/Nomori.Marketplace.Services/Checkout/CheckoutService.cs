@@ -2,6 +2,7 @@ using Nomori.Marketplace.Core.Cart;
 using Nomori.Marketplace.Core.Catalog;
 using Nomori.Marketplace.Core.Checkout;
 using Nomori.Marketplace.Core.Customers;
+using Nomori.Marketplace.Core.Discounts;
 using Nomori.Marketplace.Core.Orders;
 using Nomori.Marketplace.Core.Payments;
 using Nomori.Marketplace.Core.Security;
@@ -19,12 +20,13 @@ public sealed class CheckoutService(
     IOrderService orderService,
     IInventoryService inventoryService,
     ICustomerAccountDataService addressService,
+    IDiscountService discountService,
     IAuditLogService auditLog) : ICheckoutService
 {
     /// <summary>Everything the preview and the placement both need, worked out once from the same inputs.</summary>
     private sealed record State(
         CartView Cart, CustomerAddress? Address, IReadOnlyList<CheckoutShopShipping> Shops, IReadOnlyList<PaymentMethodView> Methods,
-        PaymentMethodView? Method, IReadOnlyList<string> Problems, decimal? ShippingTotal);
+        PaymentMethodView? Method, IReadOnlyList<string> Problems, decimal? ShippingTotal, AppliedDiscount? Discount, string? CouponReason);
 
     /// <summary>A line as it will be sold: what to take from stock and what to write on the order.</summary>
     private sealed record SaleLine(int VendorId, NewOrderLine Line, bool Tracked);
@@ -34,10 +36,15 @@ public sealed class CheckoutService(
     public async Task<CheckoutPreview> PreviewAsync(int customerId, CheckoutChoices choices, CancellationToken cancellationToken)
     {
         var state = await BuildAsync(customerId, choices, cancellationToken);
-        var total = state.ShippingTotal is { } shipping ? state.Cart.Subtotal + shipping : (decimal?)null;
+        // Items minus the discount, plus shipping; the discount never touches shipping.
+        var discounted = state.Cart.Subtotal - (state.Discount?.Amount ?? 0m);
+        var total = state.ShippingTotal is { } shipping ? discounted + shipping : (decimal?)null;
+        var discount = state.Discount is { } applied
+            ? new CheckoutDiscount(applied.Discount.Code, applied.Discount.Name, applied.Discount.Funding, applied.Amount, applied.Split)
+            : null;
         return new CheckoutPreview(
             state.Cart, state.Address?.Id, state.Shops, state.Methods, state.Method?.SystemName, state.Cart.Subtotal, state.ShippingTotal, total,
-            state.Problems, state.Problems.Count == 0);
+            state.Problems, state.Problems.Count == 0, discount, state.CouponReason);
     }
 
     // ---- Place ----
@@ -57,7 +64,7 @@ public sealed class CheckoutService(
         if (await orderService.FindByPlacementKeyAsync(placementKey, cancellationToken) is { } earlier)
             return await ReplayAsync(earlier, request.PaymentMethod, cancellationToken);
 
-        var state = await BuildAsync(customerId, new CheckoutChoices(request.AddressId, request.ShippingChoices, request.PaymentMethod), cancellationToken);
+        var state = await BuildAsync(customerId, new CheckoutChoices(request.AddressId, request.ShippingChoices, request.PaymentMethod, request.CouponCode), cancellationToken);
 
         // Problems with the cart come first (409): the customer has to go back to the cart. Then what the customer chose (400).
         if (state.Problems.Contains(CheckoutProblems.CartEmpty) || state.Problems.Contains(CheckoutProblems.CartIssues))
@@ -65,7 +72,10 @@ public sealed class CheckoutService(
         if (state.Problems.Contains(CheckoutProblems.PricesChanged)) return CatalogResult.Error<PlacedOrder>(CheckoutErrors.PricesChanged);
 
         foreach (var problem in state.Problems.Where(p => !CheckoutRules.IsCartProblem(p)))
-            errors[CheckoutRules.FieldOf(problem)] = [CheckoutRules.MessageOf(problem)];
+        {
+            errors[CheckoutRules.FieldOf(problem)] =
+                [problem == CheckoutProblems.CouponInvalid ? DiscountRules.MessageOf(state.CouponReason) : CheckoutRules.MessageOf(problem)];
+        }
         if (!request.AcceptedTerms) errors["acceptedTerms"] = ["You have to accept the terms to place the order."];
         if (errors.Count > 0) return CatalogResult.Failure<PlacedOrder>(errors);
 
@@ -104,12 +114,22 @@ public sealed class CheckoutService(
         }
         var order = created.Value!;
 
+        // 2b. Use the code. The limits are checked again inside one transaction: someone may have taken the last use meanwhile.
+        if (state.Discount is { } discount
+            && await discountService.RedeemAsync(discount, customerId, order.Id, cancellationToken) != RedeemOutcome.Redeemed)
+        {
+            await orderService.CancelAsSystemAsync(order.Id, "Coupon no longer available", cancellationToken);
+            return CatalogResult.Error<PlacedOrder>(CheckoutErrors.CouponUnavailable);
+        }
+
         // 3. Make the payment for the total of the order. If the provider refuses, the order is cancelled and the stock goes back.
         var paid = await paymentService.CreateAsync(
             new CreatePaymentCommand(PaymentReferenceTypes.Order, order.Id, CheckoutRules.PaymentKey(order.Id), order.PaymentMethod, order.Total, customerId), cancellationToken);
         if (!paid.Succeeded)
         {
             await orderService.CancelAsSystemAsync(order.Id, "Payment failed", cancellationToken);
+            // The order that failed must not keep a use of the code.
+            await discountService.ReleaseAsync(order.Id, cancellationToken);
             return CatalogResult.Error<PlacedOrder>(CheckoutErrors.PaymentFailed);
         }
 
@@ -184,8 +204,18 @@ public sealed class CheckoutService(
         // A choice for a shop that is not in the cart is a mistake of the caller, not something to ignore.
         if (choiceList.Any(c => cart.Groups.All(g => g.VendorId != c.VendorId))) problems.Add(CheckoutProblems.ShippingInvalid);
 
+        // A code is checked against what each shop of the cart sells; it is optional, but a code that is typed has to work.
+        AppliedDiscount? discount = null;
+        string? couponReason = null;
+        if (!string.IsNullOrWhiteSpace(choices.CouponCode) && cart.Groups.Count > 0)
+        {
+            var check = await discountService.CheckCouponAsync(choices.CouponCode, customerId, cart.Groups.ToDictionary(g => g.VendorId, g => g.Subtotal), cancellationToken);
+            (discount, couponReason) = (check.Applied, check.Reason);
+            if (discount is null) problems.Add(CheckoutProblems.CouponInvalid);
+        }
+
         decimal? shippingTotal = quote is not null && shops.Count > 0 && shops.All(s => s.Chosen is not null) ? shops.Sum(s => s.Chosen!.Fee) : null;
-        return new State(cart, address, shops, methods, method, problems.Distinct().ToList(), shippingTotal);
+        return new State(cart, address, shops, methods, method, problems.Distinct().ToList(), shippingTotal, discount, couponReason);
     }
 
     /// <summary>Prices every line again and checks that it can be sold. Null lines mean the cart changed under us.</summary>
@@ -254,8 +284,10 @@ public sealed class CheckoutService(
 
         var shops = state.Shops.Select(shop => new NewShopOrder(
             shop.VendorId, shop.Chosen!.Name, shop.Chosen.RateId, shop.Chosen.Fee,
-            lines.Where(l => l.VendorId == shop.VendorId).Select(l => l.Line).ToList())).ToList();
+            lines.Where(l => l.VendorId == shop.VendorId).Select(l => l.Line).ToList(),
+            state.Discount?.Split.GetValueOrDefault(shop.VendorId) ?? 0m)).ToList();
 
-        return new NewOrderCommand(customerId, placementKey, state.Method!.SystemName, string.IsNullOrEmpty(note) ? null : note, recipient, shops);
+        var discount = state.Discount is { } applied ? new NewOrderDiscount(applied.Discount.Code, DiscountRules.ToWire(applied.Discount.Funding)) : null;
+        return new NewOrderCommand(customerId, placementKey, state.Method!.SystemName, string.IsNullOrEmpty(note) ? null : note, recipient, shops, discount);
     }
 }
