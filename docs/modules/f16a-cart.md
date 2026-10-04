@@ -52,7 +52,7 @@ There is no way to address another customer's cart: the customer id always comes
   - "Add to cart" works on the product page (quantity and chosen variant), and on cards for products without variants (a product with variants opens its page).
   - Guests are sent to sign in.
   - Header link "Cart (n)".
-  - Page `/storefront/cart`: lines grouped by shop, quantity editor, remove, issue badges, price-change notice with "Accept new prices", subtotal, and a disabled "Checkout" button that says checkout comes next.
+  - Page `/storefront/cart`: lines grouped by shop, quantity editor, remove, issue badges, price-change notice with "Accept new prices", subtotal, and a "Checkout" button (active when `canCheckout`; checkout is F17-A).
 
 ## 5. Explicit non-goals (deferred)
 

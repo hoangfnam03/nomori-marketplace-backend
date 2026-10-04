@@ -118,6 +118,29 @@ public sealed class InventoryService(
         return change.Succeeded ? CatalogResult.Success(true) : CatalogResult.Error<bool>(ToErrorCode(change.Outcome));
     }
 
+    public async Task<CatalogResult<bool>> ReturnToStockAsync(string reference, IReadOnlyList<StockReturnLine> lines, CancellationToken cancellationToken)
+    {
+        var trimmed = reference?.Trim();
+        if (string.IsNullOrEmpty(trimmed) || trimmed.Length > InventoryLimits.MaxReferenceLength)
+            return CatalogResult.Failure<bool>("reference", $"The reference must be 1 to {InventoryLimits.MaxReferenceLength} characters.");
+
+        var allBack = true;
+        foreach (var line in lines)
+        {
+            if (line.Quantity < 1 || line.Quantity > InventoryLimits.MaxDelta) { allBack = false; continue; }
+
+            // Nothing was taken from a product that has no stock limit, so nothing goes back.
+            var product = await productStore.GetAsync(line.ProductId, cancellationToken);
+            if (product is null) { allBack = false; continue; }
+            if (!product.TrackInventory) continue;
+
+            var change = await inventoryStore.AdjustAsync(
+                new StockAdjustment(line.ProductId, line.CombinationId, line.Quantity, StockReasons.Return, trimmed, null, null), clock.UtcNow, cancellationToken);
+            if (!change.Succeeded) allBack = false;
+        }
+        return allBack ? CatalogResult.Success(true) : CatalogResult.Error<bool>(CatalogErrors.NotFound);
+    }
+
     public Task<int> ReleaseAsync(string reference, CancellationToken cancellationToken) =>
         inventoryStore.ReleaseAsync(reference?.Trim() ?? string.Empty, clock.UtcNow, cancellationToken);
 

@@ -11,6 +11,7 @@ public sealed class OrderService(
     IOrderStore store,
     IVendorStore vendorStore,
     IPrimaryCurrencyProvider primaryCurrency,
+    IInventoryService inventory,
     IAuditLogService auditLog,
     IClock clock) : IOrderService
 {
@@ -88,6 +89,22 @@ public sealed class OrderService(
         await auditLog.WriteAsync("order.created", command.CustomerId, entityType: "Order", entityId: saved.Id,
             details: new { orderId = saved.Id, saved.Number, saved.Total, saved.CurrencyCode, shops = saved.ShopOrders.Count }, cancellationToken: cancellationToken);
         return CatalogResult.Success(saved);
+    }
+
+    public Task<Order?> FindByPlacementKeyAsync(string placementKey, CancellationToken cancellationToken) =>
+        store.GetByPlacementKeyAsync(placementKey, cancellationToken);
+
+    public async Task<CatalogResult<Order>> CancelAsSystemAsync(int orderId, string reason, CancellationToken cancellationToken)
+    {
+        var order = await store.GetOrderAsync(orderId, cancellationToken);
+        if (order is null) return CatalogResult.Error<Order>(CatalogErrors.NotFound);
+
+        foreach (var shopOrder in order.ShopOrders.Where(s => s.Status == ShopOrderStatus.Pending))
+        {
+            var shop = (await store.GetShopOrderAsync(shopOrder.Id, cancellationToken))!;
+            await CancelAsync(shop, OrderActor.System, null, reason, cancellationToken);
+        }
+        return CatalogResult.Success((await store.GetOrderAsync(orderId, cancellationToken))!);
     }
 
     // ---- Customers ----
@@ -212,7 +229,7 @@ public sealed class OrderService(
     }
 
     private async Task<CatalogResult<ShopOrderDetail>> CancelAsync(
-        ShopOrder shopOrder, OrderActor actor, int actorCustomerId, string? reason, CancellationToken cancellationToken)
+        ShopOrder shopOrder, OrderActor actor, int? actorCustomerId, string? reason, CancellationToken cancellationToken)
     {
         var text = reason?.Trim() ?? string.Empty;
         if (text.Length is 0 or > OrderLimits.MaxReasonLength)
@@ -225,16 +242,31 @@ public sealed class OrderService(
         ShopOrder shopOrder, OrderAction action, OrderActor actor, int? actorCustomerId, string? note, string? carrier, string? tracking,
         CancellationToken cancellationToken, string? cancelReason = null)
     {
-        if (OrderRules.Transition(shopOrder.Status, action, actor) is not { } target) return CatalogResult.Error<ShopOrderDetail>(OrderErrors.InvalidTransition);
+        var from = shopOrder.Status;
+        if (OrderRules.Transition(from, action, actor) is not { } target) return CatalogResult.Error<ShopOrderDetail>(OrderErrors.InvalidTransition);
 
         var changed = await store.TryTransitionAsync(
-            new ShopOrderTransition(shopOrder.Id, shopOrder.Status, target, actor, actorCustomerId, note, carrier, tracking, cancelReason, clock.UtcNow), cancellationToken);
+            new ShopOrderTransition(shopOrder.Id, from, target, actor, actorCustomerId, note, carrier, tracking, cancelReason, clock.UtcNow), cancellationToken);
         if (!changed) return CatalogResult.Error<ShopOrderDetail>(OrderErrors.InvalidTransition);
 
         await auditLog.WriteAsync("order.shop_order_changed", actorCustomerId, entityType: "ShopOrder", entityId: shopOrder.Id,
-            details: new { shopOrderId = shopOrder.Id, shopOrder.OrderId, from = OrderRules.ToWire(shopOrder.Status), to = OrderRules.ToWire(target), actor = OrderRules.ToWire(actor) },
+            details: new { shopOrderId = shopOrder.Id, shopOrder.OrderId, from = OrderRules.ToWire(from), to = OrderRules.ToWire(target), actor = OrderRules.ToWire(actor) },
             cancellationToken: cancellationToken);
+
+        // The change above happens once (compare-and-set), so the stock goes back once too.
+        if (action == OrderAction.Cancel && OrderRules.ReturnsStock(from)) await ReturnStockAsync(shopOrder, actorCustomerId, cancellationToken);
         return CatalogResult.Success(await DetailAsync((await store.GetShopOrderAsync(shopOrder.Id, cancellationToken))!, cancellationToken));
+    }
+
+    private async Task ReturnStockAsync(ShopOrder shopOrder, int? actorCustomerId, CancellationToken cancellationToken)
+    {
+        var lines = shopOrder.Lines.Select(l => new StockReturnLine(l.ProductId, l.CombinationId, l.Quantity)).ToList();
+        var back = await inventory.ReturnToStockAsync(shopOrder.Number, lines, cancellationToken);
+
+        // The cancel stays done; a stock return that did not work is for people to look at.
+        if (!back.Succeeded)
+            await auditLog.WriteAsync("order.restock_failed", actorCustomerId, entityType: "ShopOrder", entityId: shopOrder.Id,
+                details: new { shopOrderId = shopOrder.Id, shopOrder.Number }, cancellationToken: cancellationToken);
     }
 
     private async Task<ShopOrderDetail> DetailAsync(ShopOrder shopOrder, CancellationToken cancellationToken) =>

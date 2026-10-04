@@ -186,6 +186,12 @@ public static class OrderRules
         _ => null
     };
 
+    /// <summary>
+    /// A shop order cancelled from this status gives its stock back: nothing has left the shop yet. Once it is shipped the goods are out,
+    /// and taking them back is a return (F21).
+    /// </summary>
+    public static bool ReturnsStock(ShopOrderStatus cancelledFrom) => cancelledFrom is ShopOrderStatus.Pending or ShopOrderStatus.Confirmed;
+
     /// <summary>Processing while a shop order is not finished; otherwise completed when at least one was completed, cancelled when none was.</summary>
     public static OverallOrderStatus Overall(IEnumerable<ShopOrderStatus> statuses)
     {
@@ -265,6 +271,9 @@ public interface IOrderStore
     /// <summary>The order with its shop orders and their lines.</summary>
     Task<Order?> GetOrderAsync(int id, CancellationToken cancellationToken);
 
+    /// <summary>The order made with a placement key, with its shop orders and lines; null when no order used it.</summary>
+    Task<Order?> GetByPlacementKeyAsync(string placementKey, CancellationToken cancellationToken);
+
     /// <summary>A shop order with its lines and its order header.</summary>
     Task<ShopOrder?> GetShopOrderAsync(int id, CancellationToken cancellationToken);
 
@@ -291,6 +300,12 @@ public interface IOrderService
 
     /// <summary>Creates the order from what checkout decided and computes every total. The same placement key returns the same order.</summary>
     Task<CatalogResult<Order>> CreateAsync(NewOrderCommand command, CancellationToken cancellationToken);
+
+    /// <summary>The order that was made with this placement key, if any.</summary>
+    Task<Order?> FindByPlacementKeyAsync(string placementKey, CancellationToken cancellationToken);
+
+    /// <summary>Cancels every shop order of the order that is still pending, as the system (checkout does it when the payment fails). Stock goes back.</summary>
+    Task<CatalogResult<Order>> CancelAsSystemAsync(int orderId, string reason, CancellationToken cancellationToken);
 
     // ---- Customers ----
 
