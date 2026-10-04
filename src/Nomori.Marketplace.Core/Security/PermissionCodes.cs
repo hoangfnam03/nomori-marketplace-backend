@@ -30,6 +30,9 @@ public static class PermissionCodes
     /// <summary>Platform settings such as currencies (F07).</summary>
     public const string SettingsManage = "settings.manage";
 
+    /// <summary>Capture, void and refund payments, and choose the payment methods (F19).</summary>
+    public const string PaymentsManage = "payments.manage";
+
     public const string VendorManage = "vendor.manage";
     public const string VendorPortal = "vendor.portal";
 }

@@ -5,6 +5,7 @@ using Nomori.Marketplace.Api.Configuration;
 using Nomori.Marketplace.Api.Health;
 using Nomori.Marketplace.Api.Middleware;
 using Nomori.Marketplace.Core.Cart;
+using Nomori.Marketplace.Core.Payments;
 using Nomori.Marketplace.Core.Shipping;
 using Nomori.Marketplace.Core.Catalog;
 using Nomori.Marketplace.Core.Configuration;
@@ -18,6 +19,7 @@ using Nomori.Marketplace.Core.Vendors;
 using Nomori.Marketplace.Data.Configuration;
 using Nomori.Marketplace.Services.Authentication;
 using Nomori.Marketplace.Services.Cart;
+using Nomori.Marketplace.Services.Payments;
 using Nomori.Marketplace.Services.Shipping;
 using Nomori.Marketplace.Services.Catalog;
 using Nomori.Marketplace.Services.Customers;
@@ -52,6 +54,10 @@ builder.Services.AddRateLimiter(options =>
     options.AddPolicy("auth", context => RateLimitPartition.GetFixedWindowLimiter(
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions { PermitLimit = 20, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+    // Gateways call from a few addresses and retry, so the limit is higher than for people; the signature is what protects the route.
+    options.AddPolicy("callbacks", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 120, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
 });
 
 builder.Services.AddOptions<ApplicationOptions>()
@@ -175,6 +181,13 @@ builder.Services.AddScoped<IDirectoryService, DirectoryService>();
 builder.Services.AddScoped<IPriceCalculationService, PriceCalculationService>();
 builder.Services.AddScoped<ICartService, CartService>();
 builder.Services.AddScoped<IShippingService, ShippingService>();
+builder.Services.AddOptions<PaymentOptions>().Bind(builder.Configuration.GetSection(PaymentOptions.SectionName));
+builder.Services.AddSingleton<IPaymentProvider, CashOnDeliveryProvider>();
+// The test gateway only exists where a secret is configured, so production cannot offer it by accident.
+var sandboxPayments = builder.Configuration.GetSection($"{PaymentOptions.SectionName}:Sandbox").Get<SandboxPaymentOptions>();
+if (sandboxPayments is { IsConfigured: true })
+    builder.Services.AddSingleton<IPaymentProvider>(new SandboxPaymentProvider(sandboxPayments.Secret));
+builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddScoped<IProductPricingService, ProductPricingService>();
 builder.Services.AddScoped<IPrimaryCurrencyProvider, PrimaryCurrencyProvider>();
 builder.Services.AddScoped<IVendorService, VendorService>();
