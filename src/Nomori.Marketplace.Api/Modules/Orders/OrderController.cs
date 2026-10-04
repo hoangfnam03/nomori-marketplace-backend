@@ -226,10 +226,11 @@ public sealed record ShopOrderListItemResponse(
 }
 
 public sealed record OrderLineResponse(
-    int Id, int ProductId, int? CombinationId, string Name, string? VariantLabel, string? Sku, int PictureId, int Quantity, decimal UnitPrice, decimal LineTotal)
+    int Id, int ProductId, int? CombinationId, string Name, string? VariantLabel, string? Sku, int PictureId, int Quantity, decimal UnitPrice, decimal LineTotal,
+    decimal TaxRate, decimal TaxAmount)
 {
     public static OrderLineResponse From(OrderLine l) =>
-        new(l.Id, l.ProductId, l.CombinationId, l.Name, l.VariantLabel, l.Sku, l.PictureId, l.Quantity, l.UnitPrice, l.LineTotal);
+        new(l.Id, l.ProductId, l.CombinationId, l.Name, l.VariantLabel, l.Sku, l.PictureId, l.Quantity, l.UnitPrice, l.LineTotal, l.TaxRate, l.TaxAmount);
 }
 
 public sealed record OrderHistoryResponse(string? FromStatus, string To, string Actor, int? ActorCustomerId, string? Note, DateTime CreatedOnUtc)
@@ -248,7 +249,7 @@ public sealed record RecipientResponse(
 
 public sealed record ShopOrderDetailResponse(
     int Id, string Number, int OrderId, string OrderNumber, int VendorId, string ShopName, string Status, string CurrencyCode, string PaymentMethod,
-    decimal Subtotal, decimal ShippingFee, decimal DiscountAmount, string? DiscountFunding, decimal Total, string ShippingMethodName, string? Carrier, string? TrackingNumber, string? CancelReason,
+    decimal Subtotal, decimal ShippingFee, decimal DiscountAmount, string? DiscountFunding, decimal TaxAmount, decimal Total, string ShippingMethodName, string? Carrier, string? TrackingNumber, string? CancelReason,
     string? CustomerNote, RecipientResponse Recipient, DateTime CreatedOnUtc, DateTime UpdatedOnUtc,
     IReadOnlyList<OrderLineResponse> Lines, IReadOnlyList<OrderHistoryResponse> History)
 {
@@ -257,19 +258,19 @@ public sealed record ShopOrderDetailResponse(
 
     public static ShopOrderDetailResponse From(ShopOrder s, Order o, IReadOnlyList<OrderHistoryEntry> history, bool forAdmin) => new(
         s.Id, s.Number, s.OrderId, o.Number, s.VendorId, s.ShopName, OrderRules.ToWire(s.Status), o.CurrencyCode, o.PaymentMethod,
-        s.Subtotal, s.ShippingFee, s.DiscountAmount, s.DiscountFunding, s.Total, s.ShippingMethodName, s.Carrier, s.TrackingNumber, s.CancelReason, o.CustomerNote, RecipientResponse.From(o),
+        s.Subtotal, s.ShippingFee, s.DiscountAmount, s.DiscountFunding, s.TaxAmount, s.Total, s.ShippingMethodName, s.Carrier, s.TrackingNumber, s.CancelReason, o.CustomerNote, RecipientResponse.From(o),
         s.CreatedOnUtc, s.UpdatedOnUtc, s.Lines.Select(OrderLineResponse.From).ToList(), history.Select(h => OrderHistoryResponse.Of(h, forAdmin)).ToList());
 }
 
 public sealed record OrderDetailResponse(
-    int Id, string Number, int CustomerId, string CurrencyCode, decimal Subtotal, decimal ShippingTotal, decimal DiscountTotal, string? DiscountCode, decimal Total, string Status, string PaymentMethod,
+    int Id, string Number, int CustomerId, string CurrencyCode, decimal Subtotal, decimal ShippingTotal, decimal DiscountTotal, string? DiscountCode, decimal TaxTotal, decimal Total, string Status, string PaymentMethod,
     string? CustomerNote, RecipientResponse Recipient, DateTime CreatedOnUtc, IReadOnlyList<ShopOrderDetailResponse> ShopOrders)
 {
     public static OrderDetailResponse From(OrderDetail detail, bool forAdmin)
     {
         var o = detail.Order;
         return new OrderDetailResponse(
-            o.Id, o.Number, forAdmin ? o.CustomerId : 0, o.CurrencyCode, o.Subtotal, o.ShippingTotal, o.DiscountTotal, o.DiscountCode, o.Total,
+            o.Id, o.Number, forAdmin ? o.CustomerId : 0, o.CurrencyCode, o.Subtotal, o.ShippingTotal, o.DiscountTotal, o.DiscountCode, o.TaxTotal, o.Total,
             OrderRules.ToWire(OrderRules.Overall(o.ShopOrders.Select(s => s.Status))), o.PaymentMethod, o.CustomerNote, RecipientResponse.From(o), o.CreatedOnUtc,
             o.ShopOrders.Select(s => ShopOrderDetailResponse.From(s, o, detail.History.GetValueOrDefault(s.Id) ?? [], forAdmin)).ToList());
     }

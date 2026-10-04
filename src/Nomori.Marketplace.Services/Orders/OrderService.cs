@@ -68,10 +68,13 @@ public sealed class OrderService(
             var lines = shop.Lines!.Select(l => new OrderLine
             {
                 ProductId = l.ProductId, CombinationId = l.CombinationId, Name = l.Name!.Trim(), VariantLabel = Clean(l.VariantLabel), Sku = Clean(l.Sku),
-                PictureId = l.PictureId, Quantity = l.Quantity, UnitPrice = l.UnitPrice,
+                PictureId = l.PictureId, Quantity = l.Quantity, UnitPrice = l.UnitPrice, TaxRate = l.TaxRate, TaxAmount = l.TaxAmount,
                 LineTotal = OrderRules.LineTotal(l.UnitPrice, l.Quantity, currency.DecimalPlaces)
             }).ToList();
             var subtotal = lines.Sum(l => l.LineTotal);
+            // Tax is never more than the line it is charged on (the rate is at most 100 percent).
+            if (lines.Any(l => l.TaxAmount > l.LineTotal))
+                return CatalogResult.Failure<Order>("tax", "The tax of a line cannot be more than the line.");
             // The discount of a shop order never exceeds what the shop sold.
             if (shop.DiscountAmount < 0 || shop.DiscountAmount > subtotal || !CurrencyRules.HasValidScale(shop.DiscountAmount, currency.DecimalPlaces))
                 return CatalogResult.Failure<Order>("discount", "The discount of a shop cannot be negative or more than its items.");
@@ -79,7 +82,7 @@ public sealed class OrderService(
             {
                 VendorId = shop.VendorId, ShopName = vendors[shop.VendorId].Name, Status = ShopOrderStatus.Pending, Subtotal = subtotal,
                 ShippingFee = shop.ShippingFee, DiscountAmount = shop.DiscountAmount, DiscountFunding = shop.DiscountAmount > 0 ? discount!.Funding : null,
-                Total = subtotal - shop.DiscountAmount + shop.ShippingFee, ShippingMethodName = shop.ShippingMethodName!.Trim(),
+                TaxAmount = lines.Sum(l => l.TaxAmount), Total = subtotal - shop.DiscountAmount + shop.ShippingFee + lines.Sum(l => l.TaxAmount), ShippingMethodName = shop.ShippingMethodName!.Trim(),
                 ShippingRateId = shop.ShippingRateId, CreatedOnUtc = now, UpdatedOnUtc = now, Lines = lines
             });
         }
@@ -87,7 +90,8 @@ public sealed class OrderService(
         order.ShippingTotal = order.ShopOrders.Sum(s => s.ShippingFee);
         order.DiscountTotal = order.ShopOrders.Sum(s => s.DiscountAmount);
         order.DiscountCode = order.DiscountTotal > 0 ? discount!.Code!.Trim().ToUpperInvariant() : null;
-        order.Total = order.Subtotal - order.DiscountTotal + order.ShippingTotal;
+        order.TaxTotal = order.ShopOrders.Sum(x => x.TaxAmount);
+        order.Total = order.Subtotal - order.DiscountTotal + order.ShippingTotal + order.TaxTotal;
 
         var (saved, created) = await store.InsertAsync(order, cancellationToken);
         if (!created)
@@ -346,6 +350,8 @@ public sealed class OrderService(
             if (line.UnitPrice is < 0 or > OrderLimits.MaxAmount || !CurrencyRules.HasValidScale(line.UnitPrice, places))
                 errors["unitPrice"] = [$"The unit price must be 0 or more, with at most {places} decimal places."];
             if (line.VariantLabel?.Trim().Length > 200 || line.Sku?.Trim().Length > 100) errors["lines"] = ["The variant label or SKU is too long."];
+            if (line.TaxRate is < 0 or > 100 || line.TaxAmount < 0 || line.TaxAmount > OrderLimits.MaxAmount || !CurrencyRules.HasValidScale(line.TaxAmount, places))
+                errors["tax"] = [$"The tax of a line must be 0 or more, a rate up to 100 percent, with at most {places} decimal places."];
         }
     }
 }

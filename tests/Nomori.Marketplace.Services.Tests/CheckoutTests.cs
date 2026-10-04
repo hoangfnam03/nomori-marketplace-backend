@@ -6,15 +6,21 @@ using Nomori.Marketplace.Core.Discounts;
 using Nomori.Marketplace.Core.Orders;
 using Nomori.Marketplace.Core.Payments;
 using Nomori.Marketplace.Core.Shipping;
+using Nomori.Marketplace.Core.Tax;
 using Nomori.Marketplace.Core.Vendors;
 using Nomori.Marketplace.Services.Checkout;
 using Nomori.Marketplace.Services.Discounts;
 using Nomori.Marketplace.Services.Orders;
+using Nomori.Marketplace.Services.Directory;
 using Nomori.Marketplace.Services.Payments;
+using Nomori.Marketplace.Services.Tax;
+using static Nomori.Marketplace.Services.Tests.DirectoryTests;
 using static Nomori.Marketplace.Services.Tests.DiscountTests;
 using static Nomori.Marketplace.Services.Tests.OrderTests;
 using static Nomori.Marketplace.Services.Tests.PaymentTests;
+using static Nomori.Marketplace.Services.Tests.ProductOwnershipTests;
 using static Nomori.Marketplace.Services.Tests.ShippingTests;
+using static Nomori.Marketplace.Services.Tests.TaxTests;
 
 namespace Nomori.Marketplace.Services.Tests;
 
@@ -113,6 +119,7 @@ public sealed class CheckoutTests
         public FakeStockService Stock { get; } = new();
         public StubAddresses Addresses { get; } = new();
         public FakeDiscountStore Discounts { get; } = new();
+        public FakeTaxStore Taxes { get; } = new();
         public RecordingAuditLog Audit { get; } = new();
 
         public Fixture()
@@ -142,7 +149,8 @@ public sealed class CheckoutTests
             var orders = new OrderService(OrderStore, Vendors, new FakePrimaryCurrency(), Stock, Audit, new TestClock());
             var payments = new PaymentService(PaymentStore, [new CashOnDeliveryProvider(), Flaky], new FakePrimaryCurrency(), Audit, new TestClock());
             var discounts = new DiscountService(Discounts, new FakePrimaryCurrency(), Audit, new TestClock());
-            return new CheckoutService(Cart, CartLines, Prices, Shipping, payments, PaymentStore, orders, Stock, Addresses, discounts, Audit);
+            var taxes = new TaxService(Taxes, new FakeProductStore(), new DirectoryService(new FakeDirectoryStore(), Audit, new TestClock()), new FakePrimaryCurrency(), Audit, new TestClock());
+            return new CheckoutService(Cart, CartLines, Prices, Shipping, payments, PaymentStore, orders, Stock, Addresses, discounts, taxes, Audit);
         }
 
         /// <summary>A cart of (shop, [(line id, product id, quantity)]); lines are priced from <see cref="Prices"/>.</summary>
@@ -174,6 +182,10 @@ public sealed class CheckoutTests
             Discounts.Discounts.Add(discount);
             return discount;
         }
+
+        /// <summary>A published tax rate of a category for a country, with no state.</summary>
+        public void Rate(decimal percentage, string country = "US", int category = 1, int? state = null) =>
+            Taxes.Rates.Add(new TaxRate { Id = Taxes.Rates.Count + 1, CategoryId = category, CountryCode = country, StateProvinceId = state, Percentage = percentage, Published = true });
 
         public void AddIssue(string issue)
         {
@@ -872,5 +884,127 @@ public sealed class CheckoutTests
 
         Assert.Equal(DiscountRules.MessageOf(DiscountReasons.CustomerLimitReached), second.Errors["couponCode"][0]);
         Assert.Single(f.OrderStore.Orders);
+    }
+
+    // ---- Tax ----
+
+    [Fact]
+    public async Task WithoutRatesTheTaxIsZeroAndTheTotalIsAsBefore()
+    {
+        var f = new Fixture();
+
+        var preview = await f.Create().PreviewAsync(Buyer, Choices(), CancellationToken.None);
+
+        Assert.Equal(0m, preview.Tax!.Total);
+        Assert.Equal(48m, preview.Total);
+    }
+
+    [Fact]
+    public async Task TheTaxOfTheDestinationIsInThePreviewAndInTheTotal()
+    {
+        var f = new Fixture();
+        f.Rate(10);
+
+        var preview = await f.Create().PreviewAsync(Buyer, Choices(), CancellationToken.None);
+
+        Assert.Equal((4m, 2m, 2m), (preview.Tax!.Total, preview.Tax.PerShop[Shop], preview.Tax.PerShop[OtherShop]));
+        // Items 40, shipping 8, tax 4.
+        Assert.Equal(52m, preview.Total);
+    }
+
+    [Fact]
+    public async Task WithoutAnAddressTheTaxIsUnknownLikeTheTotal()
+    {
+        var f = new Fixture();
+        f.Rate(10);
+
+        var preview = await f.Create().PreviewAsync(Buyer, new CheckoutChoices(null, null, "cod"), CancellationToken.None);
+
+        Assert.Null(preview.Tax);
+        Assert.Null(preview.Total);
+    }
+
+    [Fact]
+    public async Task OnlyTheRatesOfTheDestinationCountApply()
+    {
+        var f = new Fixture();
+        f.Rate(20, "FR");
+
+        var preview = await f.Create().PreviewAsync(Buyer, Choices(), CancellationToken.None);
+
+        Assert.Equal(0m, preview.Tax!.Total);
+    }
+
+    [Fact]
+    public async Task ADiscountCodeLowersTheTaxBase()
+    {
+        var f = new Fixture();
+        f.Rate(10);
+        f.Code();
+
+        var preview = await f.Create().PreviewAsync(Buyer, WithCode("WELCOME10"), CancellationToken.None);
+
+        // The 4 off is split 2 and 2: the bases are 18 and 18, so the tax is 1.8 and 1.8.
+        Assert.Equal((3.6m, 47.6m), (preview.Tax!.Total, preview.Total));
+    }
+
+    [Fact]
+    public async Task PlacingChargesTheTaxAndKeepsTheRateOnEveryLine()
+    {
+        var f = new Fixture();
+        f.Rate(10);
+
+        var result = await Place(f);
+
+        var order = result.Value!.Order;
+        Assert.Equal((4m, 52m), (order.TaxTotal, order.Total));
+        Assert.Equal((2m, 27m, 25m), (order.ShopOrders[0].TaxAmount, order.ShopOrders[0].Total, order.ShopOrders[1].Total));
+        Assert.Equal((10m, 2m), (order.ShopOrders[0].Lines[0].TaxRate, order.ShopOrders[0].Lines[0].TaxAmount));
+        Assert.Equal(52m, Assert.Single(f.PaymentStore.Payments).Amount);
+    }
+
+    [Fact]
+    public async Task PlacingWithADiscountAndTaxMakesTheTotalsAddUp()
+    {
+        var f = new Fixture();
+        f.Rate(10);
+        f.Code();
+
+        var order = (await Place(f, Request(code: "WELCOME10"))).Value!.Order;
+
+        // 40 - 4 + 8 + 3.6
+        Assert.Equal((4m, 3.6m, 47.6m), (order.DiscountTotal, order.TaxTotal, order.Total));
+        Assert.Equal(order.Total, order.Subtotal - order.DiscountTotal + order.ShippingTotal + order.TaxTotal);
+        Assert.All(order.ShopOrders, s => Assert.Equal(s.Total, s.Subtotal - s.DiscountAmount + s.ShippingFee + s.TaxAmount));
+        Assert.Equal(47.6m, Assert.Single(f.PaymentStore.Payments).Amount);
+    }
+
+    [Fact]
+    public async Task TheTaxIsWorkedOutAgainFromTheFreshPricesWhenPlacing()
+    {
+        var f = new Fixture();
+        f.Rate(10);
+        f.Prices.Unit[1] = 11m;
+
+        var order = (await Place(f)).Value!.Order;
+
+        // Product 1 is now 2 x 11 = 22, so its tax is 2.2 (not the 2 the cart view showed).
+        Assert.Equal(2.2m, order.ShopOrders[0].TaxAmount);
+        Assert.Equal(4.2m, order.TaxTotal);
+    }
+
+    [Fact]
+    public async Task AProductInAnotherCategoryIsTaxedAtItsOwnRate()
+    {
+        var f = new Fixture();
+        f.Taxes.Categories.Add(new TaxCategory { Id = 2, Name = "Reduced" });
+        f.Rate(10);
+        f.Rate(5, category: 2);
+        f.Taxes.Assignments[2] = 2;
+
+        var order = (await Place(f)).Value!.Order;
+
+        Assert.Equal((2m, 1m, 3m), (order.ShopOrders[0].TaxAmount, order.ShopOrders[1].TaxAmount, order.TaxTotal));
+        Assert.Equal(5m, order.ShopOrders[1].Lines[0].TaxRate);
     }
 }
