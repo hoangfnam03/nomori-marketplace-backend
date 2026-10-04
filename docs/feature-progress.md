@@ -2,7 +2,7 @@
 
 Tài liệu theo dõi (trace) tiến độ so với `nopCommerce/docs/nomori-complete-feature-map.md`. Cập nhật mỗi khi xong hoặc hoãn một slice.
 
-- **Cập nhật lần cuối:** 2026-10-13
+- **Cập nhật lần cuối:** 2026-10-16
 - **Quy ước:** mỗi slice có tài liệu thiết kế trong `docs/modules/` (mục 7 của feature map). Code chỉ sinh sau khi có tài liệu.
 - **Trạng thái:** `Xong` (backend + Angular), `Một phần` (còn slice con chưa làm), `Hoãn` (có quyết định), `Chưa làm`.
 - **Lưu ý về kiểm chứng:** tất cả slice đều có unit test cho service và migration. Các store SQL và luồng HTTP/Angular **chưa có test tự động**, cần test tay theo guide trong tài liệu từng module.
@@ -27,7 +27,8 @@ Tài liệu theo dõi (trace) tiến độ so với `nopCommerce/docs/nomori-com
 | F13 | Tìm kiếm, lọc | Một phần | `modules/f13a-catalog-search.md` | **F13-A xong** (chờ test tay và merge): tìm kiếm văn bản nhiều từ (tên, mô tả ngắn, SKU, tag, nhà sản xuất; ký tự `%`, `_` được coi là chữ thường), danh mục kèm danh mục con, lọc nhà sản xuất, khoảng giá, còn hàng, tag, thông số kỹ thuật; sắp xếp theo độ khớp; facet (số lượng) cho bảng lọc; gợi ý khi gõ. Chưa có: so sánh sản phẩm, đã xem gần đây, thống kê từ khoá (F13-B), search engine và cache (F13-C) |
 | F14 | Giá, bảng giá | Một phần | `modules/f14a-pricing.md` | **F14-A xong** (chờ test tay và merge): giá đặc biệt có khung giờ, giá theo số lượng (tier), dịch vụ tính giá (`IPriceCalculationService`) dùng chung cho storefront, giỏ hàng và đơn, báo giá `GET /catalog/products/{id}/price`, bộ lọc và sắp xếp giá theo giá hiện hành, kiểm tra không hạ giá gốc xuống dưới giá đặc biệt/tier, audit đổi giá. Chưa có: giá theo nhóm khách/shop, bảng giá, giá do khách nhập (F14-B) |
 | F16 | Giỏ hàng, wishlist | Một phần | `modules/f16a-cart.md` | **F16-A xong** (chờ test tay và merge): giỏ hàng của khách đã đăng nhập, nhiều shop trong một giỏ (nhóm theo shop), giá do máy chủ tính (F14-A), kiểm tra hiển thị và tồn kho (F12-A), cảnh báo giá đổi và sản phẩm không còn bán, chặn mua hàng của chính shop mình, trang `/storefront/cart`, số lượng trên header. **Giỏ không giữ chỗ tồn kho** (giữ chỗ khi bắt đầu thanh toán, F17). Chưa có: giỏ khách vãng lai và gộp giỏ, wishlist (F16-B), thuộc tính thanh toán (F16-C) |
-| F15, F17–F31 | Khuyến mãi, đặt hàng, thanh toán, vận chuyển, đổi trả, thông báo, CMS, SEO, affiliate, báo cáo, import/export, plugin, job nền, theme, AI | Chưa làm | | Xem feature map |
+| F20 | Vận chuyển, giao hàng | Một phần | `modules/f20a-shipping-rates.md` | **F20-A xong** (chờ test tay và merge): mỗi shop tự đặt phí vận chuyển cố định theo quốc gia hoặc tỉnh/bang, nhiều phương thức cho cùng một nơi, miễn phí khi tạm tính của shop đạt ngưỡng, thời gian giao ước tính; API báo phí cho giỏ hàng (`POST /shipping/quote`, mỗi shop là một kiện hàng, tổng xem trước là mức rẻ nhất của từng shop); trang seller `/vendor/shipping`, khối "Ước tính phí vận chuyển" ở trang giỏ hàng. Chưa có: theo cân nặng/kích thước, nhà vận chuyển (F20-C), điểm nhận hàng, shipment, tracking (F20-B), chọn phương thức khi thanh toán (F17) |
+| F15, F17–F19, F21–F31 | Khuyến mãi, đặt hàng, thanh toán, đổi trả, thông báo, CMS, SEO, affiliate, báo cáo, import/export, plugin, job nền, theme, AI | Chưa làm | | Xem feature map |
 
 ## 2. Quyết định đã chốt
 
@@ -56,7 +57,7 @@ Theo mục 6 của feature map (M05 recovery plan):
 5f. ~~F07-A Tiền tệ và quy tắc tiền~~ (xong, đã merge)
 5g. ~~F14-A Giá đặc biệt, giá theo số lượng, dịch vụ tính giá~~ (xong, đã merge)
 5h. ~~F16-A Giỏ hàng~~ (xong, đã merge)
-5i. ~~F07-C Quốc gia, tỉnh/bang, quy tắc địa chỉ~~ (xong, chờ test tay và merge). Tiếp theo: vận chuyển cơ bản **F20-A** (khu vực giao hàng theo quốc gia/tỉnh, phí), thanh toán **F19-A** (ranh giới nhà cung cấp) rồi đơn hàng **F18-A/F17-A**. F07-B (múi giờ, đơn vị đo) trước F20/F22, F07-E (thuế) trước F17. Xem `modules/vendor-products-prd.md` (US-A3, A4).
+5i. ~~F07-C Quốc gia, tỉnh/bang, quy tắc địa chỉ~~ (xong, đã merge). 5j. ~~F20-A Phí vận chuyển theo shop~~ (xong, chờ test tay và merge). Tiếp theo: thanh toán **F19-A** (ranh giới nhà cung cấp) rồi đơn hàng **F18-A/F17-A**. F07-B (múi giờ, đơn vị đo) trước F20/F22, F07-E (thuế) trước F17. Xem `modules/vendor-products-prd.md` (US-A3, A4).
 6. F13-A Tìm kiếm.
 7. F15 khuyến mãi, F18/F17 đơn hàng và thanh toán (F07-A, F14-A, F16-A đã xong).
 8. Quay lại F05: `vendor-shop-settings`, `vendor-products`, `vendor-orders`, `vendor-settlement`.
@@ -84,6 +85,7 @@ Theo mục 6 của feature map (M05 recovery plan):
 | Form admin sản phẩm chưa có trường giá đặc biệt và giá tier (chỉ seller) | `modules/f14a-pricing.md` | F10 |
 | Giỏ chỉ có cho khách đã đăng nhập; chưa có giỏ vãng lai, gộp giỏ, wishlist, dọn giỏ cũ (F29); giỏ không giữ chỗ tồn kho nên người mua có thể thấy hết hàng lúc thanh toán | `modules/f16a-cart.md` | F16-B, F17, F29 |
 | Danh sách quốc gia seed chỉ ~40 nước và không có tỉnh/bang; cần import đầy đủ; địa chỉ cũ không bị kiểm tra lại cho tới khi sửa; mẫu mã bưu chính chỉ seed cho nước có định dạng chắc chắn | `modules/f07c-countries-addresses.md` | F27 |
+| Phí vận chuyển là mức cố định theo kiện (mỗi shop một kiện); admin chưa sửa được phí của shop; chưa có tính theo cân nặng; phí vận chuyển chưa vào tổng giỏ hàng và chưa lưu vào đơn | `modules/f20a-shipping-rates.md` | F20-B, F20-C, F17, F18 |
 | Test service (`Services.Tests`) không chạy được trên máy này do Windows App Control chặn DLL; code compile, cần chạy `dotnet test` trên máy khác hoặc CI | | Môi trường |
 | Sản phẩm cũ chưa publish được chuyển thành "nháp" (không phân biệt được với "ngừng bán") | `modules/f10b-product-lifecycle.md` | Ghi chú triển khai |
 | Tìm kiếm dùng `LIKE '%từ%'` (không dùng index), facet là nhiều truy vấn mỗi lần, chưa cache; `inStock` ở danh sách là tồn kho thực, không trừ hàng đang giữ chỗ | `modules/f13a-catalog-search.md` | F13-C |
@@ -107,3 +109,4 @@ Theo mục 6 của feature map (M05 recovery plan):
 | 2026-10-11 | `feat/pricing/foundation` | F14-A: cột `SpecialPrice` + khung giờ, bảng `ProductTierPrice`, `PriceRules` thuần, `IPriceCalculationService` (đặc biệt, tier, điều chỉnh và giá riêng của biến thể), `IProductPricingService`, API seller `PUT .../pricing`, API công khai báo giá, `finalPrice` và `tierPrices` ở danh sách/chi tiết, lọc và sắp xếp giá theo giá hiện hành (F13-A), audit `product.price_changed`. Angular: mục Pricing ở trang Details, thẻ sản phẩm hiện giá sale kèm giá gạch, trang sản phẩm có số lượng, bảng giá theo số lượng và lấy giá từ máy chủ (xoá phép tính giá ở trình duyệt) (BE + FE). Chưa commit |
 | 2026-10-12 | `feat/cart/foundation` | F16-A: bảng `CartItem` (duy nhất theo khách, sản phẩm, lựa chọn biến thể), `CartRules` thuần, `ICartService` (thêm, đổi số lượng, xoá, xoá hết, chấp nhận giá mới, đếm), API `/api/v1/cart` cho khách đã đăng nhập, giỏ nhóm theo shop với tổng tạm tính, cảnh báo `unavailable`, `variant_unavailable`, `out_of_stock`, `insufficient_stock`, `price_changed`, chặn mua sản phẩm của shop mình. Angular: trang giỏ hàng, nút Add to cart ở trang sản phẩm và thẻ sản phẩm (khách vãng lai được chuyển sang đăng nhập), số lượng trên header (BE + FE). Chưa commit |
 | 2026-10-13 | `feat/directory/foundation` | F07-C: bảng `Country`, `StateProvince` (seed ~40 nước, không tỉnh), cột `CustomerAddress.StateProvinceId`, `PostalCodeRules` (regex neo toàn chuỗi, giới hạn thời gian 100 ms), `IDirectoryService` (danh sách công khai, CRUD admin, `ResolveAddressAsync`), sổ địa chỉ kiểm tra theo thư mục, API `/api/v1/directory/*` và `/api/v1/admin/directory/*`. Angular: form địa chỉ có chọn quốc gia/tỉnh/mã bưu chính và hiển thị lỗi theo trường, trang admin `/admin/countries` (BE + FE). Chưa commit |
+| 2026-10-16 | `feat/shipping/foundation` | F20-A: bảng `ShippingRate` (theo shop, quốc gia, tỉnh/bang tuỳ chọn, phí, ngưỡng miễn phí, số ngày giao), `ShippingRules` thuần, `IShippingService` (CRUD phí của shop kèm audit, báo phí cho giỏ hàng theo địa chỉ đã lưu hoặc quốc gia), API `/api/v1/vendors/{id}/shipping-rates` (chỉ thành viên shop, người ngoài nhận 404) và `POST /api/v1/shipping/quote`. Angular: trang `/vendor/shipping`, khối ước tính phí ở giỏ hàng (BE + FE). Chưa commit |
