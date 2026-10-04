@@ -179,7 +179,7 @@ Hoa hồng = 80.000đ. Doanh thu shop = 1.000.000 − 80.000 + 30.000 = 950.000�
 
 | ID | Yêu cầu |
 |---|---|
-| NFR-01 | Tiền lưu dạng `decimal(18,2)`, đơn vị VND; không dùng số thực dấu phẩy động |
+| NFR-01 | Tiền lưu dạng số thập phân theo tiền tệ chính của sàn (F07-A, D1), số chữ số thập phân theo tiền tệ chính; không dùng số thực dấu phẩy động |
 | NFR-02 | Tạo bút toán khi đơn con `Completed` là idempotent: chạy lại không tạo bút toán trùng |
 | NFR-03 | Tạo kỳ chi trả chạy trong một transaction; một bút toán không bao giờ thuộc hai chi trả |
 | NFR-04 | Số tài khoản ngân hàng được mã hóa khi lưu, chỉ hiện 4 số cuối trên giao diện và trong log |

@@ -202,7 +202,7 @@ public sealed class SqlInventoryStore(IOptions<DatabaseOptions> options) : IInve
     // ---- Helpers ----
 
     /// <summary>Locks the stock row (the combination when given, otherwise the product) and returns its quantity; null when it does not exist.</summary>
-    private static Task<int?> LockAsync(SqlConnection connection, SqlTransaction transaction, int productId, int? combinationId, CancellationToken cancellationToken) =>
+    internal static Task<int?> LockAsync(SqlConnection connection, SqlTransaction transaction, int productId, int? combinationId, CancellationToken cancellationToken) =>
         combinationId is { } cid
             ? ScalarAsync(connection, transaction, "SELECT StockQuantity FROM ProductAttributeCombination WITH (UPDLOCK, HOLDLOCK) WHERE Id = @C AND ProductId = @P",
                 cancellationToken, ("@C", cid), ("@P", productId))
@@ -210,7 +210,7 @@ public sealed class SqlInventoryStore(IOptions<DatabaseOptions> options) : IInve
                 cancellationToken, ("@P", productId));
 
     /// <summary>Quantity held by active, unexpired reservations of a product (all combinations) or one combination, optionally leaving one reference out.</summary>
-    private static async Task<int> ReservedAsync(
+    internal static async Task<int> ReservedAsync(
         SqlConnection connection, SqlTransaction? transaction, int productId, int? combinationId, string? excludeReference, DateTime nowUtc, CancellationToken cancellationToken) =>
         await ScalarAsync(connection, transaction, """
             SELECT COALESCE(SUM(Quantity), 0) FROM StockReservation
@@ -219,7 +219,7 @@ public sealed class SqlInventoryStore(IOptions<DatabaseOptions> options) : IInve
             """, cancellationToken, ("@P", productId), ("@Now", nowUtc), ("@C", combinationId), ("@Exclude", excludeReference)) ?? 0;
 
     /// <summary>Changes the stock of a combination and the product total together, or of a plain product.</summary>
-    private static async Task ApplyDeltaAsync(
+    internal static async Task ApplyDeltaAsync(
         SqlConnection connection, SqlTransaction transaction, int productId, int? combinationId, int delta, DateTime nowUtc, CancellationToken cancellationToken)
     {
         if (combinationId is { } cid)
@@ -231,7 +231,7 @@ public sealed class SqlInventoryStore(IOptions<DatabaseOptions> options) : IInve
             cancellationToken, ("@D", delta), ("@Now", nowUtc), ("@P", productId));
     }
 
-    private static async Task InsertMovementAsync(SqlConnection connection, SqlTransaction? transaction, StockMovement m, CancellationToken cancellationToken) =>
+    internal static async Task InsertMovementAsync(SqlConnection connection, SqlTransaction? transaction, StockMovement m, CancellationToken cancellationToken) =>
         await NonQueryAsync(connection, transaction, """
             INSERT INTO StockMovement (ProductId, CombinationId, Delta, QuantityAfter, Reason, Reference, Note, ActorCustomerId, CreatedOnUtc)
             VALUES (@P, @C, @Delta, @After, @Reason, @Reference, @Note, @Actor, @Now)

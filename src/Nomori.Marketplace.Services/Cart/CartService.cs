@@ -183,7 +183,7 @@ public sealed class CartService(
                 label, sku, line.Quantity,
                 quote?.UnitPrice ?? line.AddedUnitPrice, quote?.ComparePrice, quote?.LineTotal ?? 0m, quote?.AppliedRule,
                 available, quote is not null && quote.UnitPrice != line.AddedUnitPrice ? line.AddedUnitPrice : null,
-                issues));
+                issues, quote?.CombinationId, line.ValueIds));
         }
 
         // One group per shop, in the order the shops first appear in the cart.

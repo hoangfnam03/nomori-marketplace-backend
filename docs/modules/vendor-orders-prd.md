@@ -179,7 +179,7 @@ Trạng thái tổng của đơn hàng được tính từ các đơn con: ví d
 | NFR-02 | Tạo đơn, trừ tồn kho và tách đơn con chạy trong một transaction; không bán vượt tồn kho khi nhiều khách đặt cùng lúc |
 | NFR-03 | Hai người cùng thao tác một đơn con thì chỉ một thao tác thành công; thao tác còn lại nhận lỗi và phải tải lại |
 | NFR-04 | Các tác vụ tự động (tự hủy, tự chuyển trạng thái) chạy định kỳ, chạy lại không gây sai lệch |
-| NFR-05 | Tiền được lưu dạng số thập phân, đơn vị VND, không dùng số thực dấu phẩy động |
+| NFR-05 | Tiền lưu dạng số thập phân theo tiền tệ chính của sàn (F07-A, D1), kèm mã tiền tệ trên đơn hàng; số chữ số thập phân theo tiền tệ chính; không dùng số thực dấu phẩy động |
 | NFR-06 | API theo chuẩn `/api/v1`, lỗi dạng ProblemDetails, request ghi dữ liệu có CSRF. Dùng chung route cho shop, khách và admin, giống module Vendors |
 
 ## 9. Màn hình

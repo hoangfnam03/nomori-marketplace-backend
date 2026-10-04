@@ -11,6 +11,7 @@ using Nomori.Marketplace.Core.Customers;
 using Nomori.Marketplace.Core.Directory;
 using Nomori.Marketplace.Core.Email;
 using Nomori.Marketplace.Core.Media;
+using Nomori.Marketplace.Core.Orders;
 using Nomori.Marketplace.Core.Security;
 using Nomori.Marketplace.Core.Time;
 using Nomori.Marketplace.Core.Vendors;
@@ -22,6 +23,7 @@ using Nomori.Marketplace.Services.Customers;
 using Nomori.Marketplace.Services.Directory;
 using Nomori.Marketplace.Services.Email;
 using Nomori.Marketplace.Services.Media;
+using Nomori.Marketplace.Services.Orders;
 using Nomori.Marketplace.Services.Security;
 using Nomori.Marketplace.Services.Vendors;
 using Nomori.Marketplace.Web.Framework.Security;
@@ -83,6 +85,15 @@ builder.Services.AddOptions<VendorOptions>()
     .Bind(builder.Configuration.GetSection(VendorOptions.SectionName))
     .Validate(options => options.MaxMembersPerVendor >= 1, "Vendor:MaxMembersPerVendor must be at least 1.")
     .ValidateOnStart();
+builder.Services.AddOptions<OrderOptions>()
+    .Bind(builder.Configuration.GetSection(OrderOptions.SectionName))
+    .Validate(options => options.ShippingFeePerStoreOrder >= 0 && options.FreeShippingThreshold is null or >= 0,
+        "Orders:ShippingFeePerStoreOrder and Orders:FreeShippingThreshold cannot be negative.")
+    .Validate(options => options.ConfirmWithinHours is > 0 and <= 720, "Orders:ConfirmWithinHours must be between 1 and 720.")
+    .Validate(options => options.AutoDeliverAfterDays is > 0 and <= 90 && options.AutoCompleteAfterDays is > 0 and <= 90,
+        "Orders:AutoDeliverAfterDays and Orders:AutoCompleteAfterDays must be between 1 and 90.")
+    .Validate(options => options.AutomationIntervalMinutes is > 0 and <= 1440, "Orders:AutomationIntervalMinutes must be between 1 and 1440.")
+    .ValidateOnStart();
 
 builder.Services.AddControllersWithViews();
 builder.Services.AddOpenApi(options =>
@@ -102,6 +113,7 @@ builder.Services.AddOpenApi(options =>
         var csrfPaths = new HashSet<string>
         {
             "/api/v1/auth/register",
+            "/api/v1/checkout/preview", "/api/v1/orders", "/api/v1/store-orders/{id}/status", "/api/v1/store-orders/{id}/reorder", "/api/v1/vendors/{vendorId}/orders/confirm",
             "/api/v1/auth/login",
             "/api/v1/auth/logout",
             "/api/v1/auth/password/change",
@@ -172,6 +184,11 @@ builder.Services.AddScoped<ICurrencyService, CurrencyService>();
 builder.Services.AddScoped<IDirectoryService, DirectoryService>();
 builder.Services.AddScoped<IPriceCalculationService, PriceCalculationService>();
 builder.Services.AddScoped<ICartService, CartService>();
+builder.Services.AddScoped<OrderNotifier>();
+builder.Services.AddScoped<ICheckoutService, CheckoutService>();
+builder.Services.AddScoped<IOrderService, OrderService>();
+builder.Services.AddScoped<IOrderAutomation, OrderAutomation>();
+builder.Services.AddHostedService<Nomori.Marketplace.Api.Modules.Orders.OrderAutomationHostedService>();
 builder.Services.AddScoped<IProductPricingService, ProductPricingService>();
 builder.Services.AddScoped<IPrimaryCurrencyProvider, PrimaryCurrencyProvider>();
 builder.Services.AddScoped<IVendorService, VendorService>();

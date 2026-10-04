@@ -39,4 +39,16 @@ public sealed class EmailOptions
     public string ProductUnhiddenSubject { get; init; } = "A product of your shop is visible again";
 
     public string VendorMemberSetupSubject { get; init; } = "You have been added to a shop on Nomori Marketplace";
+
+    public string OrderPlacedSubject { get; init; } = "Your Nomori Marketplace order {0} was placed";
+
+    public string StoreOrderNewSubject { get; init; } = "New order {0} for your shop";
+
+    public string StoreOrderCancelledByCustomerSubject { get; init; } = "Order {0} was cancelled by the customer";
+
+    public string StoreOrderConfirmedSubject { get; init; } = "Your order {0} was confirmed";
+
+    public string StoreOrderShippedSubject { get; init; } = "Your order {0} is on its way";
+
+    public string StoreOrderCancelledSubject { get; init; } = "Your order {0} was cancelled";
 }

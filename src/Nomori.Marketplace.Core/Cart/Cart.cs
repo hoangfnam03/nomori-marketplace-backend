@@ -94,7 +94,11 @@ public sealed record CartLineView(
     int? AvailableQuantity,
     /// <summary>The unit price the customer saw earlier, only when it differs from <see cref="UnitPrice"/>.</summary>
     decimal? PreviousUnitPrice,
-    IReadOnlyList<string> Issues);
+    IReadOnlyList<string> Issues,
+    /// <summary>The variant combination priced, when the product has variants and the choice matches one.</summary>
+    int? CombinationId = null,
+    /// <summary>The chosen variant value ids, as stored on the line (<see cref="CartRules.ValueKey"/>).</summary>
+    string ValueKey = "");
 
 public sealed record CartShopGroup(int VendorId, string? VendorName, IReadOnlyList<CartLineView> Lines, decimal Subtotal);
 

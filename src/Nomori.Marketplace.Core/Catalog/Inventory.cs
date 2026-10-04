@@ -11,6 +11,9 @@ public static class StockReasons
     public const string AdminEdit = "admin_edit";
     public const string Sale = "sale";
 
+    /// <summary>Stock put back because an order was cancelled.</summary>
+    public const string OrderCancelled = "order_cancelled";
+
     /// <summary>What a seller may pick for a manual adjustment.</summary>
     public static readonly IReadOnlyList<string> SellerChoices = [Restock, Correction, Damage, Return];
 }
