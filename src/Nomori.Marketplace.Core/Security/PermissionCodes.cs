@@ -33,6 +33,9 @@ public static class PermissionCodes
     /// <summary>Capture, void and refund payments, and choose the payment methods (F19).</summary>
     public const string PaymentsManage = "payments.manage";
 
+    /// <summary>See every order and cancel a shop order as the platform (F18).</summary>
+    public const string OrdersManage = "orders.manage";
+
     public const string VendorManage = "vendor.manage";
     public const string VendorPortal = "vendor.portal";
 }
