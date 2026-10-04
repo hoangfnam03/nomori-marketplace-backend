@@ -5,6 +5,7 @@ using Nomori.Marketplace.Api.Configuration;
 using Nomori.Marketplace.Api.Health;
 using Nomori.Marketplace.Api.Middleware;
 using Nomori.Marketplace.Core.Cart;
+using Nomori.Marketplace.Core.Orders;
 using Nomori.Marketplace.Core.Payments;
 using Nomori.Marketplace.Core.Shipping;
 using Nomori.Marketplace.Core.Catalog;
@@ -19,6 +20,7 @@ using Nomori.Marketplace.Core.Vendors;
 using Nomori.Marketplace.Data.Configuration;
 using Nomori.Marketplace.Services.Authentication;
 using Nomori.Marketplace.Services.Cart;
+using Nomori.Marketplace.Services.Orders;
 using Nomori.Marketplace.Services.Payments;
 using Nomori.Marketplace.Services.Shipping;
 using Nomori.Marketplace.Services.Catalog;
@@ -188,6 +190,7 @@ var sandboxPayments = builder.Configuration.GetSection($"{PaymentOptions.Section
 if (sandboxPayments is { IsConfigured: true })
     builder.Services.AddSingleton<IPaymentProvider>(new SandboxPaymentProvider(sandboxPayments.Secret));
 builder.Services.AddScoped<IPaymentService, PaymentService>();
+builder.Services.AddScoped<IOrderService, OrderService>();
 builder.Services.AddScoped<IProductPricingService, ProductPricingService>();
 builder.Services.AddScoped<IPrimaryCurrencyProvider, PrimaryCurrencyProvider>();
 builder.Services.AddScoped<IVendorService, VendorService>();
