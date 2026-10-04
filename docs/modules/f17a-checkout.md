@@ -26,7 +26,7 @@ Every piece of a sale exists on its own: a priced cart, shipping options per sho
 | D7 | **Terms must be accepted** (`acceptedTerms`). The acceptance is audited with the placement; a consent history is F04 (GDPR). |
 | D8 | **A failed payment cancels the order.** If the payment provider refuses, every shop order is cancelled by the system with the reason "Payment failed", stock goes back, the cart stays and the customer is told (`409 checkout.payment_failed`). |
 | D9 | **Cancelling gives stock back, once, only before shipping.** When a shop order goes from `pending` or `confirmed` to `cancelled` (by the shop, the customer, the administrator or the system) its lines go back to stock in the ledger (reason `return`, reference the shop order number). A cancel from `shipped` or `delivered` (administrator only) does not: the goods are out, and taking them back is F21. The compare-and-set of the status makes "once" true. |
-| D10 | **No tax and no discount yet.** Totals are items plus shipping. The order carries no tax columns until F07-E; promotions are F15. |
+| D10 | **No tax yet.** The order carries no tax columns until F07-E. Discount codes (F15-A) are optional in the same request: `couponCode` in the preview and the placement, totals are items minus the discount plus shipping. |
 | D11 | **Only saved addresses can be used.** The recipient of the order is a copy of the saved address at that moment. A new address is added in the account first (F04). |
 
 ## 3. Actors and authorization matrix
@@ -63,7 +63,7 @@ The customer id always comes from the session. The address must be one of the cu
 | Deferred item | Goes to |
 |---|---|
 | Tax, price display with or without tax | F07-E |
-| Coupons, gift cards, reward points, free-shipping promotions | F15 |
+| Gift cards, reward points, free-shipping promotions, automatic discounts (coupon codes are F15-A, done) | F15-B, F15-C |
 | Gateway redirects, hosted payment pages, 3-D Secure, "pay again" | F19-B |
 | Guest checkout, checkout attributes and gift options | F16-B, F16-C |
 | A new address inside checkout; separate billing address | F04 follow-up |

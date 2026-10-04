@@ -36,6 +36,9 @@ public static class PermissionCodes
     /// <summary>See every order and cancel a shop order as the platform (F18).</summary>
     public const string OrdersManage = "orders.manage";
 
+    /// <summary>Create and change platform-funded discounts (F15).</summary>
+    public const string DiscountsManage = "discounts.manage";
+
     public const string VendorManage = "vendor.manage";
     public const string VendorPortal = "vendor.portal";
 }

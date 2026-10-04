@@ -217,11 +217,11 @@ public sealed record OrderSummaryResponse(
 
 /// <summary>One row of a shop's list. There is no customer id or email: a shop only needs to know where to send the parcel.</summary>
 public sealed record ShopOrderListItemResponse(
-    int Id, string Number, string OrderNumber, string Status, DateTime CreatedOnUtc, int ItemCount, decimal Total, decimal ShippingFee,
+    int Id, string Number, string OrderNumber, string Status, DateTime CreatedOnUtc, int ItemCount, decimal Total, decimal ShippingFee, decimal DiscountAmount,
     string CurrencyCode, string PaymentMethod, string RecipientName, string RecipientPhone)
 {
     public static ShopOrderListItemResponse From(ShopOrder s) => new(
-        s.Id, s.Number, s.Order!.Number, OrderRules.ToWire(s.Status), s.CreatedOnUtc, s.ItemCount, s.Total, s.ShippingFee,
+        s.Id, s.Number, s.Order!.Number, OrderRules.ToWire(s.Status), s.CreatedOnUtc, s.ItemCount, s.Total, s.ShippingFee, s.DiscountAmount,
         s.Order.CurrencyCode, s.Order.PaymentMethod, s.Order.RecipientName, s.Order.RecipientPhone);
 }
 
@@ -248,7 +248,7 @@ public sealed record RecipientResponse(
 
 public sealed record ShopOrderDetailResponse(
     int Id, string Number, int OrderId, string OrderNumber, int VendorId, string ShopName, string Status, string CurrencyCode, string PaymentMethod,
-    decimal Subtotal, decimal ShippingFee, decimal Total, string ShippingMethodName, string? Carrier, string? TrackingNumber, string? CancelReason,
+    decimal Subtotal, decimal ShippingFee, decimal DiscountAmount, string? DiscountFunding, decimal Total, string ShippingMethodName, string? Carrier, string? TrackingNumber, string? CancelReason,
     string? CustomerNote, RecipientResponse Recipient, DateTime CreatedOnUtc, DateTime UpdatedOnUtc,
     IReadOnlyList<OrderLineResponse> Lines, IReadOnlyList<OrderHistoryResponse> History)
 {
@@ -257,19 +257,19 @@ public sealed record ShopOrderDetailResponse(
 
     public static ShopOrderDetailResponse From(ShopOrder s, Order o, IReadOnlyList<OrderHistoryEntry> history, bool forAdmin) => new(
         s.Id, s.Number, s.OrderId, o.Number, s.VendorId, s.ShopName, OrderRules.ToWire(s.Status), o.CurrencyCode, o.PaymentMethod,
-        s.Subtotal, s.ShippingFee, s.Total, s.ShippingMethodName, s.Carrier, s.TrackingNumber, s.CancelReason, o.CustomerNote, RecipientResponse.From(o),
+        s.Subtotal, s.ShippingFee, s.DiscountAmount, s.DiscountFunding, s.Total, s.ShippingMethodName, s.Carrier, s.TrackingNumber, s.CancelReason, o.CustomerNote, RecipientResponse.From(o),
         s.CreatedOnUtc, s.UpdatedOnUtc, s.Lines.Select(OrderLineResponse.From).ToList(), history.Select(h => OrderHistoryResponse.Of(h, forAdmin)).ToList());
 }
 
 public sealed record OrderDetailResponse(
-    int Id, string Number, int CustomerId, string CurrencyCode, decimal Subtotal, decimal ShippingTotal, decimal Total, string Status, string PaymentMethod,
+    int Id, string Number, int CustomerId, string CurrencyCode, decimal Subtotal, decimal ShippingTotal, decimal DiscountTotal, string? DiscountCode, decimal Total, string Status, string PaymentMethod,
     string? CustomerNote, RecipientResponse Recipient, DateTime CreatedOnUtc, IReadOnlyList<ShopOrderDetailResponse> ShopOrders)
 {
     public static OrderDetailResponse From(OrderDetail detail, bool forAdmin)
     {
         var o = detail.Order;
         return new OrderDetailResponse(
-            o.Id, o.Number, forAdmin ? o.CustomerId : 0, o.CurrencyCode, o.Subtotal, o.ShippingTotal, o.Total,
+            o.Id, o.Number, forAdmin ? o.CustomerId : 0, o.CurrencyCode, o.Subtotal, o.ShippingTotal, o.DiscountTotal, o.DiscountCode, o.Total,
             OrderRules.ToWire(OrderRules.Overall(o.ShopOrders.Select(s => s.Status))), o.PaymentMethod, o.CustomerNote, RecipientResponse.From(o), o.CreatedOnUtc,
             o.ShopOrders.Select(s => ShopOrderDetailResponse.From(s, o, detail.History.GetValueOrDefault(s.Id) ?? [], forAdmin)).ToList());
     }

@@ -352,6 +352,93 @@ public sealed class OrderTests
         Assert.Contains("unitPrice", result.Errors.Keys);
     }
 
+    // ---- Discounts ----
+
+    private static NewOrderCommand WithDiscount(decimal firstShop, decimal secondShop, string? code = "WELCOME10", string? funding = "platform") =>
+        Command() with
+        {
+            Discount = new NewOrderDiscount(code, funding),
+            Shops = [new NewShopOrder(Shop, "Standard", 3, 4.5m, [Line(1, 2, 10m), Line(2, 1, 2.5m)], firstShop),
+                     new NewShopOrder(OtherShop, "Standard", 3, 4.5m, [Line(1, 2, 10m), Line(2, 1, 2.5m)], secondShop)]
+        };
+
+    [Fact]
+    public async Task TheDiscountComesOffTheItemsAndNeverOffShipping()
+    {
+        var f = new Fixture();
+
+        var order = (await f.Create().CreateAsync(WithDiscount(2m, 3m), CancellationToken.None)).Value!;
+
+        Assert.Equal((45m, 5m, 9m, 49m, "WELCOME10"), (order.Subtotal, order.DiscountTotal, order.ShippingTotal, order.Total, order.DiscountCode));
+        var first = order.ShopOrders[0];
+        Assert.Equal((22.5m, 2m, "platform", 25m), (first.Subtotal, first.DiscountAmount, first.DiscountFunding, first.Total));
+        Assert.Equal((3m, 24m), (order.ShopOrders[1].DiscountAmount, order.ShopOrders[1].Total));
+    }
+
+    [Fact]
+    public async Task OnlyTheShopOrdersThatGotADiscountRecordWhoFundedIt()
+    {
+        var f = new Fixture();
+
+        var order = (await f.Create().CreateAsync(WithDiscount(5m, 0m, funding: "shop"), CancellationToken.None)).Value!;
+
+        Assert.Equal(("shop", 5m), (order.ShopOrders[0].DiscountFunding, order.DiscountTotal));
+        Assert.Null(order.ShopOrders[1].DiscountFunding);
+        Assert.Equal(0m, order.ShopOrders[1].DiscountAmount);
+    }
+
+    [Fact]
+    public async Task AnOrderWithoutADiscountHasNone()
+    {
+        var f = new Fixture();
+
+        var order = await f.PlaceAsync();
+
+        Assert.Equal((0m, null, 54m), (order.DiscountTotal, order.DiscountCode, order.Total));
+        Assert.All(order.ShopOrders, s => Assert.Null(s.DiscountFunding));
+    }
+
+    [Fact]
+    public async Task ADiscountCannotExceedWhatTheShopSold()
+    {
+        var f = new Fixture();
+
+        var tooMuch = await f.Create().CreateAsync(WithDiscount(22.51m, 0m), CancellationToken.None);
+        var negative = await f.Create().CreateAsync(WithDiscount(-1m, 0m), CancellationToken.None);
+        var exact = await f.Create().CreateAsync(WithDiscount(22.5m, 0m, "ALL"), CancellationToken.None);
+
+        Assert.Contains("discount", tooMuch.Errors.Keys);
+        Assert.Contains("discount", negative.Errors.Keys);
+        Assert.True(exact.Succeeded);
+        // Everything was taken off the items of the shop; its shipping is still charged.
+        Assert.Equal(4.5m, exact.Value!.ShopOrders[0].Total);
+    }
+
+    [Theory]
+    [InlineData(null, "platform")]
+    [InlineData("", "platform")]
+    [InlineData("CODE", null)]
+    [InlineData("CODE", "everyone")]
+    public async Task ADiscountAmountNeedsItsCodeAndFunding(string? code, string? funding)
+    {
+        var f = new Fixture();
+
+        var result = await f.Create().CreateAsync(WithDiscount(1m, 0m, code, funding), CancellationToken.None);
+
+        Assert.Contains("discount", result.Errors.Keys);
+        Assert.Empty(f.Store.Orders);
+    }
+
+    [Fact]
+    public async Task DiscountAmountsFollowTheDecimalsOfTheCurrency()
+    {
+        var f = new Fixture();
+
+        var result = await f.Create(decimals: 0).CreateAsync(WithDiscount(1.5m, 0m) with { Shops = [new NewShopOrder(Shop, "S", null, 0, [Line(1, 1, 10m)], 1.5m)] }, CancellationToken.None);
+
+        Assert.Contains("discount", result.Errors.Keys);
+    }
+
     // ---- Shop actions ----
 
     [Fact]

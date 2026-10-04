@@ -2,13 +2,16 @@ using Nomori.Marketplace.Core.Cart;
 using Nomori.Marketplace.Core.Catalog;
 using Nomori.Marketplace.Core.Checkout;
 using Nomori.Marketplace.Core.Customers;
+using Nomori.Marketplace.Core.Discounts;
 using Nomori.Marketplace.Core.Orders;
 using Nomori.Marketplace.Core.Payments;
 using Nomori.Marketplace.Core.Shipping;
 using Nomori.Marketplace.Core.Vendors;
 using Nomori.Marketplace.Services.Checkout;
+using Nomori.Marketplace.Services.Discounts;
 using Nomori.Marketplace.Services.Orders;
 using Nomori.Marketplace.Services.Payments;
+using static Nomori.Marketplace.Services.Tests.DiscountTests;
 using static Nomori.Marketplace.Services.Tests.OrderTests;
 using static Nomori.Marketplace.Services.Tests.PaymentTests;
 using static Nomori.Marketplace.Services.Tests.ShippingTests;
@@ -109,6 +112,7 @@ public sealed class CheckoutTests
         public FakeVendorStore Vendors { get; } = new();
         public FakeStockService Stock { get; } = new();
         public StubAddresses Addresses { get; } = new();
+        public FakeDiscountStore Discounts { get; } = new();
         public RecordingAuditLog Audit { get; } = new();
 
         public Fixture()
@@ -137,7 +141,8 @@ public sealed class CheckoutTests
         {
             var orders = new OrderService(OrderStore, Vendors, new FakePrimaryCurrency(), Stock, Audit, new TestClock());
             var payments = new PaymentService(PaymentStore, [new CashOnDeliveryProvider(), Flaky], new FakePrimaryCurrency(), Audit, new TestClock());
-            return new CheckoutService(Cart, CartLines, Prices, Shipping, payments, PaymentStore, orders, Stock, Addresses, Audit);
+            var discounts = new DiscountService(Discounts, new FakePrimaryCurrency(), Audit, new TestClock());
+            return new CheckoutService(Cart, CartLines, Prices, Shipping, payments, PaymentStore, orders, Stock, Addresses, discounts, Audit);
         }
 
         /// <summary>A cart of (shop, [(line id, product id, quantity)]); lines are priced from <see cref="Prices"/>.</summary>
@@ -158,6 +163,18 @@ public sealed class CheckoutTests
             Cart.View = new CartView("USD", groups, groups.Sum(g => g.Subtotal), groups.Sum(g => g.Lines.Sum(l => l.Quantity)), true);
         }
 
+        /// <summary>A code that is valid for the default cart; a shop code needs that shop in the cart.</summary>
+        public Discount Code(string code = "WELCOME10", string type = "percentage", decimal value = 10, int? vendorId = null, int? maxUses = null, int? perCustomer = null)
+        {
+            var discount = new Discount
+            {
+                Id = Discounts.Discounts.Count + 1, VendorId = vendorId, Name = code, Code = code, Type = type == "fixed" ? DiscountType.Fixed : DiscountType.Percentage,
+                Value = value, MaxUses = maxUses, MaxUsesPerCustomer = perCustomer, Enabled = true
+            };
+            Discounts.Discounts.Add(discount);
+            return discount;
+        }
+
         public void AddIssue(string issue)
         {
             var line = Cart.View.Groups[0].Lines[0] with { Issues = [issue] };
@@ -173,9 +190,12 @@ public sealed class CheckoutTests
     private static CheckoutChoices Choices(int? address = Address, string? method = "cod", params ShippingChoice[] shipping) =>
         new(address, shipping.Length == 0 ? [new ShippingChoice(Shop, 1), new ShippingChoice(OtherShop, 3)] : shipping, method);
 
+    private static CheckoutChoices WithCode(string? code) => Choices() with { CouponCode = code };
+
     private static PlaceOrderRequest Request(
-        int? address = Address, string? method = "cod", string? key = Key, bool terms = true, string? note = null, ShippingChoice[]? shipping = null) =>
-        new(address, shipping ?? [new ShippingChoice(Shop, 1), new ShippingChoice(OtherShop, 3)], method, key, terms, note);
+        int? address = Address, string? method = "cod", string? key = Key, bool terms = true, string? note = null, ShippingChoice[]? shipping = null,
+        string? code = null) =>
+        new(address, shipping ?? [new ShippingChoice(Shop, 1), new ShippingChoice(OtherShop, 3)], method, key, terms, note, code);
 
     private static Task<CatalogResult<PlacedOrder>> Place(Fixture f, PlaceOrderRequest? request = null, int customer = Buyer) =>
         f.Create().PlaceAsync(customer, request ?? Request(), CancellationToken.None);
@@ -675,5 +695,182 @@ public sealed class CheckoutTests
         Assert.Equal(0, f.Stock.ActiveHolds);
         Assert.DoesNotContain("checkout.placed", f.Audit.Events);
         if (!expectReturns) Assert.Empty(f.OrderStore.Orders);
+    }
+
+    // ---- Discount codes ----
+
+    [Fact]
+    public async Task APlatformCodeCutsTheItemsInThePreviewAndSplitsAcrossTheShops()
+    {
+        var f = new Fixture();
+        f.Code();
+
+        var preview = await f.Create().PreviewAsync(Buyer, WithCode("welcome10"), CancellationToken.None);
+
+        Assert.True(preview.CanPlace);
+        Assert.Equal(("WELCOME10", DiscountFunding.Platform, 4m), (preview.Discount!.Code, preview.Discount.Funding, preview.Discount.Amount));
+        Assert.Equal((2m, 2m), (preview.Discount.Split[Shop], preview.Discount.Split[OtherShop]));
+        // Items 40, minus 4, plus shipping 8; shipping is never discounted.
+        Assert.Equal((40m, 8m, 44m), (preview.Subtotal, preview.ShippingTotal, preview.Total));
+        Assert.Null(preview.CouponReason);
+    }
+
+    [Fact]
+    public async Task ACodeThatDoesNotApplyBlocksPlacingAndSaysWhy()
+    {
+        var f = new Fixture();
+        var discount = f.Code();
+        discount.EndsOnUtc = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        var expired = await f.Create().PreviewAsync(Buyer, WithCode("WELCOME10"), CancellationToken.None);
+        var unknown = await f.Create().PreviewAsync(Buyer, WithCode("NOPE"), CancellationToken.None);
+
+        Assert.Contains(CheckoutProblems.CouponInvalid, expired.Problems);
+        Assert.False(expired.CanPlace);
+        Assert.Equal(DiscountReasons.Expired, expired.CouponReason);
+        Assert.Null(expired.Discount);
+        Assert.Equal(DiscountReasons.NotFound, unknown.CouponReason);
+        // Without a discount the total is what it would be without the code.
+        Assert.Equal(48m, expired.Total);
+    }
+
+    [Fact]
+    public async Task NoCodeMeansNoDiscountAndNoProblem()
+    {
+        var f = new Fixture();
+        f.Code();
+
+        var preview = await f.Create().PreviewAsync(Buyer, WithCode("  "), CancellationToken.None);
+
+        Assert.Null(preview.Discount);
+        Assert.DoesNotContain(CheckoutProblems.CouponInvalid, preview.Problems);
+        Assert.Equal(48m, preview.Total);
+    }
+
+    [Fact]
+    public async Task PlacingWithAPlatformCodeRecordsTheSplitTheFundingAndThePaymentOfTheDiscountedTotal()
+    {
+        var f = new Fixture();
+        var discount = f.Code();
+
+        var result = await Place(f, Request(code: "welcome10"));
+
+        Assert.True(result.Succeeded);
+        var order = result.Value!.Order;
+        Assert.Equal(("WELCOME10", 4m, 44m), (order.DiscountCode, order.DiscountTotal, order.Total));
+        Assert.Equal((2m, 2m), (order.ShopOrders[0].DiscountAmount, order.ShopOrders[1].DiscountAmount));
+        Assert.All(order.ShopOrders, s => Assert.Equal("platform", s.DiscountFunding));
+        Assert.Equal((23m, 21m), (order.ShopOrders[0].Total, order.ShopOrders[1].Total));
+
+        Assert.Equal(44m, Assert.Single(f.PaymentStore.Payments).Amount);
+        Assert.Equal(1, discount.UsedCount);
+        Assert.Equal(order.Id, Assert.Single(f.Discounts.Usages).OrderId);
+        Assert.Contains("discount.redeemed", f.Audit.Events);
+    }
+
+    [Fact]
+    public async Task AShopCodeDiscountsOnlyThatShopAndRecordsTheShopAsFunder()
+    {
+        var f = new Fixture();
+        f.Code("SHOP5", "fixed", 5, vendorId: Shop);
+
+        var result = await Place(f, Request(code: "SHOP5"));
+
+        var order = result.Value!.Order;
+        Assert.Equal((5m, 43m), (order.DiscountTotal, order.Total));
+        Assert.Equal((5m, "shop", 20m), (order.ShopOrders[0].DiscountAmount, order.ShopOrders[0].DiscountFunding, order.ShopOrders[0].Subtotal));
+        Assert.Equal((0m, null), (order.ShopOrders[1].DiscountAmount, order.ShopOrders[1].DiscountFunding));
+    }
+
+    [Fact]
+    public async Task AShopCodeDoesNotApplyWhenItsShopIsNotInTheCart()
+    {
+        var f = new Fixture();
+        f.Code("SHOP5", "fixed", 5, vendorId: 77);
+
+        var result = await Place(f, Request(code: "SHOP5"));
+
+        Assert.Contains("couponCode", result.Errors.Keys);
+        AssertNothingHappened(f);
+    }
+
+    [Fact]
+    public async Task ACodeThatDoesNotApplyIsAFieldErrorWithTheReasonAndNothingIsTaken()
+    {
+        var f = new Fixture();
+        f.Code("SMALL", "fixed", 5).MinSubtotal = 1000;
+
+        var result = await Place(f, Request(code: "SMALL"));
+
+        Assert.Equal(DiscountRules.MessageOf(DiscountReasons.MinSubtotal), result.Errors["couponCode"][0]);
+        AssertNothingHappened(f);
+        Assert.Empty(f.Discounts.Usages);
+    }
+
+    [Fact]
+    public async Task TheLastUseTakenMeanwhileCancelsTheOrderAndGivesTheStockBack()
+    {
+        var f = new Fixture();
+        var discount = f.Code(maxUses: 1);
+        // Someone else takes the last use between the check and the redeem.
+        f.Discounts.BeforeRedeem = () => discount.UsedCount = 1;
+
+        var result = await Place(f, Request(code: "WELCOME10"));
+
+        Assert.Equal(CheckoutErrors.CouponUnavailable, result.ErrorCode);
+        var order = Assert.Single(f.OrderStore.Orders);
+        Assert.All(order.ShopOrders, s => Assert.Equal(ShopOrderStatus.Cancelled, s.Status));
+        Assert.Equal((10, 10), (f.Stock.OnHand[1], f.Stock.OnHand[2]));
+        Assert.Empty(f.PaymentStore.Payments);
+        Assert.Equal(0, f.Cart.Cleared);
+        Assert.Empty(f.Discounts.Usages);
+    }
+
+    [Fact]
+    public async Task AFailedPaymentGivesTheUseOfTheCodeBack()
+    {
+        var f = new Fixture();
+        var discount = f.Code(maxUses: 1);
+        f.Flaky.FailInitiate = true;
+
+        var result = await Place(f, Request(method: "flaky", code: "WELCOME10"));
+
+        Assert.Equal(CheckoutErrors.PaymentFailed, result.ErrorCode);
+        Assert.Equal(0, discount.UsedCount);
+        Assert.Empty(f.Discounts.Usages);
+        Assert.Contains("discount.released", f.Audit.Events);
+
+        // The code can be used again by the next, successful try.
+        f.Flaky.FailInitiate = false;
+        Assert.True((await Place(f, Request(method: "flaky", code: "WELCOME10", key: "another-key-1234"))).Succeeded);
+        Assert.Equal(1, discount.UsedCount);
+    }
+
+    [Fact]
+    public async Task ReplayingAPlacementDoesNotUseTheCodeTwice()
+    {
+        var f = new Fixture();
+        var discount = f.Code();
+
+        await Place(f, Request(code: "WELCOME10"));
+        var again = await Place(f, Request(code: "WELCOME10"));
+
+        Assert.True(again.Value!.Replayed);
+        Assert.Equal(1, discount.UsedCount);
+        Assert.Single(f.Discounts.Usages);
+    }
+
+    [Fact]
+    public async Task ThePerCustomerLimitStopsTheSecondOrder()
+    {
+        var f = new Fixture();
+        f.Code(perCustomer: 1);
+        await Place(f, Request(code: "WELCOME10"));
+        f.SetCart((Shop, [(1, 1, 2)]), (OtherShop, [(2, 2, 1)]));
+
+        var second = await Place(f, Request(code: "WELCOME10", key: "second-key-1234"));
+
+        Assert.Equal(DiscountRules.MessageOf(DiscountReasons.CustomerLimitReached), second.Errors["couponCode"][0]);
+        Assert.Single(f.OrderStore.Orders);
     }
 }
