@@ -73,7 +73,10 @@ public sealed class Order
 
     public string? DiscountCode { get; set; }
 
-    /// <summary>Items minus the discount plus shipping.</summary>
+    /// <summary>The tax charged on the items, over all shop orders. The platform collects it.</summary>
+    public decimal TaxTotal { get; set; }
+
+    /// <summary>Items minus the discount plus shipping plus tax.</summary>
     public decimal Total { get; set; }
 
     public string PaymentMethod { get; set; } = string.Empty;
@@ -112,6 +115,9 @@ public sealed class ShopOrder
     /// <summary>Who bears <see cref="DiscountAmount"/>: <c>platform</c> or <c>shop</c>; null when there is no discount. Settlement reads it.</summary>
     public string? DiscountFunding { get; set; }
 
+    /// <summary>The tax on this shop order's lines; settlement reads it.</summary>
+    public decimal TaxAmount { get; set; }
+
     public decimal Total { get; set; }
     public string ShippingMethodName { get; set; } = string.Empty;
     public int? ShippingRateId { get; set; }
@@ -143,6 +149,11 @@ public sealed class OrderLine
     public int Quantity { get; set; }
     public decimal UnitPrice { get; set; }
     public decimal LineTotal { get; set; }
+
+    /// <summary>The percentage that was charged on this line, kept so a later change of the rates cannot change the order.</summary>
+    public decimal TaxRate { get; set; }
+
+    public decimal TaxAmount { get; set; }
 }
 
 public sealed record OrderHistoryEntry(
@@ -154,7 +165,8 @@ public sealed record NewOrderRecipient(
     string? Name, string? Phone, string? Address1, string? Address2, string? City, string? StateProvince, string? PostalCode, string? CountryCode);
 
 public sealed record NewOrderLine(
-    int ProductId, int? CombinationId, string? Name, string? VariantLabel, string? Sku, int PictureId, int Quantity, decimal UnitPrice);
+    int ProductId, int? CombinationId, string? Name, string? VariantLabel, string? Sku, int PictureId, int Quantity, decimal UnitPrice,
+    decimal TaxRate = 0m, decimal TaxAmount = 0m);
 
 public sealed record NewShopOrder(
     int VendorId, string? ShippingMethodName, int? ShippingRateId, decimal ShippingFee, IReadOnlyList<NewOrderLine>? Lines, decimal DiscountAmount = 0m);

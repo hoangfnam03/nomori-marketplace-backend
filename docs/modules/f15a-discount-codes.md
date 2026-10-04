@@ -63,7 +63,7 @@ Members of a shop cannot use their own shop's discount code on their own shop's 
 | Giving a use back when a shop order is cancelled; refund of the discount | F15-B, F21 |
 | Showing codes in the cart before checkout | F15-B |
 | Reports on discount usage, settlement of platform-funded amounts | F26, F05 settlement PRD |
-| Tax on the discounted amount | F07-E |
+| Tax on the discounted amount (done in F07-E: the discount share leaves the tax base) | F07-E |
 
 ## 6. Source map from nopCommerce
 

@@ -11,18 +11,18 @@ public sealed class SqlOrderStore(IOptions<DatabaseOptions> options) : IOrderSto
 {
     private const string OrderColumns =
         "o.Id, o.Number, o.CustomerId, o.PlacementKey, o.CurrencyCode, o.Subtotal, o.ShippingTotal, o.Total, o.PaymentMethod, o.CustomerNote, " +
-        "o.RecipientName, o.RecipientPhone, o.Address1, o.Address2, o.City, o.StateProvince, o.PostalCode, o.CountryCode, o.CreatedOnUtc, o.DiscountCode, o.DiscountTotal";
+        "o.RecipientName, o.RecipientPhone, o.Address1, o.Address2, o.City, o.StateProvince, o.PostalCode, o.CountryCode, o.CreatedOnUtc, o.DiscountCode, o.DiscountTotal, o.TaxTotal";
 
     private const string ShopColumns =
         "s.Id, s.OrderId, s.Number, s.VendorId, s.ShopName, s.Status, s.Subtotal, s.ShippingFee, s.Total, s.ShippingMethodName, s.ShippingRateId, " +
         "s.Carrier, s.TrackingNumber, s.CancelReason, s.CreatedOnUtc, s.UpdatedOnUtc, " +
-        "(SELECT COALESCE(SUM(l.Quantity), 0) FROM OrderLine l WHERE l.ShopOrderId = s.Id), s.DiscountAmount, s.DiscountFunding";
+        "(SELECT COALESCE(SUM(l.Quantity), 0) FROM OrderLine l WHERE l.ShopOrderId = s.Id), s.DiscountAmount, s.DiscountFunding, s.TaxAmount";
 
     private const string LineColumns =
-        "Id, ShopOrderId, ProductId, CombinationId, Name, VariantLabel, Sku, PictureId, Quantity, UnitPrice, LineTotal";
+        "Id, ShopOrderId, ProductId, CombinationId, Name, VariantLabel, Sku, PictureId, Quantity, UnitPrice, LineTotal, TaxRate, TaxAmount";
 
     /// <summary>How many columns <see cref="ShopColumns"/> selects; the order columns follow them in a joined read.</summary>
-    private const int ShopColumnCount = 19;
+    private const int ShopColumnCount = 20;
 
     // 2601 and 2627: a unique index says the row already exists.
     private static bool IsDuplicate(SqlException ex) => ex.Number is 2601 or 2627;
@@ -37,11 +37,11 @@ public sealed class SqlOrderStore(IOptions<DatabaseOptions> options) : IOrderSto
         try
         {
             await using (var cmd = Command(connection, transaction, """
-                INSERT INTO CustomerOrder (Number, CustomerId, PlacementKey, CurrencyCode, Subtotal, ShippingTotal, DiscountTotal, DiscountCode, Total, PaymentMethod, CustomerNote,
+                INSERT INTO CustomerOrder (Number, CustomerId, PlacementKey, CurrencyCode, Subtotal, ShippingTotal, DiscountTotal, DiscountCode, TaxTotal, Total, PaymentMethod, CustomerNote,
                     RecipientName, RecipientPhone, Address1, Address2, City, StateProvince, PostalCode, CountryCode, CreatedOnUtc)
                 OUTPUT INSERTED.Id
                 -- The real number needs the id; until then a throw-away value keeps the unique index happy.
-                VALUES (REPLACE(CONVERT(nvarchar(36), NEWID()), '-', ''), @CustomerId, @PlacementKey, @CurrencyCode, @Subtotal, @ShippingTotal, @DiscountTotal, @DiscountCode, @Total,
+                VALUES (REPLACE(CONVERT(nvarchar(36), NEWID()), '-', ''), @CustomerId, @PlacementKey, @CurrencyCode, @Subtotal, @ShippingTotal, @DiscountTotal, @DiscountCode, @TaxTotal, @Total,
                     @PaymentMethod, @CustomerNote, @RecipientName, @RecipientPhone, @Address1, @Address2, @City, @StateProvince, @PostalCode,
                     @CountryCode, @CreatedOnUtc)
                 """))
@@ -52,6 +52,7 @@ public sealed class SqlOrderStore(IOptions<DatabaseOptions> options) : IOrderSto
                 cmd.Parameters.AddWithValue("@Subtotal", order.Subtotal);
                 cmd.Parameters.AddWithValue("@ShippingTotal", order.ShippingTotal);
                 cmd.Parameters.AddWithValue("@DiscountTotal", order.DiscountTotal);
+                cmd.Parameters.AddWithValue("@TaxTotal", order.TaxTotal);
                 cmd.Parameters.AddWithValue("@DiscountCode", (object?)order.DiscountCode ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("@Total", order.Total);
                 cmd.Parameters.AddWithValue("@PaymentMethod", order.PaymentMethod);
@@ -100,9 +101,9 @@ public sealed class SqlOrderStore(IOptions<DatabaseOptions> options) : IOrderSto
     private static async Task InsertShopOrderAsync(SqlConnection connection, SqlTransaction transaction, ShopOrder shop, int customerId, CancellationToken cancellationToken)
     {
         await using (var cmd = Command(connection, transaction, """
-            INSERT INTO ShopOrder (OrderId, VendorId, Number, ShopName, Status, Subtotal, ShippingFee, DiscountAmount, DiscountFunding, Total, ShippingMethodName, ShippingRateId, CreatedOnUtc, UpdatedOnUtc)
+            INSERT INTO ShopOrder (OrderId, VendorId, Number, ShopName, Status, Subtotal, ShippingFee, DiscountAmount, DiscountFunding, TaxAmount, Total, ShippingMethodName, ShippingRateId, CreatedOnUtc, UpdatedOnUtc)
             OUTPUT INSERTED.Id
-            VALUES (@OrderId, @VendorId, @Number, @ShopName, @Status, @Subtotal, @ShippingFee, @DiscountAmount, @DiscountFunding, @Total, @ShippingMethodName, @ShippingRateId, @CreatedOnUtc, @CreatedOnUtc)
+            VALUES (@OrderId, @VendorId, @Number, @ShopName, @Status, @Subtotal, @ShippingFee, @DiscountAmount, @DiscountFunding, @TaxAmount, @Total, @ShippingMethodName, @ShippingRateId, @CreatedOnUtc, @CreatedOnUtc)
             """))
         {
             cmd.Parameters.AddWithValue("@OrderId", shop.OrderId);
@@ -113,6 +114,7 @@ public sealed class SqlOrderStore(IOptions<DatabaseOptions> options) : IOrderSto
             cmd.Parameters.AddWithValue("@Subtotal", shop.Subtotal);
             cmd.Parameters.AddWithValue("@ShippingFee", shop.ShippingFee);
             cmd.Parameters.AddWithValue("@DiscountAmount", shop.DiscountAmount);
+            cmd.Parameters.AddWithValue("@TaxAmount", shop.TaxAmount);
             cmd.Parameters.AddWithValue("@DiscountFunding", (object?)shop.DiscountFunding ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@Total", shop.Total);
             cmd.Parameters.AddWithValue("@ShippingMethodName", shop.ShippingMethodName);
@@ -125,9 +127,9 @@ public sealed class SqlOrderStore(IOptions<DatabaseOptions> options) : IOrderSto
         {
             line.ShopOrderId = shop.Id;
             await using var cmd = Command(connection, transaction, """
-                INSERT INTO OrderLine (ShopOrderId, ProductId, CombinationId, Name, VariantLabel, Sku, PictureId, Quantity, UnitPrice, LineTotal)
+                INSERT INTO OrderLine (ShopOrderId, ProductId, CombinationId, Name, VariantLabel, Sku, PictureId, Quantity, UnitPrice, LineTotal, TaxRate, TaxAmount)
                 OUTPUT INSERTED.Id
-                VALUES (@ShopOrderId, @ProductId, @CombinationId, @Name, @VariantLabel, @Sku, @PictureId, @Quantity, @UnitPrice, @LineTotal)
+                VALUES (@ShopOrderId, @ProductId, @CombinationId, @Name, @VariantLabel, @Sku, @PictureId, @Quantity, @UnitPrice, @LineTotal, @TaxRate, @TaxAmount)
                 """);
             cmd.Parameters.AddWithValue("@ShopOrderId", shop.Id);
             cmd.Parameters.AddWithValue("@ProductId", line.ProductId);
@@ -139,6 +141,8 @@ public sealed class SqlOrderStore(IOptions<DatabaseOptions> options) : IOrderSto
             cmd.Parameters.AddWithValue("@Quantity", line.Quantity);
             cmd.Parameters.AddWithValue("@UnitPrice", line.UnitPrice);
             cmd.Parameters.AddWithValue("@LineTotal", line.LineTotal);
+            cmd.Parameters.AddWithValue("@TaxRate", line.TaxRate);
+            cmd.Parameters.AddWithValue("@TaxAmount", line.TaxAmount);
             line.Id = Convert.ToInt32(await cmd.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
         }
 
@@ -493,7 +497,8 @@ public sealed class SqlOrderStore(IOptions<DatabaseOptions> options) : IOrderSto
                 Id = reader.GetInt32(0), ShopOrderId = reader.GetInt32(1), ProductId = reader.GetInt32(2),
                 CombinationId = reader.IsDBNull(3) ? null : reader.GetInt32(3), Name = reader.GetString(4),
                 VariantLabel = reader.IsDBNull(5) ? null : reader.GetString(5), Sku = reader.IsDBNull(6) ? null : reader.GetString(6),
-                PictureId = reader.GetInt32(7), Quantity = reader.GetInt32(8), UnitPrice = reader.GetDecimal(9), LineTotal = reader.GetDecimal(10)
+                PictureId = reader.GetInt32(7), Quantity = reader.GetInt32(8), UnitPrice = reader.GetDecimal(9), LineTotal = reader.GetDecimal(10),
+                TaxRate = reader.GetDecimal(11), TaxAmount = reader.GetDecimal(12)
             });
         }
         return lines;
@@ -508,7 +513,7 @@ public sealed class SqlOrderStore(IOptions<DatabaseOptions> options) : IOrderSto
         Address2 = r.IsDBNull(o + 13) ? null : r.GetString(o + 13), City = r.GetString(o + 14),
         StateProvince = r.IsDBNull(o + 15) ? null : r.GetString(o + 15), PostalCode = r.IsDBNull(o + 16) ? null : r.GetString(o + 16),
         CountryCode = r.GetString(o + 17), CreatedOnUtc = DateTime.SpecifyKind(r.GetDateTime(o + 18), DateTimeKind.Utc),
-        DiscountCode = r.IsDBNull(o + 19) ? null : r.GetString(o + 19), DiscountTotal = r.GetDecimal(o + 20)
+        DiscountCode = r.IsDBNull(o + 19) ? null : r.GetString(o + 19), DiscountTotal = r.GetDecimal(o + 20), TaxTotal = r.GetDecimal(o + 21)
     };
 
     private static ShopOrder ReadShopOrder(SqlDataReader r, int o) => new()
@@ -519,7 +524,7 @@ public sealed class SqlOrderStore(IOptions<DatabaseOptions> options) : IOrderSto
         Carrier = r.IsDBNull(o + 11) ? null : r.GetString(o + 11), TrackingNumber = r.IsDBNull(o + 12) ? null : r.GetString(o + 12),
         CancelReason = r.IsDBNull(o + 13) ? null : r.GetString(o + 13),
         CreatedOnUtc = DateTime.SpecifyKind(r.GetDateTime(o + 14), DateTimeKind.Utc), UpdatedOnUtc = DateTime.SpecifyKind(r.GetDateTime(o + 15), DateTimeKind.Utc),
-        ItemCount = r.GetInt32(o + 16), DiscountAmount = r.GetDecimal(o + 17), DiscountFunding = r.IsDBNull(o + 18) ? null : r.GetString(o + 18)
+        ItemCount = r.GetInt32(o + 16), DiscountAmount = r.GetDecimal(o + 17), DiscountFunding = r.IsDBNull(o + 18) ? null : r.GetString(o + 18), TaxAmount = r.GetDecimal(o + 19)
     };
 
     private static SqlCommand Command(SqlConnection connection, SqlTransaction transaction, string text)

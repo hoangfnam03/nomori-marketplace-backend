@@ -65,10 +65,12 @@ public sealed record CheckoutPaymentMethodResponse(string SystemName, string Dis
 
 public sealed record CheckoutDiscountResponse(string Code, string Name, string Funding, decimal Amount, IReadOnlyDictionary<int, decimal> Split);
 
+public sealed record CheckoutTaxResponse(decimal Total, IReadOnlyDictionary<int, decimal> PerShop);
+
 public sealed record CheckoutPreviewResponse(
     Core.Cart.CartView Cart, int? AddressId, IReadOnlyList<CheckoutShopResponse> Shops, IReadOnlyList<CheckoutPaymentMethodResponse> PaymentMethods,
     string? PaymentMethod, decimal Subtotal, decimal? ShippingTotal, decimal? Total, IReadOnlyList<string> Problems, bool CanPlace,
-    CheckoutDiscountResponse? Discount, string? CouponReason)
+    CheckoutDiscountResponse? Discount, string? CouponReason, CheckoutTaxResponse? Tax)
 {
     public static CheckoutPreviewResponse From(CheckoutPreview p) => new(
         p.Cart, p.AddressId,
@@ -77,20 +79,20 @@ public sealed record CheckoutPreviewResponse(
         p.PaymentMethods.Select(m => new CheckoutPaymentMethodResponse(m.SystemName, m.DisplayName, m.Kind == PaymentProviderKind.Offline)).ToList(),
         p.PaymentMethod, p.Subtotal, p.ShippingTotal, p.Total, p.Problems, p.CanPlace,
         p.Discount is null ? null : new CheckoutDiscountResponse(p.Discount.Code, p.Discount.Name, Core.Discounts.DiscountRules.ToWire(p.Discount.Funding), p.Discount.Amount, p.Discount.Split),
-        p.CouponReason);
+        p.CouponReason, p.Tax is null ? null : new CheckoutTaxResponse(p.Tax.Total, p.Tax.PerShop));
 }
 
 public sealed record PlacedShopOrderResponse(int Id, string Number, int VendorId, string ShopName, decimal Total);
 
 public sealed record PlacedOrderResponse(
-    int OrderId, string Number, string CurrencyCode, decimal Subtotal, decimal ShippingTotal, decimal DiscountTotal, decimal Total, string PaymentMethod,
+    int OrderId, string Number, string CurrencyCode, decimal Subtotal, decimal ShippingTotal, decimal DiscountTotal, decimal TaxTotal, decimal Total, string PaymentMethod,
     string? PaymentStatus, bool Replayed, IReadOnlyList<PlacedShopOrderResponse> ShopOrders)
 {
     public static PlacedOrderResponse From(PlacedOrder placed)
     {
         var o = placed.Order;
         return new PlacedOrderResponse(
-            o.Id, o.Number, o.CurrencyCode, o.Subtotal, o.ShippingTotal, o.DiscountTotal, o.Total, o.PaymentMethod,
+            o.Id, o.Number, o.CurrencyCode, o.Subtotal, o.ShippingTotal, o.DiscountTotal, o.TaxTotal, o.Total, o.PaymentMethod,
             placed.Payment is null ? null : PaymentRules.ToWire(placed.Payment.Status), placed.Replayed,
             o.ShopOrders.Select(s => new PlacedShopOrderResponse(s.Id, s.Number, s.VendorId, s.ShopName, s.Total)).ToList());
     }

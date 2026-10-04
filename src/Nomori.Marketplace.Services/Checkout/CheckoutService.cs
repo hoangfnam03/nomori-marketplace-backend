@@ -7,6 +7,7 @@ using Nomori.Marketplace.Core.Orders;
 using Nomori.Marketplace.Core.Payments;
 using Nomori.Marketplace.Core.Security;
 using Nomori.Marketplace.Core.Shipping;
+using Nomori.Marketplace.Core.Tax;
 
 namespace Nomori.Marketplace.Services.Checkout;
 
@@ -21,30 +22,33 @@ public sealed class CheckoutService(
     IInventoryService inventoryService,
     ICustomerAccountDataService addressService,
     IDiscountService discountService,
+    ITaxService taxService,
     IAuditLogService auditLog) : ICheckoutService
 {
     /// <summary>Everything the preview and the placement both need, worked out once from the same inputs.</summary>
     private sealed record State(
         CartView Cart, CustomerAddress? Address, IReadOnlyList<CheckoutShopShipping> Shops, IReadOnlyList<PaymentMethodView> Methods,
-        PaymentMethodView? Method, IReadOnlyList<string> Problems, decimal? ShippingTotal, AppliedDiscount? Discount, string? CouponReason);
+        PaymentMethodView? Method, IReadOnlyList<string> Problems, decimal? ShippingTotal, AppliedDiscount? Discount, string? CouponReason,
+        TaxCalculation? Tax);
 
     /// <summary>A line as it will be sold: what to take from stock and what to write on the order.</summary>
-    private sealed record SaleLine(int VendorId, NewOrderLine Line, bool Tracked);
+    private sealed record SaleLine(int VendorId, NewOrderLine Line, bool Tracked, decimal LineTotal);
 
     // ---- Preview ----
 
     public async Task<CheckoutPreview> PreviewAsync(int customerId, CheckoutChoices choices, CancellationToken cancellationToken)
     {
         var state = await BuildAsync(customerId, choices, cancellationToken);
-        // Items minus the discount, plus shipping; the discount never touches shipping.
+        // Items minus the discount, plus shipping, plus tax; the discount never touches shipping and tax is charged on what is paid for the items.
         var discounted = state.Cart.Subtotal - (state.Discount?.Amount ?? 0m);
-        var total = state.ShippingTotal is { } shipping ? discounted + shipping : (decimal?)null;
+        var total = state.ShippingTotal is { } shipping ? discounted + shipping + (state.Tax?.Total ?? 0m) : (decimal?)null;
         var discount = state.Discount is { } applied
             ? new CheckoutDiscount(applied.Discount.Code, applied.Discount.Name, applied.Discount.Funding, applied.Amount, applied.Split)
             : null;
         return new CheckoutPreview(
             state.Cart, state.Address?.Id, state.Shops, state.Methods, state.Method?.SystemName, state.Cart.Subtotal, state.ShippingTotal, total,
-            state.Problems, state.Problems.Count == 0, discount, state.CouponReason);
+            state.Problems, state.Problems.Count == 0, discount, state.CouponReason,
+            state.Tax is { } tax ? new CheckoutTax(tax.Total, tax.ShopTax) : null);
     }
 
     // ---- Place ----
@@ -83,9 +87,15 @@ public sealed class CheckoutService(
         if (sale.Failure is not null) return CatalogResult.Failure<PlacedOrder>(sale.Failure);
         if (sale.Lines is null) return CatalogResult.Error<PlacedOrder>(CheckoutErrors.CartNotReady);
 
+        // The tax is worked out again from the prices the order will carry, not taken from the preview.
+        var taxed = await taxService.CalculateAsync(
+            state.Address!.CountryCode, state.Address.StateProvinceId, sale.Lines.Select(l => new TaxableLine(l.VendorId, l.Line.ProductId, l.LineTotal)).ToList(),
+            state.Discount?.Split ?? new Dictionary<int, decimal>(), cancellationToken);
+        var lines = sale.Lines.Select((l, i) => l with { Line = l.Line with { TaxRate = taxed.Lines[i].Rate, TaxAmount = taxed.Lines[i].Tax } }).ToList();
+
         // 1. Take the stock first: it is the thing that can run out.
         var reference = CheckoutRules.StockReference(placementKey);
-        var taken = await TakeStockAsync(reference, sale.Lines, cancellationToken);
+        var taken = await TakeStockAsync(reference, lines, cancellationToken);
         if (taken is not null)
         {
             // Another request with this key may have won the race; its order is the answer.
@@ -96,11 +106,11 @@ public sealed class CheckoutService(
 
         // 2. Make the order. Whatever goes wrong from here, the stock goes back.
         var rollbackReference = "checkout-rollback:" + placementKey;
-        var stockLines = sale.Lines.Select(l => new StockReturnLine(l.Line.ProductId, l.Line.CombinationId, l.Line.Quantity)).ToList();
+        var stockLines = lines.Select(l => new StockReturnLine(l.Line.ProductId, l.Line.CombinationId, l.Line.Quantity)).ToList();
         CatalogResult<Order> created;
         try
         {
-            created = await orderService.CreateAsync(BuildCommand(customerId, placementKey, note, state, sale.Lines), cancellationToken);
+            created = await orderService.CreateAsync(BuildCommand(customerId, placementKey, note, state, lines), cancellationToken);
         }
         catch
         {
@@ -214,8 +224,16 @@ public sealed class CheckoutService(
             if (discount is null) problems.Add(CheckoutProblems.CouponInvalid);
         }
 
+        // Tax follows the delivery address and is charged on what is paid for each line, after its share of the discount.
+        TaxCalculation? tax = null;
+        if (address is not null && cart.Groups.Count > 0)
+        {
+            var taxable = cart.Groups.SelectMany(g => g.Lines.Select(l => new TaxableLine(g.VendorId, l.ProductId, l.LineTotal))).ToList();
+            tax = await taxService.CalculateAsync(address.CountryCode, address.StateProvinceId, taxable, discount?.Split ?? new Dictionary<int, decimal>(), cancellationToken);
+        }
+
         decimal? shippingTotal = quote is not null && shops.Count > 0 && shops.All(s => s.Chosen is not null) ? shops.Sum(s => s.Chosen!.Fee) : null;
-        return new State(cart, address, shops, methods, method, problems.Distinct().ToList(), shippingTotal, discount, couponReason);
+        return new State(cart, address, shops, methods, method, problems.Distinct().ToList(), shippingTotal, discount, couponReason, tax);
     }
 
     /// <summary>Prices every line again and checks that it can be sold. Null lines mean the cart changed under us.</summary>
@@ -245,7 +263,7 @@ public sealed class CheckoutService(
 
                 lines.Add(new SaleLine(group.VendorId,
                     new NewOrderLine(line.ProductId, quote.Value!.CombinationId, view.Name, view.VariantLabel, view.Sku, view.MainPictureId, line.Quantity, quote.Value.UnitPrice),
-                    availability.TrackInventory));
+                    availability.TrackInventory, quote.Value.LineTotal));
             }
         }
         return (lines, null);

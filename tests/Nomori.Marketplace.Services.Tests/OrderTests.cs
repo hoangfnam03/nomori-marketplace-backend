@@ -352,6 +352,87 @@ public sealed class OrderTests
         Assert.Contains("unitPrice", result.Errors.Keys);
     }
 
+    // ---- Tax ----
+
+    private static NewOrderCommand WithTax(decimal firstLineTax, decimal secondLineTax = 0m, decimal rate = 10m) =>
+        Command() with
+        {
+            Shops = [new NewShopOrder(Shop, "Standard", 3, 4.5m, [Line(1, 2, 10m) with { TaxRate = rate, TaxAmount = firstLineTax }, Line(2, 1, 2.5m) with { TaxRate = rate, TaxAmount = secondLineTax }])]
+        };
+
+    [Fact]
+    public async Task TaxIsAddedToTheTotalsAndKeptOnTheLineTheShopOrderAndTheOrder()
+    {
+        var f = new Fixture();
+
+        var order = (await f.Create().CreateAsync(WithTax(2m, 0.25m), CancellationToken.None)).Value!;
+
+        var shop = order.ShopOrders[0];
+        Assert.Equal((10m, 2m), (shop.Lines[0].TaxRate, shop.Lines[0].TaxAmount));
+        Assert.Equal((2.25m, 22.5m + 4.5m + 2.25m), (shop.TaxAmount, shop.Total));
+        Assert.Equal((2.25m, 29.25m), (order.TaxTotal, order.Total));
+    }
+
+    [Fact]
+    public async Task AnOrderWithoutTaxHasNone()
+    {
+        var f = new Fixture();
+
+        var order = await f.PlaceAsync();
+
+        Assert.Equal((0m, 54m), (order.TaxTotal, order.Total));
+        Assert.All(order.ShopOrders.SelectMany(s => s.Lines), l => Assert.Equal((0m, 0m), (l.TaxRate, l.TaxAmount)));
+    }
+
+    [Fact]
+    public async Task DiscountAndTaxWorkTogetherInTheTotal()
+    {
+        var f = new Fixture();
+        var command = WithTax(1.8m, 0.2m) with { Discount = new NewOrderDiscount("CODE", "platform") };
+        command = command with { Shops = [command.Shops![0] with { DiscountAmount = 2.5m }] };
+
+        var order = (await f.Create().CreateAsync(command, CancellationToken.None)).Value!;
+
+        // Items 22.5, minus 2.5, plus shipping 4.5, plus tax 2.
+        Assert.Equal((22.5m, 2.5m, 4.5m, 2m, 26.5m), (order.Subtotal, order.DiscountTotal, order.ShippingTotal, order.TaxTotal, order.Total));
+    }
+
+    [Theory]
+    [InlineData(20.01, 0, 10)]
+    [InlineData(-1, 0, 10)]
+    [InlineData(1.005, 0, 10)]
+    [InlineData(1, 0, 100.5)]
+    [InlineData(1, 0, -1)]
+    public async Task BadTaxValuesAreRefused(double first, double second, double rate)
+    {
+        var f = new Fixture();
+
+        var result = await f.Create().CreateAsync(WithTax((decimal)first, (decimal)second, (decimal)rate), CancellationToken.None);
+
+        Assert.Contains("tax", result.Errors.Keys);
+        Assert.Empty(f.Store.Orders);
+    }
+
+    [Fact]
+    public async Task TaxCannotBeMoreThanTheLineItIsChargedOn()
+    {
+        var f = new Fixture();
+
+        var result = await f.Create().CreateAsync(WithTax(20.5m), CancellationToken.None);
+
+        Assert.Contains("tax", result.Errors.Keys);
+    }
+
+    [Fact]
+    public async Task TaxAmountsFollowTheDecimalsOfTheCurrency()
+    {
+        var f = new Fixture();
+
+        var result = await f.Create(decimals: 0).CreateAsync(WithTax(1.5m) with { Shops = [new NewShopOrder(Shop, "S", null, 0, [Line(1, 1, 10m) with { TaxRate = 15, TaxAmount = 1.5m }])] }, CancellationToken.None);
+
+        Assert.Contains("tax", result.Errors.Keys);
+    }
+
     // ---- Discounts ----
 
     private static NewOrderCommand WithDiscount(decimal firstShop, decimal secondShop, string? code = "WELCOME10", string? funding = "platform") =>

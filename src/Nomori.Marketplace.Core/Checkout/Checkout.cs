@@ -4,6 +4,7 @@ using Nomori.Marketplace.Core.Discounts;
 using Nomori.Marketplace.Core.Orders;
 using Nomori.Marketplace.Core.Payments;
 using Nomori.Marketplace.Core.Shipping;
+using Nomori.Marketplace.Core.Tax;
 
 namespace Nomori.Marketplace.Core.Checkout;
 
@@ -64,6 +65,9 @@ public sealed record CheckoutShopShipping(
 public sealed record CheckoutDiscount(
     string Code, string Name, DiscountFunding Funding, decimal Amount, IReadOnlyDictionary<int, decimal> Split);
 
+/// <summary>The tax of the cart for the chosen address: in all, and per shop (vendor id to tax).</summary>
+public sealed record CheckoutTax(decimal Total, IReadOnlyDictionary<int, decimal> PerShop);
+
 public sealed record CheckoutPreview(
     CartView Cart,
     int? AddressId,
@@ -76,7 +80,8 @@ public sealed record CheckoutPreview(
     IReadOnlyList<string> Problems,
     bool CanPlace,
     CheckoutDiscount? Discount = null,
-    string? CouponReason = null);
+    string? CouponReason = null,
+    CheckoutTax? Tax = null);
 
 public sealed record PlacedOrder(Order Order, PaymentTransaction? Payment, bool Replayed);
 
