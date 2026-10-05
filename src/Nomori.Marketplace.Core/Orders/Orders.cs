@@ -82,6 +82,11 @@ public sealed class Order
     public string PaymentMethod { get; set; } = string.Empty;
     public string? CustomerNote { get; set; }
 
+    /// <summary>
+    /// The customer was sent to pay and the money is not confirmed yet. Shops cannot see or act on the order until it is paid.
+    /// </summary>
+    public bool AwaitingPayment { get; set; }
+
     // The recipient as written at the time of the order. Never linked to the address book.
     public string RecipientName { get; set; } = string.Empty;
     public string RecipientPhone { get; set; } = string.Empty;
@@ -177,7 +182,7 @@ public sealed record NewOrderDiscount(string? Code, string? Funding);
 /// <summary>What checkout decided. Totals are not part of it: the service computes them.</summary>
 public sealed record NewOrderCommand(
     int CustomerId, string? PlacementKey, string? PaymentMethod, string? CustomerNote, NewOrderRecipient? Recipient,
-    IReadOnlyList<NewShopOrder>? Shops, NewOrderDiscount? Discount = null);
+    IReadOnlyList<NewShopOrder>? Shops, NewOrderDiscount? Discount = null, bool AwaitingPayment = false);
 
 public sealed record ShipCommand(string? Carrier, string? TrackingNumber);
 
@@ -319,6 +324,9 @@ public interface IOrderStore
     Task<bool> TryTransitionAsync(ShopOrderTransition transition, CancellationToken cancellationToken);
 
     /// <summary>Changes carrier and tracking while the shop order is still shipped, and records it in the history. False otherwise.</summary>
+    /// <summary>Marks the order as paid: shops can see it from now on. False when it was not awaiting payment.</summary>
+    Task<bool> ClearAwaitingPaymentAsync(int orderId, CancellationToken cancellationToken);
+
     Task<bool> TryUpdateTrackingAsync(int shopOrderId, string carrier, string trackingNumber, int actorCustomerId, DateTime nowUtc, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<OrderHistoryEntry>> GetHistoryAsync(IReadOnlyCollection<int> shopOrderIds, CancellationToken cancellationToken);
@@ -333,6 +341,9 @@ public interface IOrderService
 
     /// <summary>The order that was made with this placement key, if any.</summary>
     Task<Order?> FindByPlacementKeyAsync(string placementKey, CancellationToken cancellationToken);
+
+    /// <summary>The money of the order is confirmed: shops can see and work on it. Safe to repeat.</summary>
+    Task<CatalogResult<bool>> MarkPaidAsync(int orderId, CancellationToken cancellationToken);
 
     /// <summary>Cancels every shop order of the order that is still pending, as the system (checkout does it when the payment fails). Stock goes back.</summary>
     Task<CatalogResult<Order>> CancelAsSystemAsync(int orderId, string reason, CancellationToken cancellationToken);

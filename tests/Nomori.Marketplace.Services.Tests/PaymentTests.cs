@@ -94,6 +94,20 @@ public sealed class PaymentTests
         public Task<PaymentProviderResult> VoidAsync(PaymentTransaction transaction, CancellationToken cancellationToken) => Task.FromResult(PaymentProviderResult.Ok());
         public Task<PaymentProviderResult> RefundAsync(PaymentTransaction transaction, decimal amount, CancellationToken cancellationToken) => Task.FromResult(PaymentProviderResult.Ok());
         public PaymentCallback? ParseCallback(string body, IReadOnlyDictionary<string, string> headers) => null;
+        public string? GetRedirectUrl(PaymentTransaction transaction) => null;
+    }
+
+    /// <summary>A handler that records what it was told and answers what the test says.</summary>
+    private sealed class RecordingHandler : IPaymentOutcomeHandler
+    {
+        public List<PaymentStatus> Seen { get; } = [];
+        public PaymentFollowUp Answer { get; set; }
+
+        public Task<PaymentFollowUp> OnCallbackAppliedAsync(PaymentTransaction payment, CancellationToken cancellationToken)
+        {
+            Seen.Add(payment.Status);
+            return Task.FromResult(Answer);
+        }
     }
 
     private sealed class Fixture
@@ -102,11 +116,17 @@ public sealed class PaymentTests
         public RecordingAuditLog Audit { get; } = new();
         public SandboxPaymentProvider Sandbox { get; } = new(Secret);
         public FlakyGateway Flaky { get; } = new();
+        public HostedSandboxPaymentProvider Hosted { get; } = new(Secret, "http://app.test/");
+        public RecordingHandler Handler { get; } = new();
 
-        public Fixture() => Store.Methods.Add(new PaymentMethodSetting { SystemName = "flaky", Enabled = true });
+        public Fixture()
+        {
+            Store.Methods.Add(new PaymentMethodSetting { SystemName = "flaky", Enabled = true });
+            Store.Methods.Add(new PaymentMethodSetting { SystemName = HostedSandboxPaymentProvider.Name, Enabled = true });
+        }
 
         public PaymentService Create(bool withSandbox = true) => new(
-            Store, withSandbox ? [new CashOnDeliveryProvider(), Sandbox, Flaky] : [new CashOnDeliveryProvider(), Flaky],
+            Store, withSandbox ? [new CashOnDeliveryProvider(), Sandbox, Flaky, Hosted] : [new CashOnDeliveryProvider(), Flaky, Hosted], [Handler],
             new FakePrimaryCurrency(), Audit, new TestClock());
 
         public async Task<PaymentTransaction> PayAsync(string method = "sandbox", decimal amount = 10, string key = "k1")
@@ -178,9 +198,9 @@ public sealed class PaymentTests
         var f = new Fixture();
         f.Store.Methods.Single(m => m.SystemName == "flaky").Enabled = false;
 
-        Assert.Equal(["cod", "sandbox"], (await f.Create().GetAvailableMethodsAsync(CancellationToken.None)).Select(m => m.SystemName));
+        Assert.Equal(["cod", "sandbox_redirect", "sandbox"], (await f.Create().GetAvailableMethodsAsync(CancellationToken.None)).Select(m => m.SystemName));
         // No provider means the table row alone offers nothing.
-        Assert.Equal(["cod"], (await f.Create(withSandbox: false).GetAvailableMethodsAsync(CancellationToken.None)).Select(m => m.SystemName));
+        Assert.Equal(["cod", "sandbox_redirect"], (await f.Create(withSandbox: false).GetAvailableMethodsAsync(CancellationToken.None)).Select(m => m.SystemName));
     }
 
     [Fact]
@@ -536,4 +556,156 @@ public sealed class PaymentTests
     [InlineData("a-secret-of-sixteen", true)]
     public void TheSandboxNeedsALongEnoughSecret(string secret, bool configured) =>
         Assert.Equal(configured, new SandboxPaymentOptions { Secret = secret }.IsConfigured);
+
+    // ---- Hosted (redirect) payments ----
+
+    private static async Task<PaymentTransaction> PayHostedAsync(Fixture f, string key = "h1", decimal amount = 10) =>
+        (await f.Create().CreateAsync(New(HostedSandboxPaymentProvider.Name, amount, key), CancellationToken.None)).Value!;
+
+    private static Task<CallbackOutcome> Report(Fixture f, string type, string reference)
+    {
+        var (body, headers) = f.Hosted.BuildCallback(type, reference);
+        return f.Create().HandleCallbackAsync(HostedSandboxPaymentProvider.Name, body, headers, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task AHostedPaymentStartsPendingWithAPaymentPage()
+    {
+        var f = new Fixture();
+
+        var payment = await PayHostedAsync(f);
+
+        Assert.Equal(PaymentStatus.Pending, payment.Status);
+        Assert.StartsWith("sbr_", payment.ProviderReference);
+        Assert.Equal($"http://app.test/payments/sandbox/{payment.ProviderReference}", payment.RedirectUrl);
+        Assert.Equal(PaymentProviderKind.Hosted, f.Hosted.Kind);
+    }
+
+    [Fact]
+    public async Task ThePaymentPageIsOnlyGivenWhileThePaymentIsPending()
+    {
+        var f = new Fixture();
+        var payment = await PayHostedAsync(f);
+        Assert.NotNull(f.Create().GetRedirectUrl(payment));
+
+        await Report(f, PaymentCallbackTypes.Captured, payment.ProviderReference!);
+
+        Assert.Null(f.Create().GetRedirectUrl(payment));
+        Assert.Null(f.Create().GetRedirectUrl(new PaymentTransaction { Method = "cod", Status = PaymentStatus.Pending, ProviderReference = "x" }));
+        Assert.Null(f.Create().GetRedirectUrl(new PaymentTransaction { Method = "unknown", Status = PaymentStatus.Pending, ProviderReference = "x" }));
+    }
+
+    [Fact]
+    public async Task ACapturedCallbackPaysTheHostedPaymentAndTellsTheHandlers()
+    {
+        var f = new Fixture();
+        var payment = await PayHostedAsync(f);
+
+        var outcome = await Report(f, PaymentCallbackTypes.Captured, payment.ProviderReference!);
+
+        Assert.Equal(CallbackOutcome.Applied, outcome);
+        Assert.Equal(PaymentStatus.Paid, payment.Status);
+        Assert.Equal([PaymentStatus.Paid], f.Handler.Seen);
+    }
+
+    [Theory]
+    [InlineData(PaymentCallbackTypes.Failed, PaymentStatus.Failed)]
+    [InlineData(PaymentCallbackTypes.Voided, PaymentStatus.Voided)]
+    public async Task AFailedOrVoidedCallbackTellsTheHandlers(string type, PaymentStatus expected)
+    {
+        var f = new Fixture();
+        var payment = await PayHostedAsync(f);
+
+        await Report(f, type, payment.ProviderReference!);
+
+        Assert.Equal(expected, payment.Status);
+        Assert.Equal([expected], f.Handler.Seen);
+    }
+
+    [Fact]
+    public async Task AHandlerThatAsksForARefundGetsTheMoneyBackAtOnce()
+    {
+        var f = new Fixture();
+        f.Handler.Answer = PaymentFollowUp.Refund;
+        var payment = await PayHostedAsync(f, amount: 25);
+
+        await Report(f, PaymentCallbackTypes.Captured, payment.ProviderReference!);
+
+        Assert.Equal((PaymentStatus.Refunded, 25m), (payment.Status, payment.RefundedAmount));
+        Assert.Contains("payment.refunded", f.Audit.Events);
+    }
+
+    [Fact]
+    public async Task ARepeatedCallbackChangesNothingAgainButTheHandlersRunAgainAndCanFinishTheRefund()
+    {
+        var f = new Fixture();
+        var payment = await PayHostedAsync(f);
+        var (body, headers) = f.Hosted.BuildCallback(PaymentCallbackTypes.Captured, payment.ProviderReference!);
+
+        var first = await f.Create().HandleCallbackAsync(HostedSandboxPaymentProvider.Name, body, headers, CancellationToken.None);
+        // The first delivery died after the status changed: the handlers asked for nothing then, and ask for a refund on the repeat.
+        f.Handler.Answer = PaymentFollowUp.Refund;
+        var second = await f.Create().HandleCallbackAsync(HostedSandboxPaymentProvider.Name, body, headers, CancellationToken.None);
+
+        Assert.Equal((CallbackOutcome.Applied, CallbackOutcome.Replay), (first, second));
+        Assert.Equal([PaymentStatus.Paid, PaymentStatus.Paid], f.Handler.Seen);
+        Assert.Equal(PaymentStatus.Refunded, payment.Status);
+        Assert.Single(f.Store.Events);
+        // A third delivery sees a refunded payment: nothing more to do.
+        await f.Create().HandleCallbackAsync(HostedSandboxPaymentProvider.Name, body, headers, CancellationToken.None);
+        Assert.Equal(2, f.Handler.Seen.Count);
+    }
+
+    [Fact]
+    public async Task AnIgnoredCallbackDoesNotReachTheHandlers()
+    {
+        var f = new Fixture();
+        var payment = await PayHostedAsync(f);
+        await f.Create().VoidAsync(payment.Id, Admin, CancellationToken.None);
+
+        var outcome = await Report(f, PaymentCallbackTypes.Captured, payment.ProviderReference!);
+
+        Assert.Equal(CallbackOutcome.Ignored, outcome);
+        Assert.Empty(f.Handler.Seen);
+        Assert.Equal(PaymentStatus.Voided, payment.Status);
+    }
+
+    [Fact]
+    public async Task APaymentCanBeFoundByTheGatewaysReference()
+    {
+        var f = new Fixture();
+        var payment = await PayHostedAsync(f);
+
+        Assert.Equal(payment.Id, (await f.Create().FindByProviderReferenceAsync(HostedSandboxPaymentProvider.Name, payment.ProviderReference!, CancellationToken.None))!.Id);
+        Assert.Null(await f.Create().FindByProviderReferenceAsync(HostedSandboxPaymentProvider.Name, "nope", CancellationToken.None));
+    }
+
+    [Fact]
+    public void TheHostedGatewayBuildsSignedCallbacksAndKnowsWhereToSendTheCustomerBack()
+    {
+        var gateway = new HostedSandboxPaymentProvider(Secret, "http://app.test");
+        var (body, headers) = gateway.BuildCallback(PaymentCallbackTypes.Captured, "sbr_1");
+
+        var parsed = gateway.ParseCallback(body, headers);
+
+        Assert.Equal(("captured", "sbr_1"), (parsed!.Type, parsed.ProviderReference));
+        Assert.StartsWith("evt_", parsed.EventId);
+        var (otherBody, otherHeaders) = gateway.BuildCallback("captured", "sbr_1");
+        Assert.NotEqual(parsed.EventId, gateway.ParseCallback(otherBody, otherHeaders)!.EventId);
+        Assert.Null(gateway.ParseCallback(body.Replace("captured", "failed", StringComparison.Ordinal), headers));
+        Assert.Null(new HostedSandboxPaymentProvider("another-secret-entirely", "http://app.test").ParseCallback(body, headers));
+        Assert.Equal("http://app.test/customer/orders/42?payment=return",
+            gateway.ReturnUrl(new PaymentTransaction { ReferenceType = PaymentReferenceTypes.Order, ReferenceId = 42 }));
+        Assert.Equal("http://app.test/storefront", gateway.ReturnUrl(new PaymentTransaction { ReferenceType = "checkout", ReferenceId = 1 }));
+    }
+
+    [Theory]
+    [InlineData("a-secret-of-sixteen", "http://localhost:4200", true)]
+    [InlineData("a-secret-of-sixteen", "https://shop.example", true)]
+    [InlineData("a-secret-of-sixteen", "", false)]
+    [InlineData("a-secret-of-sixteen", "localhost:4200", false)]
+    [InlineData("a-secret-of-sixteen", "ftp://shop.example", false)]
+    [InlineData("short", "http://localhost:4200", false)]
+    public void TheHostedGatewayNeedsTheSecretAndAnAbsoluteAddress(string secret, string address, bool configured) =>
+        Assert.Equal(configured, new SandboxPaymentOptions { Secret = secret, PageBaseUrl = address }.HostedConfigured);
 }

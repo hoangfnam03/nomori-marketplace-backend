@@ -85,6 +85,9 @@ public sealed record CheckoutPreview(
 
 public sealed record PlacedOrder(Order Order, PaymentTransaction? Payment, bool Replayed);
 
+/// <summary>Whether an order waits for its payment, how the payment stands, and where to pay when it is still pending.</summary>
+public sealed record OrderPaymentInfo(bool AwaitingPayment, PaymentStatus? PaymentStatus, string? RedirectUrl);
+
 public static class CheckoutRules
 {
     /// <summary>A key made by the browser: letters, digits, "-" and "_", 8 to 64 characters.</summary>
@@ -150,4 +153,7 @@ public interface ICheckoutService
     /// The same idempotency key returns the order it made.
     /// </summary>
     Task<CatalogResult<PlacedOrder>> PlaceAsync(int customerId, PlaceOrderRequest request, CancellationToken cancellationToken);
+
+    /// <summary>The payment state of one of the customer's own orders; another customer's order is not found.</summary>
+    Task<CatalogResult<OrderPaymentInfo>> GetPaymentStatusAsync(int customerId, int orderId, CancellationToken cancellationToken);
 }

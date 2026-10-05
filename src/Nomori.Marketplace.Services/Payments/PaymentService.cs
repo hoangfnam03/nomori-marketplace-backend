@@ -9,6 +9,7 @@ namespace Nomori.Marketplace.Services.Payments;
 public sealed class PaymentService(
     IPaymentStore store,
     IEnumerable<IPaymentProvider> providers,
+    IEnumerable<IPaymentOutcomeHandler> handlers,
     IPrimaryCurrencyProvider primaryCurrency,
     IAuditLogService auditLog,
     IClock clock) : IPaymentService
@@ -81,7 +82,9 @@ public sealed class PaymentService(
 
         await AuditAsync("payment.created", command.CustomerId, payment,
             new { payment.Id, payment.ReferenceType, payment.ReferenceId, payment.Method, payment.Amount, payment.CurrencyCode }, cancellationToken);
-        return CatalogResult.Success((await store.GetAsync(payment.Id, cancellationToken))!);
+        var created = (await store.GetAsync(payment.Id, cancellationToken))!;
+        created.RedirectUrl = provider.GetRedirectUrl(created);
+        return CatalogResult.Success(created);
     }
 
     // ---- Administrators ----
@@ -119,6 +122,11 @@ public sealed class PaymentService(
         store.GetPagedAsync(query with { Page = Math.Max(query.Page, 1), PageSize = Math.Clamp(query.PageSize, 1, 100) }, cancellationToken);
 
     public Task<PaymentTransaction?> GetPaymentAsync(int id, CancellationToken cancellationToken) => store.GetAsync(id, cancellationToken);
+
+    public string? GetRedirectUrl(PaymentTransaction payment) => registered.TryGetValue(payment.Method, out var provider) ? provider.GetRedirectUrl(payment) : null;
+
+    public Task<PaymentTransaction?> FindByProviderReferenceAsync(string method, string providerReference, CancellationToken cancellationToken) =>
+        store.GetByProviderReferenceAsync(method, providerReference, cancellationToken);
 
     public async Task<CatalogResult<PaymentTransaction>> CaptureAsync(int id, int actorCustomerId, CancellationToken cancellationToken)
     {
@@ -191,14 +199,33 @@ public sealed class PaymentService(
 
         // The event id is unique per provider: a second delivery of the same event stops here.
         if (!await store.TryAddEventAsync(adapter.SystemName, callback.EventId, callback.Type, payment?.Id, outcome, clock.UtcNow, cancellationToken))
+        {
+            // A gateway repeats an event when it got no answer. The first delivery may have died after the status changed and before the order
+            // side heard of it, so the handlers run again; they are safe to repeat.
+            if (payment is not null) await NotifyHandlersAsync(payment.Id, cancellationToken);
             return CallbackOutcome.Replay;
+        }
 
         await auditLog.WriteAsync(outcome == Applied ? "payment.callback_applied" : "payment.callback_ignored", entityType: "PaymentTransaction",
             entityId: payment?.Id, details: new { provider = adapter.SystemName, callback.EventId, callback.Type }, cancellationToken: cancellationToken);
+        if (outcome == Applied) await NotifyHandlersAsync(payment!.Id, cancellationToken);
         return outcome == Applied ? CallbackOutcome.Applied : CallbackOutcome.Ignored;
     }
 
     // ---- Helpers ----
+
+    /// <summary>Tells the handlers what the payment is now, and does what they ask (give the money back).</summary>
+    private async Task NotifyHandlersAsync(int paymentId, CancellationToken cancellationToken)
+    {
+        var current = await store.GetAsync(paymentId, cancellationToken);
+        if (current is null || current.Status is not (PaymentStatus.Paid or PaymentStatus.Failed or PaymentStatus.Voided)) return;
+
+        foreach (var handler in handlers)
+        {
+            if (await handler.OnCallbackAppliedAsync(current, cancellationToken) == PaymentFollowUp.Refund && PaymentRules.CanRefund(current.Status))
+                await RefundAsync(current.Id, PaymentRules.Refundable(current), 0, cancellationToken);
+        }
+    }
 
     private static CatalogResult<PaymentTransaction> Repeat(
         PaymentTransaction existing, string referenceType, CreatePaymentCommand command, string method)

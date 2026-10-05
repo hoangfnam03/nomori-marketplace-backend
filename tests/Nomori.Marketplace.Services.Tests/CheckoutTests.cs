@@ -118,6 +118,7 @@ public sealed class CheckoutTests
         public FakeVendorStore Vendors { get; } = new();
         public FakeStockService Stock { get; } = new();
         public StubAddresses Addresses { get; } = new();
+        public HostedSandboxPaymentProvider Hosted { get; } = new("unit-test-sandbox-secret", "http://app.test");
         public FakeDiscountStore Discounts { get; } = new();
         public FakeTaxStore Taxes { get; } = new();
         public RecordingAuditLog Audit { get; } = new();
@@ -128,6 +129,7 @@ public sealed class CheckoutTests
             Vendors.Vendors.Add(new Vendor { Id = Shop, Name = "Mugs Inc", Active = true });
             Vendors.Vendors.Add(new Vendor { Id = OtherShop, Name = "Tea Co", Active = true });
             PaymentStore.Methods.Add(new PaymentMethodSetting { SystemName = "flaky", Enabled = true });
+            PaymentStore.Methods.Add(new PaymentMethodSetting { SystemName = HostedSandboxPaymentProvider.Name, Enabled = true });
             PaymentStore.Methods.Single(m => m.SystemName == "sandbox").Enabled = false;
             Stock.OnHand[1] = 10;
             Stock.OnHand[2] = 10;
@@ -144,11 +146,20 @@ public sealed class CheckoutTests
             SetCart((Shop, [(1, 1, 2)]), (OtherShop, [(2, 2, 1)]));
         }
 
+        public OrderService CreateOrders() => new(OrderStore, Vendors, new FakePrimaryCurrency(), Stock, Audit, new TestClock());
+
+        public DiscountService CreateDiscounts() => new(Discounts, new FakePrimaryCurrency(), Audit, new TestClock());
+
+        /// <summary>The payment service with the real order handler, so a gateway callback moves the order like in the application.</summary>
+        public PaymentService CreatePayments() => new(
+            PaymentStore, [new CashOnDeliveryProvider(), Flaky, Hosted], [new OrderPaymentOutcomeHandler(CreateOrders(), CreateDiscounts())],
+            new FakePrimaryCurrency(), Audit, new TestClock());
+
         public CheckoutService Create()
         {
-            var orders = new OrderService(OrderStore, Vendors, new FakePrimaryCurrency(), Stock, Audit, new TestClock());
-            var payments = new PaymentService(PaymentStore, [new CashOnDeliveryProvider(), Flaky], new FakePrimaryCurrency(), Audit, new TestClock());
-            var discounts = new DiscountService(Discounts, new FakePrimaryCurrency(), Audit, new TestClock());
+            var orders = CreateOrders();
+            var payments = CreatePayments();
+            var discounts = CreateDiscounts();
             var taxes = new TaxService(Taxes, new FakeProductStore(), new DirectoryService(new FakeDirectoryStore(), Audit, new TestClock()), new FakePrimaryCurrency(), Audit, new TestClock());
             return new CheckoutService(Cart, CartLines, Prices, Shipping, payments, PaymentStore, orders, Stock, Addresses, discounts, taxes, Audit);
         }
@@ -1006,5 +1017,171 @@ public sealed class CheckoutTests
 
         Assert.Equal((2m, 1m, 3m), (order.ShopOrders[0].TaxAmount, order.ShopOrders[1].TaxAmount, order.TaxTotal));
         Assert.Equal(5m, order.ShopOrders[1].Lines[0].TaxRate);
+    }
+
+    // ---- Redirect payments ----
+
+    private static string HostedMethod => HostedSandboxPaymentProvider.Name;
+
+    private static Task<CallbackOutcome> Report(Fixture f, PaymentTransaction payment, string type)
+    {
+        var (body, headers) = f.Hosted.BuildCallback(type, payment.ProviderReference!);
+        return f.CreatePayments().HandleCallbackAsync(HostedMethod, body, headers, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task AMethodThatRedirectsIsListedAsSuch()
+    {
+        var f = new Fixture();
+
+        var preview = await f.Create().PreviewAsync(Buyer, Choices(method: HostedMethod), CancellationToken.None);
+
+        Assert.Equal(PaymentProviderKind.Hosted, preview.PaymentMethods.Single(m => m.SystemName == HostedMethod).Kind);
+        Assert.Equal(PaymentProviderKind.Offline, preview.PaymentMethods.Single(m => m.SystemName == "cod").Kind);
+    }
+
+    [Fact]
+    public async Task APaymentThatRedirectsMakesAnOrderThatWaitsAndAPendingPaymentWithAPage()
+    {
+        var f = new Fixture();
+
+        var placed = (await Place(f, Request(method: HostedMethod))).Value!;
+
+        Assert.True(placed.Order.AwaitingPayment);
+        Assert.Equal(PaymentStatus.Pending, placed.Payment!.Status);
+        Assert.Equal($"http://app.test/payments/sandbox/{placed.Payment!.ProviderReference}", placed.Payment!.RedirectUrl);
+        Assert.Equal(48m, placed.Payment!.Amount);
+        // The stock is taken and the cart is empty already: the customer is on the way to pay.
+        Assert.Equal((8, 9, 1), (f.Stock.OnHand[1], f.Stock.OnHand[2], f.Cart.Cleared));
+        Assert.All(placed.Order.ShopOrders, s => Assert.Equal(ShopOrderStatus.Pending, s.Status));
+    }
+
+    [Fact]
+    public async Task OtherMethodsDoNotWait()
+    {
+        var f = new Fixture();
+
+        var placed = (await Place(f)).Value!;
+
+        Assert.False(placed.Order.AwaitingPayment);
+        Assert.Null(placed.Payment!.RedirectUrl);
+    }
+
+    [Fact]
+    public async Task AReplayOfARedirectPlacementGivesThePageAgain()
+    {
+        var f = new Fixture();
+        var first = (await Place(f, Request(method: HostedMethod))).Value!;
+
+        var again = (await Place(f, Request(method: HostedMethod))).Value!;
+
+        Assert.True(again.Replayed);
+        Assert.Equal(first.Payment!.RedirectUrl, again.Payment!.RedirectUrl);
+        Assert.Single(f.PaymentStore.Payments);
+    }
+
+    [Fact]
+    public async Task ThePaymentStatusSaysWhereToPayWhileTheOrderWaits()
+    {
+        var f = new Fixture();
+        var placed = (await Place(f, Request(method: HostedMethod))).Value!;
+
+        var info = (await f.Create().GetPaymentStatusAsync(Buyer, placed.Order.Id, CancellationToken.None)).Value!;
+
+        Assert.Equal((true, PaymentStatus.Pending, placed.Payment!.RedirectUrl), (info.AwaitingPayment, info.PaymentStatus, info.RedirectUrl));
+    }
+
+    [Fact]
+    public async Task OnlyTheOwnerSeesThePaymentStatusAndAnOrderThatDoesNotWaitHasNoPage()
+    {
+        var f = new Fixture();
+        var hosted = (await Place(f, Request(method: HostedMethod))).Value!;
+        f.SetCart((Shop, [(1, 1, 2)]), (OtherShop, [(2, 2, 1)]));
+        var cod = (await Place(f, Request(key: "cod-key-12345"))).Value!;
+
+        Assert.Equal(CatalogErrors.NotFound, (await f.Create().GetPaymentStatusAsync(OtherBuyer, hosted.Order.Id, CancellationToken.None)).ErrorCode);
+        Assert.Equal(CatalogErrors.NotFound, (await f.Create().GetPaymentStatusAsync(Buyer, 999, CancellationToken.None)).ErrorCode);
+        var info = (await f.Create().GetPaymentStatusAsync(Buyer, cod.Order.Id, CancellationToken.None)).Value!;
+        Assert.Equal((false, PaymentStatus.Pending, null), (info.AwaitingPayment, info.PaymentStatus, info.RedirectUrl));
+    }
+
+    [Fact]
+    public async Task APaidCallbackLetsTheShopsSeeTheOrder()
+    {
+        var f = new Fixture();
+        var placed = (await Place(f, Request(method: HostedMethod))).Value!;
+        var shopQuery = new OrderListQuery(null, null, null, null, null, null, 1, 20);
+        Assert.Empty((await f.CreateOrders().GetShopOrdersAsync(Shop, shopQuery, CancellationToken.None)).Items);
+
+        var outcome = await Report(f, placed.Payment!, PaymentCallbackTypes.Captured);
+
+        Assert.Equal(CallbackOutcome.Applied, outcome);
+        Assert.False(placed.Order.AwaitingPayment);
+        Assert.Equal(PaymentStatus.Paid, placed.Payment!.Status);
+        Assert.Single((await f.CreateOrders().GetShopOrdersAsync(Shop, shopQuery, CancellationToken.None)).Items);
+        var info = (await f.Create().GetPaymentStatusAsync(Buyer, placed.Order.Id, CancellationToken.None)).Value!;
+        Assert.Equal((false, PaymentStatus.Paid, null), (info.AwaitingPayment, info.PaymentStatus, info.RedirectUrl));
+    }
+
+    [Fact]
+    public async Task AFailedCallbackCancelsTheOrderGivesTheStockAndTheCodeBack()
+    {
+        var f = new Fixture();
+        var discount = f.Code(maxUses: 1);
+        var placed = (await Place(f, Request(method: HostedMethod, code: "WELCOME10"))).Value!;
+        Assert.Equal(1, discount.UsedCount);
+
+        await Report(f, placed.Payment!, PaymentCallbackTypes.Failed);
+
+        Assert.All(placed.Order.ShopOrders, s => Assert.Equal(ShopOrderStatus.Cancelled, s.Status));
+        Assert.Equal((10, 10), (f.Stock.OnHand[1], f.Stock.OnHand[2]));
+        Assert.Equal(0, discount.UsedCount);
+        Assert.Equal(PaymentStatus.Failed, placed.Payment!.Status);
+    }
+
+    [Fact]
+    public async Task MoneyThatArrivesForAnOrderTheCustomerCancelledIsRefundedInFull()
+    {
+        var f = new Fixture();
+        var placed = (await Place(f, Request(method: HostedMethod))).Value!;
+        // The customer cancels both parts while still on the gateway page, then pays.
+        foreach (var shop in placed.Order.ShopOrders)
+            await f.CreateOrders().CancelAsCustomerAsync(Buyer, shop.Id, "Changed my mind", CancellationToken.None);
+
+        await Report(f, placed.Payment!, PaymentCallbackTypes.Captured);
+
+        Assert.Equal((PaymentStatus.Refunded, 48m), (placed.Payment!.Status, placed.Payment!.RefundedAmount));
+        Assert.Contains("payment.refunded", f.Audit.Events);
+        // Only the cancels gave the stock back, once.
+        Assert.Equal((10, 10), (f.Stock.OnHand[1], f.Stock.OnHand[2]));
+    }
+
+    [Fact]
+    public async Task IfOnlyOneShopOrderWasCancelledTheOrderStillCountsAsPaid()
+    {
+        var f = new Fixture();
+        var placed = (await Place(f, Request(method: HostedMethod))).Value!;
+        await f.CreateOrders().CancelAsCustomerAsync(Buyer, placed.Order.ShopOrders[0].Id, "Changed my mind", CancellationToken.None);
+
+        await Report(f, placed.Payment!, PaymentCallbackTypes.Captured);
+
+        // The other shop still has to ship, so nothing is refunded here; the cancelled part is a refund request (F21).
+        Assert.False(placed.Order.AwaitingPayment);
+        Assert.Equal((PaymentStatus.Paid, 0m), (placed.Payment!.Status, placed.Payment!.RefundedAmount));
+    }
+
+    [Fact]
+    public async Task ARepeatedPaidCallbackDoesNotChangeTheOrderTwice()
+    {
+        var f = new Fixture();
+        var placed = (await Place(f, Request(method: HostedMethod))).Value!;
+        var (body, headers) = f.Hosted.BuildCallback(PaymentCallbackTypes.Captured, placed.Payment!.ProviderReference!);
+
+        var first = await f.CreatePayments().HandleCallbackAsync(HostedMethod, body, headers, CancellationToken.None);
+        var second = await f.CreatePayments().HandleCallbackAsync(HostedMethod, body, headers, CancellationToken.None);
+
+        Assert.Equal((CallbackOutcome.Applied, CallbackOutcome.Replay), (first, second));
+        Assert.Single(f.Audit.Events, e => e == "order.payment_received");
+        Assert.DoesNotContain("payment.refunded", f.Audit.Events);
     }
 }

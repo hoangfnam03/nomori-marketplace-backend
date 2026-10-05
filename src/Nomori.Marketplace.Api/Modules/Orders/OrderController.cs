@@ -208,11 +208,11 @@ public sealed record ShopOrderSummaryResponse(int Id, string Number, int VendorI
 
 public sealed record OrderSummaryResponse(
     int Id, string Number, string CurrencyCode, decimal Total, string Status, string PaymentMethod, DateTime CreatedOnUtc,
-    IReadOnlyList<ShopOrderSummaryResponse> ShopOrders)
+    IReadOnlyList<ShopOrderSummaryResponse> ShopOrders, bool AwaitingPayment)
 {
     public static OrderSummaryResponse From(Order o) => new(
         o.Id, o.Number, o.CurrencyCode, o.Total, OrderRules.ToWire(OrderRules.Overall(o.ShopOrders.Select(s => s.Status))), o.PaymentMethod, o.CreatedOnUtc,
-        o.ShopOrders.Select(ShopOrderSummaryResponse.From).ToList());
+        o.ShopOrders.Select(ShopOrderSummaryResponse.From).ToList(), o.AwaitingPayment);
 }
 
 /// <summary>One row of a shop's list. There is no customer id or email: a shop only needs to know where to send the parcel.</summary>
@@ -264,14 +264,14 @@ public sealed record ShopOrderDetailResponse(
 
 public sealed record OrderDetailResponse(
     int Id, string Number, int CustomerId, string CurrencyCode, decimal Subtotal, decimal ShippingTotal, decimal DiscountTotal, string? DiscountCode, decimal TaxTotal, decimal Total, string Status, string PaymentMethod,
-    string? CustomerNote, RecipientResponse Recipient, DateTime CreatedOnUtc, IReadOnlyList<ShopOrderDetailResponse> ShopOrders)
+    bool AwaitingPayment, string? CustomerNote, RecipientResponse Recipient, DateTime CreatedOnUtc, IReadOnlyList<ShopOrderDetailResponse> ShopOrders)
 {
     public static OrderDetailResponse From(OrderDetail detail, bool forAdmin)
     {
         var o = detail.Order;
         return new OrderDetailResponse(
             o.Id, o.Number, forAdmin ? o.CustomerId : 0, o.CurrencyCode, o.Subtotal, o.ShippingTotal, o.DiscountTotal, o.DiscountCode, o.TaxTotal, o.Total,
-            OrderRules.ToWire(OrderRules.Overall(o.ShopOrders.Select(s => s.Status))), o.PaymentMethod, o.CustomerNote, RecipientResponse.From(o), o.CreatedOnUtc,
+            OrderRules.ToWire(OrderRules.Overall(o.ShopOrders.Select(s => s.Status))), o.PaymentMethod, o.AwaitingPayment, o.CustomerNote, RecipientResponse.From(o), o.CreatedOnUtc,
             o.ShopOrders.Select(s => ShopOrderDetailResponse.From(s, o, detail.History.GetValueOrDefault(s.Id) ?? [], forAdmin)).ToList());
     }
 }

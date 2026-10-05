@@ -11,7 +11,7 @@ public sealed class SqlOrderStore(IOptions<DatabaseOptions> options) : IOrderSto
 {
     private const string OrderColumns =
         "o.Id, o.Number, o.CustomerId, o.PlacementKey, o.CurrencyCode, o.Subtotal, o.ShippingTotal, o.Total, o.PaymentMethod, o.CustomerNote, " +
-        "o.RecipientName, o.RecipientPhone, o.Address1, o.Address2, o.City, o.StateProvince, o.PostalCode, o.CountryCode, o.CreatedOnUtc, o.DiscountCode, o.DiscountTotal, o.TaxTotal";
+        "o.RecipientName, o.RecipientPhone, o.Address1, o.Address2, o.City, o.StateProvince, o.PostalCode, o.CountryCode, o.CreatedOnUtc, o.DiscountCode, o.DiscountTotal, o.TaxTotal, o.AwaitingPayment";
 
     private const string ShopColumns =
         "s.Id, s.OrderId, s.Number, s.VendorId, s.ShopName, s.Status, s.Subtotal, s.ShippingFee, s.Total, s.ShippingMethodName, s.ShippingRateId, " +
@@ -37,11 +37,11 @@ public sealed class SqlOrderStore(IOptions<DatabaseOptions> options) : IOrderSto
         try
         {
             await using (var cmd = Command(connection, transaction, """
-                INSERT INTO CustomerOrder (Number, CustomerId, PlacementKey, CurrencyCode, Subtotal, ShippingTotal, DiscountTotal, DiscountCode, TaxTotal, Total, PaymentMethod, CustomerNote,
+                INSERT INTO CustomerOrder (Number, CustomerId, PlacementKey, CurrencyCode, Subtotal, ShippingTotal, DiscountTotal, DiscountCode, TaxTotal, AwaitingPayment, Total, PaymentMethod, CustomerNote,
                     RecipientName, RecipientPhone, Address1, Address2, City, StateProvince, PostalCode, CountryCode, CreatedOnUtc)
                 OUTPUT INSERTED.Id
                 -- The real number needs the id; until then a throw-away value keeps the unique index happy.
-                VALUES (REPLACE(CONVERT(nvarchar(36), NEWID()), '-', ''), @CustomerId, @PlacementKey, @CurrencyCode, @Subtotal, @ShippingTotal, @DiscountTotal, @DiscountCode, @TaxTotal, @Total,
+                VALUES (REPLACE(CONVERT(nvarchar(36), NEWID()), '-', ''), @CustomerId, @PlacementKey, @CurrencyCode, @Subtotal, @ShippingTotal, @DiscountTotal, @DiscountCode, @TaxTotal, @AwaitingPayment, @Total,
                     @PaymentMethod, @CustomerNote, @RecipientName, @RecipientPhone, @Address1, @Address2, @City, @StateProvince, @PostalCode,
                     @CountryCode, @CreatedOnUtc)
                 """))
@@ -53,6 +53,7 @@ public sealed class SqlOrderStore(IOptions<DatabaseOptions> options) : IOrderSto
                 cmd.Parameters.AddWithValue("@ShippingTotal", order.ShippingTotal);
                 cmd.Parameters.AddWithValue("@DiscountTotal", order.DiscountTotal);
                 cmd.Parameters.AddWithValue("@TaxTotal", order.TaxTotal);
+                cmd.Parameters.AddWithValue("@AwaitingPayment", order.AwaitingPayment);
                 cmd.Parameters.AddWithValue("@DiscountCode", (object?)order.DiscountCode ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("@Total", order.Total);
                 cmd.Parameters.AddWithValue("@PaymentMethod", order.PaymentMethod);
@@ -183,6 +184,15 @@ public sealed class SqlOrderStore(IOptions<DatabaseOptions> options) : IOrderSto
         await AddHistoryAsync(connection, transaction, t.ShopOrderId, t.Expected, t.Target, t.Actor, t.ActorCustomerId, t.Note, t.NowUtc, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return true;
+    }
+
+    public async Task<bool> ClearAwaitingPaymentAsync(int orderId, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "UPDATE CustomerOrder SET AwaitingPayment = 0 WHERE Id = @Id AND AwaitingPayment = 1";
+        cmd.Parameters.AddWithValue("@Id", orderId);
+        return await cmd.ExecuteNonQueryAsync(cancellationToken) > 0;
     }
 
     public async Task<bool> TryUpdateTrackingAsync(
@@ -366,7 +376,7 @@ public sealed class SqlOrderStore(IOptions<DatabaseOptions> options) : IOrderSto
     {
         await using var connection = await OpenAsync(cancellationToken);
         await using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT Status, COUNT(*) FROM ShopOrder WHERE VendorId = @VendorId GROUP BY Status";
+        cmd.CommandText = "SELECT s.Status, COUNT(*) FROM ShopOrder s INNER JOIN CustomerOrder o ON o.Id = s.OrderId WHERE s.VendorId = @VendorId AND o.AwaitingPayment = 0 GROUP BY s.Status";
         cmd.Parameters.AddWithValue("@VendorId", vendorId);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
         var counts = Enum.GetValues<ShopOrderStatus>().ToDictionary(s => s, _ => 0);
@@ -456,6 +466,8 @@ public sealed class SqlOrderStore(IOptions<DatabaseOptions> options) : IOrderSto
         if (q.VendorId is { } vendor)
         {
             conditions.Add("s.VendorId = @VendorId");
+            // A shop only sees orders whose money is confirmed.
+            conditions.Add("o.AwaitingPayment = 0");
             cmd.Parameters.AddWithValue("@VendorId", vendor);
         }
         if (q.Status is { } status)
@@ -513,7 +525,7 @@ public sealed class SqlOrderStore(IOptions<DatabaseOptions> options) : IOrderSto
         Address2 = r.IsDBNull(o + 13) ? null : r.GetString(o + 13), City = r.GetString(o + 14),
         StateProvince = r.IsDBNull(o + 15) ? null : r.GetString(o + 15), PostalCode = r.IsDBNull(o + 16) ? null : r.GetString(o + 16),
         CountryCode = r.GetString(o + 17), CreatedOnUtc = DateTime.SpecifyKind(r.GetDateTime(o + 18), DateTimeKind.Utc),
-        DiscountCode = r.IsDBNull(o + 19) ? null : r.GetString(o + 19), DiscountTotal = r.GetDecimal(o + 20), TaxTotal = r.GetDecimal(o + 21)
+        DiscountCode = r.IsDBNull(o + 19) ? null : r.GetString(o + 19), DiscountTotal = r.GetDecimal(o + 20), TaxTotal = r.GetDecimal(o + 21), AwaitingPayment = r.GetBoolean(o + 22)
     };
 
     private static ShopOrder ReadShopOrder(SqlDataReader r, int o) => new()

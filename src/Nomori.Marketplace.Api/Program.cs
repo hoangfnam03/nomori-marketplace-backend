@@ -195,6 +195,10 @@ builder.Services.AddSingleton<IPaymentProvider, CashOnDeliveryProvider>();
 var sandboxPayments = builder.Configuration.GetSection($"{PaymentOptions.SectionName}:Sandbox").Get<SandboxPaymentOptions>();
 if (sandboxPayments is { IsConfigured: true })
     builder.Services.AddSingleton<IPaymentProvider>(new SandboxPaymentProvider(sandboxPayments.Secret));
+// The test gateway with a payment page also needs the address of the Angular app, where that page lives.
+if (sandboxPayments is { HostedConfigured: true })
+    builder.Services.AddSingleton<IPaymentProvider>(new HostedSandboxPaymentProvider(sandboxPayments.Secret, sandboxPayments.PageBaseUrl));
+builder.Services.AddScoped<IPaymentOutcomeHandler, OrderPaymentOutcomeHandler>();
 builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
 builder.Services.AddScoped<IDiscountService, DiscountService>();

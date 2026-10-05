@@ -56,7 +56,7 @@ public sealed class OrderService(
         var order = new Order
         {
             CustomerId = command.CustomerId, PlacementKey = key, CurrencyCode = currency.Code, PaymentMethod = method,
-            CustomerNote = string.IsNullOrEmpty(note) ? null : note,
+            CustomerNote = string.IsNullOrEmpty(note) ? null : note, AwaitingPayment = command.AwaitingPayment,
             RecipientName = recipient.Name!.Trim(), RecipientPhone = recipient.Phone!.Trim(), Address1 = recipient.Address1!.Trim(),
             Address2 = Clean(recipient.Address2), City = recipient.City!.Trim(), StateProvince = Clean(recipient.StateProvince),
             PostalCode = Clean(recipient.PostalCode), CountryCode = recipient.CountryCode!.Trim().ToUpperInvariant(), CreatedOnUtc = now
@@ -109,6 +109,17 @@ public sealed class OrderService(
 
     public Task<Order?> FindByPlacementKeyAsync(string placementKey, CancellationToken cancellationToken) =>
         store.GetByPlacementKeyAsync(placementKey, cancellationToken);
+
+    public async Task<CatalogResult<bool>> MarkPaidAsync(int orderId, CancellationToken cancellationToken)
+    {
+        var order = await store.GetOrderAsync(orderId, cancellationToken);
+        if (order is null) return CatalogResult.Error<bool>(CatalogErrors.NotFound);
+
+        // Repeating it is fine: the gateway may call back twice.
+        if (await store.ClearAwaitingPaymentAsync(orderId, cancellationToken))
+            await auditLog.WriteAsync("order.payment_received", entityType: "Order", entityId: orderId, details: new { orderId, order.Number }, cancellationToken: cancellationToken);
+        return CatalogResult.Success(true);
+    }
 
     public async Task<CatalogResult<Order>> CancelAsSystemAsync(int orderId, string reason, CancellationToken cancellationToken)
     {
@@ -163,7 +174,8 @@ public sealed class OrderService(
     public async Task<CatalogResult<ShopOrderDetail>> GetShopOrderAsync(int vendorId, int shopOrderId, CancellationToken cancellationToken)
     {
         var shopOrder = await store.GetShopOrderAsync(shopOrderId, cancellationToken);
-        return shopOrder is null || shopOrder.VendorId != vendorId
+        // An order that waits for its payment does not exist for the shop yet.
+        return shopOrder is null || shopOrder.VendorId != vendorId || shopOrder.Order?.AwaitingPayment == true
             ? CatalogResult.Error<ShopOrderDetail>(CatalogErrors.NotFound)
             : CatalogResult.Success(await DetailAsync(shopOrder, cancellationToken));
     }
@@ -241,7 +253,7 @@ public sealed class OrderService(
     private async Task<ShopOrder?> OwnedAsync(int vendorId, int shopOrderId, CancellationToken cancellationToken)
     {
         var shopOrder = await store.GetShopOrderAsync(shopOrderId, cancellationToken);
-        return shopOrder is not null && shopOrder.VendorId == vendorId ? shopOrder : null;
+        return shopOrder is not null && shopOrder.VendorId == vendorId && shopOrder.Order?.AwaitingPayment != true ? shopOrder : null;
     }
 
     private async Task<CatalogResult<ShopOrderDetail>> CancelAsync(
