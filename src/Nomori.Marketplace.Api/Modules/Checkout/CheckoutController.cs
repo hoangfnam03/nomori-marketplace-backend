@@ -41,16 +41,22 @@ public sealed class CheckoutController(ICheckoutService checkoutService, ICurren
 
 public sealed record ShippingChoiceBody(int VendorId, int RateId);
 
-public sealed record CheckoutChoicesRequest(int? AddressId, ShippingChoiceBody[]? ShippingChoices, string? PaymentMethod, string? CouponCode = null)
+/// <param name="CartItemIds">The cart lines to buy now; leave out to buy the whole cart.</param>
+public sealed record CheckoutChoicesRequest(
+    int? AddressId, ShippingChoiceBody[]? ShippingChoices, string? PaymentMethod, string? CouponCode = null, int[]? CartItemIds = null)
 {
-    public CheckoutChoices ToChoices() => new(AddressId, ShippingChoices?.Select(c => new ShippingChoice(c.VendorId, c.RateId)).ToList(), PaymentMethod, CouponCode);
+    public CheckoutChoices ToChoices() =>
+        new(AddressId, ShippingChoices?.Select(c => new ShippingChoice(c.VendorId, c.RateId)).ToList(), PaymentMethod, CouponCode, CartItemIds);
 }
 
+/// <param name="CartItemIds">The cart lines to buy now; leave out to buy the whole cart. Lines left out stay in the cart.</param>
 public sealed record PlaceOrderBody(
-    int? AddressId, ShippingChoiceBody[]? ShippingChoices, string? PaymentMethod, string? IdempotencyKey, bool AcceptedTerms, string? Note, string? CouponCode = null)
+    int? AddressId, ShippingChoiceBody[]? ShippingChoices, string? PaymentMethod, string? IdempotencyKey, bool AcceptedTerms, string? Note,
+    string? CouponCode = null, int[]? CartItemIds = null)
 {
     public PlaceOrderRequest ToRequest() => new(
-        AddressId, ShippingChoices?.Select(c => new ShippingChoice(c.VendorId, c.RateId)).ToList(), PaymentMethod, IdempotencyKey, AcceptedTerms, Note, CouponCode);
+        AddressId, ShippingChoices?.Select(c => new ShippingChoice(c.VendorId, c.RateId)).ToList(), PaymentMethod, IdempotencyKey, AcceptedTerms, Note,
+        CouponCode, CartItemIds);
 }
 
 public sealed record CheckoutShippingOptionResponse(int RateId, string Name, decimal Fee, bool IsFree, int? MinDays, int? MaxDays)

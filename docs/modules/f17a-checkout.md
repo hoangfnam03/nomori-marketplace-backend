@@ -28,6 +28,7 @@ Every piece of a sale exists on its own: a priced cart, shipping options per sho
 | D9 | **Cancelling gives stock back, once, only before shipping.** When a shop order goes from `pending` or `confirmed` to `cancelled` (by the shop, the customer, the administrator or the system) its lines go back to stock in the ledger (reason `return`, reference the shop order number). A cancel from `shipped` or `delivered` (administrator only) does not: the goods are out, and taking them back is F21. The compare-and-set of the status makes "once" true. |
 | D10 | **Tax (F07-E) is part of the totals.** The order carries the tax of every line, shop order and the order. Discount codes (F15-A) are optional in the same request: `couponCode` in the preview and the placement, totals are items minus the discount plus shipping. |
 | D11 | **Only saved addresses can be used.** The recipient of the order is a copy of the saved address at that moment. A new address is added in the account first (F04). |
+| D12 | **The customer can buy only some lines of the cart.** The preview, the placement and the shipping quote take an optional `cartItemIds`; when it is given, the cart is narrowed to those lines first and every check, total and shipping fee (including free shipping thresholds) counts only them. A blocked line only blocks when it is chosen. A chosen line that is no longer in the cart is the problem `selection_changed` (`409 checkout.cart_not_ready`). After placing, only the chosen lines leave the cart; without `cartItemIds` the whole cart is bought and emptied, as before. The cart page ticks nothing at first; the customer ticks lines and the page sends the ticked ones as `?items=` to `/storefront/checkout`. |
 
 ## 3. Actors and authorization matrix
 
@@ -44,14 +45,14 @@ The customer id always comes from the session. The address must be one of the cu
   - the enabled payment methods;
   - for the address: per shop the shipping options, and the chosen option (or none);
   - `subtotal`, `shippingTotal` and `total` (null while a shipping choice is missing), and `problems` and `canPlace`.
-  Problems: `cart_empty`, `cart_issues`, `prices_changed`, `address_required`, `address_invalid`, `shipping_unavailable` (a shop has no option), `shipping_not_chosen`, `shipping_invalid` (a choice that is not an option or not a shop of the cart), `payment_required`, `payment_invalid`.
+  Problems: `cart_empty`, `cart_issues`, `prices_changed`, `address_required`, `address_invalid`, `shipping_unavailable` (a shop has no option), `shipping_not_chosen`, `shipping_invalid` (a choice that is not an option or not a shop of the cart), `payment_required`, `payment_invalid`, `selection_changed` (D12).
 - **Place** `POST /checkout/place` with the same choices plus `idempotencyKey`, `acceptedTerms`, optional `note` (500 characters):
   1. check the key and the terms; if the key already made an order, return it (replay);
   2. run the preview checks; cart problems are `409`, choice problems are `400` with field errors (`addressId`, `shippingChoices`, `paymentMethod`, `acceptedTerms`, `idempotencyKey`);
   3. reserve stock for every line under the reference `checkout:<placement key>` (15 minutes), then commit all reservations in one transaction; not enough stock is `409 inventory.insufficient_stock` and nothing stays taken;
   4. create the order with the lines priced again, the fees of the chosen options, the address copy and the payment method name;
   5. create the payment (reference `order`, the order id, key `order-<id>`, the order total);
-  6. empty the cart.
+  6. empty the cart (only the chosen lines when `cartItemIds` was given, D12).
   If step 4 fails (or throws) the committed stock is returned. If step 5 fails the order is cancelled by the system and stock is returned. Step 6 is last, so a failure leaves the cart as it was.
 - **Limits:** at most 1,000 units of a line at checkout (the stock reservation limit); the cart still allows up to 10,000, so a bigger line is refused with a field error telling the customer to lower it.
 - **Stock back on cancel** (D9) in `OrderService`, via `IInventoryService.ReturnToStockAsync`, which skips products that do not track inventory and writes one ledger row per line.

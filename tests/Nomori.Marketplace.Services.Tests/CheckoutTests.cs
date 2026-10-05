@@ -68,7 +68,13 @@ public sealed class CheckoutTests
         public Task<bool> InsertAsync(CartLine line, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task UpdateLineAsync(int lineId, int quantity, decimal addedUnitPrice, DateTime nowUtc, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task SetAddedUnitPriceAsync(int lineId, decimal addedUnitPrice, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<bool> DeleteAsync(int customerId, int lineId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public List<int> Deleted { get; } = [];
+
+        public Task<bool> DeleteAsync(int customerId, int lineId, CancellationToken cancellationToken)
+        {
+            Deleted.Add(lineId);
+            return Task.FromResult(Lines.RemoveAll(l => l.CustomerId == customerId && l.Id == lineId) > 0);
+        }
         public Task ClearAsync(int customerId, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<int> CountUnitsAsync(int customerId, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
@@ -92,7 +98,7 @@ public sealed class CheckoutTests
         public Task<CatalogResult<ShippingQuote>> QuoteAsync(int customerId, ShippingQuoteRequest request, CancellationToken cancellationToken)
         {
             if (DestinationClosed) return Task.FromResult(CatalogResult.Failure<ShippingQuote>("addressId", "We cannot ship to this address."));
-            var shops = cart.View.Groups.Select(g =>
+            var shops = CartRules.Narrow(cart.View, request.CartItemIds).Groups.Select(g =>
             {
                 var options = Options.GetValueOrDefault(g.VendorId) ?? [];
                 return new ShippingShopQuote(g.VendorId, g.VendorName, g.Subtotal, options, options.Count > 0);
@@ -381,6 +387,86 @@ public sealed class CheckoutTests
         var empty = await f.Create().PreviewAsync(Buyer, Choices(), CancellationToken.None);
         Assert.Equal(CheckoutProblems.CartEmpty, empty.Problems[0]);
         Assert.Null(empty.ShippingTotal);
+    }
+
+
+    // ---- Buying only some lines of the cart ----
+
+    [Fact]
+    public async Task APreviewOfChosenLinesCountsOnlyThoseLinesAndTheirShops()
+    {
+        var f = new Fixture();
+
+        var preview = await f.Create().PreviewAsync(Buyer, Choices(shipping: [new ShippingChoice(Shop, 1)]) with { CartItemIds = [1] }, CancellationToken.None);
+
+        Assert.True(preview.CanPlace, string.Join(",", preview.Problems));
+        Assert.Equal([Shop], preview.Shops.Select(s => s.VendorId));
+        Assert.Equal((20m, 5m, 25m), (preview.Subtotal, preview.ShippingTotal, preview.Total));
+        // A shipping choice for a shop that is not being bought is a mistake, as for the whole cart.
+        Assert.Contains(CheckoutProblems.ShippingInvalid,
+            (await f.Create().PreviewAsync(Buyer, Choices() with { CartItemIds = [1] }, CancellationToken.None)).Problems);
+    }
+
+    [Fact]
+    public async Task ALineThatCannotBeBoughtOnlyBlocksWhenItIsChosen()
+    {
+        var f = new Fixture();
+        f.AddIssue(CartIssues.OutOfStock); // line 1, of the first shop
+
+        Assert.Contains(CheckoutProblems.CartIssues, (await f.Create().PreviewAsync(Buyer, Choices(), CancellationToken.None)).Problems);
+        var other = await f.Create().PreviewAsync(Buyer, Choices(shipping: [new ShippingChoice(OtherShop, 3)]) with { CartItemIds = [2] }, CancellationToken.None);
+        Assert.True(other.CanPlace, string.Join(",", other.Problems));
+    }
+
+    [Fact]
+    public async Task PlacingChosenLinesBuysOnlyThemAndLeavesTheRestInTheCart()
+    {
+        var f = new Fixture();
+
+        var result = await Place(f, Request(shipping: [new ShippingChoice(Shop, 1)]) with { CartItemIds = [1] });
+
+        Assert.True(result.Succeeded, string.Join(";", result.Errors.SelectMany(e => e.Value)) + result.ErrorCode);
+        var order = result.Value!.Order;
+        Assert.Equal(["Mugs Inc"], order.ShopOrders.Select(s => s.ShopName));
+        Assert.Equal((20m, 5m, 25m), (order.Subtotal, order.ShippingTotal, order.Total));
+        // Only product 1 left the stock, and only its line left the cart.
+        Assert.Equal((8, 10), (f.Stock.OnHand[1], f.Stock.OnHand[2]));
+        Assert.Equal([1], f.CartLines.Deleted);
+        Assert.Equal(0, f.Cart.Cleared);
+        Assert.Equal([2], f.CartLines.Lines.Select(l => l.Id));
+    }
+
+    [Fact]
+    public async Task AChosenLineThatLeftTheCartStopsThePlacement()
+    {
+        var f = new Fixture();
+
+        var preview = await f.Create().PreviewAsync(Buyer, Choices() with { CartItemIds = [1, 99] }, CancellationToken.None);
+        Assert.Contains(CheckoutProblems.SelectionChanged, preview.Problems);
+        Assert.False(preview.CanPlace);
+
+        var result = await Place(f, Request() with { CartItemIds = [1, 99] });
+        Assert.Equal(CheckoutErrors.CartNotReady, result.ErrorCode);
+        Assert.Equal((10, 10), (f.Stock.OnHand[1], f.Stock.OnHand[2]));
+        Assert.Empty(f.OrderStore.Orders);
+    }
+
+    [Fact]
+    public void NarrowingKeepsOnlyTheChosenLinesWithTheirTotals()
+    {
+        var cart = new CartView("USD",
+            [
+                new CartShopGroup(Shop, "Mugs Inc", [LineView(1, 1, Shop, 2, 10m), LineView(3, 3, Shop, 1, 4m)], 24m),
+                new CartShopGroup(OtherShop, "Tea Co", [LineView(2, 2, OtherShop, 1, 20m)], 20m)
+            ], 44m, 4, true);
+
+        var narrowed = CartRules.Narrow(cart, [3, 2]);
+
+        Assert.Equal([3, 2], narrowed.Groups.SelectMany(g => g.Lines).Select(l => l.Id));
+        Assert.Equal((4m, 20m, 24m, 2), (narrowed.Groups[0].Subtotal, narrowed.Groups[1].Subtotal, narrowed.Subtotal, narrowed.ItemCount));
+        Assert.Same(cart, CartRules.Narrow(cart, null));
+        Assert.Same(cart, CartRules.Narrow(cart, []));
+        Assert.Equal([99], CartRules.Missing(cart, [1, 99]));
     }
 
     // ---- Place: the whole flow ----

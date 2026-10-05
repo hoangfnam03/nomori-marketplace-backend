@@ -144,11 +144,15 @@ public sealed class OrderService(
         return await CancelAsync(shopOrder, OrderActor.Customer, customerId, reason, cancellationToken);
     }
 
+    /// <summary>
+    /// "Order received": once the shop marked it delivered, the customer confirms and the shop order is completed. The customer gives
+    /// up complaining about it; a completed shop order is what settlement pays out.
+    /// </summary>
     public async Task<CatalogResult<ShopOrderDetail>> ConfirmReceiptAsync(int customerId, int shopOrderId, CancellationToken cancellationToken)
     {
         var shopOrder = await store.GetShopOrderAsync(shopOrderId, cancellationToken);
         if (shopOrder?.Order is null || shopOrder.Order.CustomerId != customerId) return CatalogResult.Error<ShopOrderDetail>(CatalogErrors.NotFound);
-        return await MoveAsync(shopOrder, OrderAction.Deliver, OrderActor.Customer, customerId, null, null, null, cancellationToken);
+        return await MoveAsync(shopOrder, OrderAction.Complete, OrderActor.Customer, customerId, null, null, null, cancellationToken);
     }
 
     // ---- Shop members ----

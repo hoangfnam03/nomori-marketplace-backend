@@ -64,8 +64,8 @@ stateDiagram-v2
     Pending --> Cancelled: Shop hủy / khách hủy / hết hạn xác nhận
     Confirmed --> Shipped: Shop nhập mã vận đơn
     Confirmed --> Cancelled: Shop hủy
-    Shipped --> Delivered: Khách xác nhận / shop xác nhận / tự động sau N ngày
-    Delivered --> Completed: Hết thời hạn khiếu nại
+    Shipped --> Delivered: Shop xác nhận đã giao / tự động sau N ngày
+    Delivered --> Completed: Khách bấm "Đã nhận được hàng" / hết thời hạn khiếu nại
     Cancelled --> [*]
     Completed --> [*]
 ```
@@ -75,7 +75,7 @@ stateDiagram-v2
 | `Pending` | Chờ shop xác nhận | Hệ thống, khi đơn được đặt (và đã thanh toán, nếu thanh toán online) |
 | `Confirmed` | Shop đã nhận đơn, đang chuẩn bị hàng | Thành viên shop |
 | `Shipped` | Đã giao cho đơn vị vận chuyển | Thành viên shop |
-| `Delivered` | Khách đã nhận hàng | Khách, thành viên shop, hoặc hệ thống |
+| `Delivered` | Shop báo đã giao; khách còn khiếu nại được | Thành viên shop, hoặc hệ thống |
 | `Completed` | Hết thời hạn khiếu nại; đủ điều kiện đối soát | Hệ thống |
 | `Cancelled` | Đã hủy | Thành viên shop, khách, admin, hoặc hệ thống |
 
@@ -141,9 +141,10 @@ Trạng thái tổng của đơn hàng được tính từ các đơn con: ví d
 
 **US-C3.** Là khách, tôi muốn xác nhận đã nhận hàng.
 
-- [ ] Nút **Đã nhận hàng** ở đơn con `Shipped`. Đơn chuyển sang `Delivered`.
-- [ ] Nếu khách không bấm, đơn `Shipped` tự chuyển sang `Delivered` sau 7 ngày (cấu hình được).
-- [ ] Đơn `Delivered` tự chuyển sang `Completed` sau 7 ngày nếu không có khiếu nại (cấu hình được, Q4).
+- [ ] Nút **Đã nhận được hàng** chỉ hiện ở đơn con `Delivered` (shop đã báo giao thành công), kèm dòng chữ "Sau khi xác nhận, bạn sẽ không thể yêu cầu trả hàng hoặc hoàn tiền cho đơn này." Không có hộp thoại xác nhận.
+- [ ] Bấm xong: đơn con chuyển thẳng sang `Completed`. Khách không còn khiếu nại được về đơn con này; đơn con đủ điều kiện đối soát.
+- [ ] Khi đơn con còn `Shipped`, khách không xác nhận được; shop bấm **Đã giao thành công** trước.
+- [ ] Nếu khách không bấm, đơn `Delivered` tự chuyển sang `Completed` sau 7 ngày (cấu hình được, Q4). *(Chưa làm: cần job nền.)*
 
 ### Epic D: Admin
 
@@ -164,7 +165,7 @@ Trạng thái tổng của đơn hàng được tính từ các đơn con: ví d
 | FR-05 | Thành viên shop chỉ thấy và xử lý đơn con của shop mình | B |
 | FR-06 | Chuyển sang `Shipped` bắt buộc có đơn vị vận chuyển và mã vận đơn | B4 |
 | FR-07 | Shop hủy được khi `Pending` hoặc `Confirmed`; khách hủy được khi `Pending`; admin hủy được trước `Completed`. Hủy luôn bắt buộc có lý do | B5, C2, D1 |
-| FR-08 | Đơn con `Pending` quá 48 giờ tự hủy; `Shipped` quá 7 ngày tự chuyển `Delivered`; `Delivered` quá 7 ngày tự chuyển `Completed`. Các mốc thời gian cấu hình được | B3, C3 |
+| FR-08 | Đơn con `Pending` quá 48 giờ tự hủy; `Shipped` quá 7 ngày tự chuyển `Delivered`; `Delivered` quá 7 ngày tự chuyển `Completed`. Các mốc thời gian cấu hình được. Khách bấm "Đã nhận được hàng" ở `Delivered` thì `Completed` ngay | B3, C3 |
 | FR-09 | Hủy đơn con đã thanh toán online thì tạo yêu cầu hoàn tiền đúng bằng giá trị đơn con đó | B5, C2 |
 | FR-10 | Đơn con `Completed` được chuyển sang module Đối soát để tính hoa hồng | C3 |
 | FR-11 | Mọi thay đổi trạng thái được ghi lịch sử: thời điểm, người thực hiện (hoặc "Hệ thống"), lý do | B–D |

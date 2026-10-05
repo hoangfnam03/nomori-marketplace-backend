@@ -46,16 +46,22 @@ public static class CheckoutProblems
     public const string PaymentRequired = "payment_required";
     public const string PaymentInvalid = "payment_invalid";
     public const string CouponInvalid = "coupon_invalid";
+
+    /// <summary>A chosen line is no longer in the cart (bought from another tab, or removed): the customer chooses again.</summary>
+    public const string SelectionChanged = "selection_changed";
 }
 
 /// <summary>The customer's choice of one shipping option for one shop of the cart.</summary>
 public sealed record ShippingChoice(int VendorId, int RateId);
 
-public sealed record CheckoutChoices(int? AddressId, IReadOnlyList<ShippingChoice>? ShippingChoices, string? PaymentMethod, string? CouponCode = null);
+/// <param name="CartItemIds">The cart lines to buy now; null or empty buys the whole cart. Lines left out stay in the cart.</param>
+public sealed record CheckoutChoices(
+    int? AddressId, IReadOnlyList<ShippingChoice>? ShippingChoices, string? PaymentMethod, string? CouponCode = null, IReadOnlyList<int>? CartItemIds = null);
 
+/// <param name="CartItemIds">The cart lines to buy now; null or empty buys the whole cart. Only these lines leave the cart.</param>
 public sealed record PlaceOrderRequest(
     int? AddressId, IReadOnlyList<ShippingChoice>? ShippingChoices, string? PaymentMethod, string? IdempotencyKey, bool AcceptedTerms, string? Note,
-    string? CouponCode = null);
+    string? CouponCode = null, IReadOnlyList<int>? CartItemIds = null);
 
 /// <summary>The shipping side of one shop: what it offers for the address and what the customer chose.</summary>
 public sealed record CheckoutShopShipping(
@@ -102,7 +108,8 @@ public static class CheckoutRules
     public static string StockReference(string placementKey) => "checkout:" + placementKey;
 
     /// <summary>Problems about the cart as such (409) rather than about what the customer chose (400).</summary>
-    public static bool IsCartProblem(string problem) => problem is CheckoutProblems.CartEmpty or CheckoutProblems.CartIssues or CheckoutProblems.PricesChanged;
+    public static bool IsCartProblem(string problem) =>
+        problem is CheckoutProblems.CartEmpty or CheckoutProblems.CartIssues or CheckoutProblems.PricesChanged or CheckoutProblems.SelectionChanged;
 
     /// <summary>The cart problems of a priced cart: empty, blocked lines, and prices the customer has not accepted.</summary>
     public static IEnumerable<string> CartProblems(CartView cart)

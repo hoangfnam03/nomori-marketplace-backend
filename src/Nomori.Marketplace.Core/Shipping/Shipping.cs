@@ -47,7 +47,8 @@ public sealed record SaveShippingRateCommand(
     int? MinDays, int? MaxDays, bool Published, int DisplayOrder);
 
 /// <summary>What the customer names for a quote: one of their saved addresses, or a country (and state) for an estimate.</summary>
-public sealed record ShippingQuoteRequest(int? AddressId, string? CountryCode, int? StateProvinceId);
+/// <param name="CartItemIds">Quote only these cart lines (a partial checkout); null or empty quotes the whole cart.</param>
+public sealed record ShippingQuoteRequest(int? AddressId, string? CountryCode, int? StateProvinceId, IReadOnlyCollection<int>? CartItemIds = null);
 
 public sealed record ShippingOption(int RateId, string Name, decimal Fee, bool IsFree, int? MinDays, int? MaxDays);
 
