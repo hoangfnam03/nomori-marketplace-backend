@@ -74,6 +74,27 @@ public static class CartRules
 
     public static bool CanCheckout(IReadOnlyList<CartLineView> lines) =>
         lines.Count > 0 && lines.All(l => !l.Issues.Any(IsBlocking));
+
+    /// <summary>
+    /// The cart cut down to the lines the customer chose to buy now, with its totals recomputed. Null or empty keeps the whole cart.
+    /// Ids that are not in the cart are ignored here; checkout reports them.
+    /// </summary>
+    public static CartView Narrow(CartView cart, IReadOnlyCollection<int>? lineIds)
+    {
+        if (lineIds is not { Count: > 0 }) return cart;
+        var wanted = lineIds.ToHashSet();
+        var groups = cart.Groups
+            .Select(g => g with { Lines = g.Lines.Where(l => wanted.Contains(l.Id)).ToList() })
+            .Where(g => g.Lines.Count > 0)
+            .Select(g => g with { Subtotal = g.Lines.Sum(l => l.LineTotal) })
+            .ToList();
+        var lines = groups.SelectMany(g => g.Lines).ToList();
+        return cart with { Groups = groups, Subtotal = groups.Sum(g => g.Subtotal), ItemCount = lines.Sum(l => l.Quantity), CanCheckout = CanCheckout(lines) };
+    }
+
+    /// <summary>The chosen ids that are not lines of the cart (bought from another tab, or removed).</summary>
+    public static IReadOnlyList<int> Missing(CartView cart, IReadOnlyCollection<int>? lineIds) =>
+        lineIds is not { Count: > 0 } ? [] : lineIds.Distinct().Except(cart.Groups.SelectMany(g => g.Lines).Select(l => l.Id)).ToList();
 }
 
 public sealed record CartLineView(

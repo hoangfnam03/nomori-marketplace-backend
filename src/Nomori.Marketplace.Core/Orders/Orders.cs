@@ -202,13 +202,14 @@ public static class OrderRules
     /// <summary>
     /// The status an action leads to, or null when this actor may not do it from this status.
     /// Shops cancel before shipping, customers only before the shop confirmed, administrators until the end.
+    /// The shop marks a shipped order delivered; the customer then confirms receipt, which completes it and closes complaints.
     /// </summary>
     public static ShopOrderStatus? Transition(ShopOrderStatus from, OrderAction action, OrderActor actor) => (action, from, actor) switch
     {
         (OrderAction.Confirm, ShopOrderStatus.Pending, OrderActor.Shop) => ShopOrderStatus.Confirmed,
         (OrderAction.Ship, ShopOrderStatus.Confirmed, OrderActor.Shop) => ShopOrderStatus.Shipped,
-        (OrderAction.Deliver, ShopOrderStatus.Shipped, OrderActor.Shop or OrderActor.Customer) => ShopOrderStatus.Delivered,
-        (OrderAction.Complete, ShopOrderStatus.Delivered, OrderActor.System) => ShopOrderStatus.Completed,
+        (OrderAction.Deliver, ShopOrderStatus.Shipped, OrderActor.Shop) => ShopOrderStatus.Delivered,
+        (OrderAction.Complete, ShopOrderStatus.Delivered, OrderActor.Customer or OrderActor.System) => ShopOrderStatus.Completed,
 
         (OrderAction.Cancel, ShopOrderStatus.Pending or ShopOrderStatus.Confirmed, OrderActor.Shop) => ShopOrderStatus.Cancelled,
         (OrderAction.Cancel, ShopOrderStatus.Pending, OrderActor.Customer or OrderActor.System) => ShopOrderStatus.Cancelled,

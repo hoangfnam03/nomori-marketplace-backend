@@ -23,8 +23,8 @@ Everything before this slice ends at a cart. This slice adds the **order**: what
 | D3 | **Snapshots, not links.** Lines keep the product name, variant label, SKU, picture, unit price and quantity at the time of purchase; shop orders keep the shop name and the shipping method name and fee; the order keeps the recipient name, phone and address. Later changes to products, shops or the address book never change an order. |
 | D4 | **Money is in the primary currency of the time**; the order stores its currency code. Amounts follow the currency decimals (F07-A). |
 | D5 | **The status machine is in `OrderRules`** and is applied with compare-and-set (`WHERE Status = expected`) together with its history row in one transaction, so two people acting on the same shop order cannot both win (PRD NFR-03). |
-| D6 | **Lifecycle** (PRD section 5): `pending` → `confirmed` → `shipped` → `delivered` → `completed`; `cancelled` from `pending`, `confirmed`, and (administrator only) `shipped` and `delivered`. `completed` is set by the system only (no caller yet, F29). |
-| D7 | **Who may do what:** shop member confirms, ships, edits tracking while shipped, marks delivered, cancels while `pending` or `confirmed`. Customer cancels while `pending` and confirms receipt while `shipped`. Administrator cancels before `completed`. Every cancel needs a reason. |
+| D6 | **Lifecycle** (PRD section 5): `pending` → `confirmed` → `shipped` → `delivered` → `completed`; `cancelled` from `pending`, `confirmed`, and (administrator only) `shipped` and `delivered`. `completed` is set when the customer confirms receipt of a delivered shop order, or later by the system (no caller yet, F29). |
+| D7 | **Who may do what:** shop member confirms, ships, edits tracking while shipped, marks delivered, cancels while `pending` or `confirmed`. Customer cancels while `pending` and confirms receipt while `delivered`, which completes the shop order and gives up complaints about it. Administrator cancels before `completed`. Every cancel needs a reason. |
 | D8 | **A shop sees the recipient's name, phone and address (it has to ship) and the customer's note, but never the customer's email**, which is not stored on the order at all. Another shop's order is `404`. |
 | D9 | **The order status is derived** from its shop orders: `processing` while one is not finished, `completed` when all are completed or cancelled with at least one completed, `cancelled` when all are cancelled. It is not stored. |
 | D10 | **History is the audit trail of an order.** Every change writes who (customer, shop member, administrator, system), when, from, to and the reason or tracking text. It is shown to the shop and the customer; the administrator's name is shown as "Platform". |
@@ -36,7 +36,7 @@ Everything before this slice ends at a cart. This slice adds the **order**: what
 | List and open own orders | Yes | no | Yes (all) |
 | List and open the shop orders of a shop | no | Own shop only (`404` otherwise) | Yes (all) |
 | Confirm, ship, edit tracking, mark delivered | no | Own shop only | no |
-| Confirm receipt (`shipped` → `delivered`) | Yes | Yes (see D7) | no |
+| Confirm receipt (`delivered` → `completed`) | Yes | no (the shop marks `shipped` → `delivered`) | no |
 | Cancel | `pending` only | `pending`, `confirmed` | Before `completed` |
 
 The customer id and the shop id always come from the session and the route, never from a body. A shop order of another customer is `404`.
@@ -164,7 +164,7 @@ None. Emails (F22) and the automatic transitions (F29) will hang on the history 
 | Rules | Every legal and illegal (status, action, actor); completed only by the system; derived order status |
 | Create | Totals recomputed; snapshots kept; validation of every field and limit; decimals; one shop once; same key returns the same order; same key with other content conflicts; numbers; history row |
 | Shop actions | Confirm, ship needs carrier and tracking, tracking only when shipped, deliver, cancel needs a reason; other shop's order not found |
-| Customer actions | Own order only; cancel only while pending; receipt only while shipped |
+| Customer actions | Own order only; cancel only while pending; receipt only while delivered, and it completes the shop order |
 | Admin | Cancels shipped and delivered, not completed or cancelled |
 | Races | A lost compare-and-set is `order.invalid_transition` and writes no history |
 | Views | Shop view has no customer email and no other shop's data; counts per status; filters |
@@ -177,7 +177,7 @@ Automated: pure rules and service tests with fakes. **Not automated:** SQL (tran
 1. Run the migrator; check the four tables, the checks and `orders.manage` on the Administrator role.
 2. There is no checkout yet: insert one order with two shop orders by script (the fixture in `OrderTests` shows the shape), one per shop of two test shops, owned by a test customer.
 3. As that customer open `/customer/orders`: one order with two shop orders. Cancel one while pending, with a reason.
-4. As a member of the other shop open `/vendor/orders`: only its shop order, with the recipient phone and address and no email. Confirm, then ship with carrier and tracking; edit the tracking; as the customer confirm receipt.
+4. As a member of the other shop open `/vendor/orders`: only its shop order, with the recipient phone and address and no email. Confirm, then ship with carrier and tracking; edit the tracking; mark delivered; as the customer press "Order received": the shop order becomes completed.
 5. Open the first shop's order id under the second shop's route: `404`. As the second shop try to cancel a shipped order: refused.
 6. As an administrator open `/admin/orders`, filter by shop and status, cancel a delivered shop order with a reason.
 7. In two browsers confirm the same shop order together: one succeeds, the other is told to reload.

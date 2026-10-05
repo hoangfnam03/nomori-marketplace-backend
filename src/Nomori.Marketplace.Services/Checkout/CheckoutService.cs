@@ -68,10 +68,12 @@ public sealed class CheckoutService(
         if (await orderService.FindByPlacementKeyAsync(placementKey, cancellationToken) is { } earlier)
             return await ReplayAsync(earlier, request.PaymentMethod, cancellationToken);
 
-        var state = await BuildAsync(customerId, new CheckoutChoices(request.AddressId, request.ShippingChoices, request.PaymentMethod, request.CouponCode), cancellationToken);
+        var state = await BuildAsync(customerId,
+            new CheckoutChoices(request.AddressId, request.ShippingChoices, request.PaymentMethod, request.CouponCode, request.CartItemIds), cancellationToken);
 
         // Problems with the cart come first (409): the customer has to go back to the cart. Then what the customer chose (400).
-        if (state.Problems.Contains(CheckoutProblems.CartEmpty) || state.Problems.Contains(CheckoutProblems.CartIssues))
+        if (state.Problems.Contains(CheckoutProblems.CartEmpty) || state.Problems.Contains(CheckoutProblems.CartIssues)
+            || state.Problems.Contains(CheckoutProblems.SelectionChanged))
             return CatalogResult.Error<PlacedOrder>(CheckoutErrors.CartNotReady);
         if (state.Problems.Contains(CheckoutProblems.PricesChanged)) return CatalogResult.Error<PlacedOrder>(CheckoutErrors.PricesChanged);
 
@@ -143,8 +145,16 @@ public sealed class CheckoutService(
             return CatalogResult.Error<PlacedOrder>(CheckoutErrors.PaymentFailed);
         }
 
-        // 4. Last: empty the cart, so a failure above leaves it as it was.
-        await cartService.ClearAsync(customerId, cancellationToken);
+        // 4. Last: take what was bought out of the cart, so a failure above leaves it as it was. Lines not chosen stay.
+        if (request.CartItemIds is { Count: > 0 })
+        {
+            foreach (var lineId in state.Cart.Groups.SelectMany(g => g.Lines).Select(l => l.Id))
+                await cartStore.DeleteAsync(customerId, lineId, cancellationToken);
+        }
+        else
+        {
+            await cartService.ClearAsync(customerId, cancellationToken);
+        }
 
         await auditLog.WriteAsync("checkout.placed", customerId, entityType: "Order", entityId: order.Id,
             details: new { orderId = order.Id, order.Number, order.Total, order.CurrencyCode, order.PaymentMethod, acceptedTerms = true },
@@ -165,8 +175,11 @@ public sealed class CheckoutService(
 
     private async Task<State> BuildAsync(int customerId, CheckoutChoices choices, CancellationToken cancellationToken)
     {
-        var cart = await cartService.GetAsync(customerId, cancellationToken);
+        // Everything below works on the lines the customer chose to buy now; the rest of the cart is not part of this checkout.
+        var fullCart = await cartService.GetAsync(customerId, cancellationToken);
+        var cart = CartRules.Narrow(fullCart, choices.CartItemIds);
         var problems = new List<string>(CheckoutRules.CartProblems(cart));
+        if (CartRules.Missing(fullCart, choices.CartItemIds).Count > 0) problems.Add(CheckoutProblems.SelectionChanged);
 
         var methods = await paymentService.GetAvailableMethodsAsync(cancellationToken);
         PaymentMethodView? method = null;
@@ -183,7 +196,7 @@ public sealed class CheckoutService(
         ShippingQuote? quote = null;
         if (address is not null && cart.Groups.Count > 0)
         {
-            var quoted = await shippingService.QuoteAsync(customerId, new ShippingQuoteRequest(address.Id, null, null), cancellationToken);
+            var quoted = await shippingService.QuoteAsync(customerId, new ShippingQuoteRequest(address.Id, null, null, choices.CartItemIds), cancellationToken);
             if (quoted.Succeeded) quote = quoted.Value;
             else problems.Add(CheckoutProblems.AddressInvalid);
         }

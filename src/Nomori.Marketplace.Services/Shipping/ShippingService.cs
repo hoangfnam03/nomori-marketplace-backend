@@ -93,7 +93,8 @@ public sealed class ShippingService(
             if (errors.Count > 0) return CatalogResult.Failure<ShippingQuote>(errors);
         }
 
-        var cart = await cartService.GetAsync(customerId, cancellationToken);
+        // Free shipping over an amount counts only what is being bought now.
+        var cart = CartRules.Narrow(await cartService.GetAsync(customerId, cancellationToken), request.CartItemIds);
         var rates = await store.GetPublishedRatesAsync(cart.Groups.Select(g => g.VendorId).ToList(), countryCode, cancellationToken);
 
         var shops = cart.Groups.Select(group =>

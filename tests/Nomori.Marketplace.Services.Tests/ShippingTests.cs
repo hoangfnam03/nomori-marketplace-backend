@@ -437,4 +437,21 @@ public sealed class ShippingTests
         Assert.Contains("countryCode", (await Quote(f, "FR", null)).Errors.Keys);
         Assert.Single(f.Store.Rates);
     }
+
+    [Fact]
+    public async Task FreeShippingCountsOnlyTheLinesBeingBought()
+    {
+        var f = new Fixture();
+        f.Seed(Shop, fee: 5, freeOver: 50);
+        static CartLineView Line(int id, decimal total) =>
+            new(id, id, "P" + id, Shop, "Shop", 0, null, null, 1, total, null, total, PriceRule.Base, null, null, []);
+        // 40 + 30 in the cart reaches the free threshold; only the 40 line is being bought.
+        f.Cart.View = new CartView("USD", [new CartShopGroup(Shop, "Shop", [Line(1, 40m), Line(2, 30m)], 70m)], 70m, 2, true);
+
+        var whole = (await f.Create().QuoteAsync(Buyer, new ShippingQuoteRequest(null, "US", 1), CancellationToken.None)).Value!;
+        var chosen = (await f.Create().QuoteAsync(Buyer, new ShippingQuoteRequest(null, "US", 1, [1]), CancellationToken.None)).Value!;
+
+        Assert.Equal(0m, whole.Shops.Single().Options.Single().Fee);
+        Assert.Equal((40m, 5m), (chosen.Shops.Single().Subtotal, chosen.Shops.Single().Options.Single().Fee));
+    }
 }

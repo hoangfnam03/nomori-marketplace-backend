@@ -158,7 +158,7 @@ public sealed class OrderTests
     [InlineData(ShopOrderStatus.Pending, OrderAction.Confirm, OrderActor.Shop, ShopOrderStatus.Confirmed)]
     [InlineData(ShopOrderStatus.Confirmed, OrderAction.Ship, OrderActor.Shop, ShopOrderStatus.Shipped)]
     [InlineData(ShopOrderStatus.Shipped, OrderAction.Deliver, OrderActor.Shop, ShopOrderStatus.Delivered)]
-    [InlineData(ShopOrderStatus.Shipped, OrderAction.Deliver, OrderActor.Customer, ShopOrderStatus.Delivered)]
+    [InlineData(ShopOrderStatus.Delivered, OrderAction.Complete, OrderActor.Customer, ShopOrderStatus.Completed)]
     [InlineData(ShopOrderStatus.Delivered, OrderAction.Complete, OrderActor.System, ShopOrderStatus.Completed)]
     [InlineData(ShopOrderStatus.Pending, OrderAction.Cancel, OrderActor.Shop, ShopOrderStatus.Cancelled)]
     [InlineData(ShopOrderStatus.Confirmed, OrderAction.Cancel, OrderActor.Shop, ShopOrderStatus.Cancelled)]
@@ -186,6 +186,8 @@ public sealed class OrderTests
     [InlineData(ShopOrderStatus.Delivered, OrderAction.Complete, OrderActor.Shop)]
     [InlineData(ShopOrderStatus.Delivered, OrderAction.Complete, OrderActor.Admin)]
     [InlineData(ShopOrderStatus.Shipped, OrderAction.Complete, OrderActor.System)]
+    [InlineData(ShopOrderStatus.Shipped, OrderAction.Deliver, OrderActor.Customer)]
+    [InlineData(ShopOrderStatus.Shipped, OrderAction.Complete, OrderActor.Customer)]
     public void IllegalTransitionsHaveNoTarget(ShopOrderStatus from, OrderAction action, OrderActor actor) =>
         Assert.Null(OrderRules.Transition(from, action, actor));
 
@@ -706,18 +708,21 @@ public sealed class OrderTests
     }
 
     [Fact]
-    public async Task ACustomerConfirmsReceiptOnlyWhileShipped()
+    public async Task ConfirmingReceiptOfADeliveredOrderCompletesIt()
     {
         var f = new Fixture();
         var order = await f.PlaceAsync();
         var shop = order.ShopOrders[0];
 
         Assert.Equal(OrderErrors.InvalidTransition, (await f.Create().ConfirmReceiptAsync(Buyer, shop.Id, CancellationToken.None)).ErrorCode);
+        // While shipping, only the shop can say it arrived.
         Move(order, Shop, ShopOrderStatus.Shipped);
+        Assert.Equal(OrderErrors.InvalidTransition, (await f.Create().ConfirmReceiptAsync(Buyer, shop.Id, CancellationToken.None)).ErrorCode);
+        Move(order, Shop, ShopOrderStatus.Delivered);
 
         var received = await f.Create().ConfirmReceiptAsync(Buyer, shop.Id, CancellationToken.None);
 
-        Assert.Equal(ShopOrderStatus.Delivered, received.Value!.ShopOrder.Status);
+        Assert.Equal(ShopOrderStatus.Completed, received.Value!.ShopOrder.Status);
     }
 
     [Fact]
