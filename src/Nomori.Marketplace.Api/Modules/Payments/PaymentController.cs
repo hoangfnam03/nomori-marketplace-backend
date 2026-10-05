@@ -18,7 +18,7 @@ public sealed class PaymentMethodsController(IPaymentService paymentService) : C
 {
     [HttpGet]
     public async Task<IActionResult> GetAvailable(CancellationToken cancellationToken) =>
-        Ok((await paymentService.GetAvailableMethodsAsync(cancellationToken)).Select(m => new PublicPaymentMethodResponse(m.SystemName, m.DisplayName, m.Kind == PaymentProviderKind.Offline)));
+        Ok((await paymentService.GetAvailableMethodsAsync(cancellationToken)).Select(m => new PublicPaymentMethodResponse(m.SystemName, m.DisplayName, m.Kind == PaymentProviderKind.Offline, m.Kind == PaymentProviderKind.Hosted)));
 }
 
 [ApiController]
@@ -120,12 +120,12 @@ public sealed record UpdatePaymentMethodRequest(bool Enabled, int DisplayOrder);
 
 public sealed record RefundPaymentRequest(decimal Amount);
 
-public sealed record PublicPaymentMethodResponse(string SystemName, string DisplayName, bool IsOffline);
+public sealed record PublicPaymentMethodResponse(string SystemName, string DisplayName, bool IsOffline, bool Redirects);
 
-public sealed record PaymentMethodResponse(string SystemName, string DisplayName, bool IsOffline, bool Enabled, int DisplayOrder, bool Registered)
+public sealed record PaymentMethodResponse(string SystemName, string DisplayName, bool IsOffline, bool Redirects, bool Enabled, int DisplayOrder, bool Registered)
 {
     public static PaymentMethodResponse From(PaymentMethodView view) =>
-        new(view.SystemName, view.DisplayName, view.Kind == PaymentProviderKind.Offline, view.Enabled, view.DisplayOrder, view.Registered);
+        new(view.SystemName, view.DisplayName, view.Kind == PaymentProviderKind.Offline, view.Kind == PaymentProviderKind.Hosted, view.Enabled, view.DisplayOrder, view.Registered);
 }
 
 public sealed record PaymentResponse(

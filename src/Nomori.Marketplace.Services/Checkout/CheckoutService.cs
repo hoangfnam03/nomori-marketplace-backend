@@ -162,6 +162,18 @@ public sealed class CheckoutService(
         return CatalogResult.Success(new PlacedOrder(order, paid.Value, false));
     }
 
+    public async Task<CatalogResult<OrderPaymentInfo>> GetPaymentStatusAsync(int customerId, int orderId, CancellationToken cancellationToken)
+    {
+        var found = await orderService.GetMyOrderAsync(customerId, orderId, cancellationToken);
+        if (!found.Succeeded) return CatalogResult.Error<OrderPaymentInfo>(CatalogErrors.NotFound);
+
+        var order = found.Value!.Order;
+        var payment = await paymentStore.GetByKeyAsync(CheckoutRules.PaymentKey(orderId), cancellationToken);
+        // The page to pay is only given while the customer still can pay.
+        var redirect = payment is { Status: PaymentStatus.Pending } && order.AwaitingPayment ? paymentService.GetRedirectUrl(payment) : null;
+        return CatalogResult.Success(new OrderPaymentInfo(order.AwaitingPayment, payment?.Status, redirect));
+    }
+
     // ---- Helpers ----
 
     private async Task<CatalogResult<PlacedOrder>> ReplayAsync(Order existing, string? paymentMethod, CancellationToken cancellationToken)
@@ -170,6 +182,7 @@ public sealed class CheckoutService(
             return CatalogResult.Error<PlacedOrder>(OrderErrors.PlacementConflict);
 
         var payment = await paymentStore.GetByKeyAsync(CheckoutRules.PaymentKey(existing.Id), cancellationToken);
+        if (payment is not null && existing.AwaitingPayment) payment.RedirectUrl = paymentService.GetRedirectUrl(payment);
         return CatalogResult.Success(new PlacedOrder(existing, payment, true));
     }
 
@@ -319,6 +332,8 @@ public sealed class CheckoutService(
             state.Discount?.Split.GetValueOrDefault(shop.VendorId) ?? 0m)).ToList();
 
         var discount = state.Discount is { } applied ? new NewOrderDiscount(applied.Discount.Code, DiscountRules.ToWire(applied.Discount.Funding)) : null;
-        return new NewOrderCommand(customerId, placementKey, state.Method!.SystemName, string.IsNullOrEmpty(note) ? null : note, recipient, shops, discount);
+        // A redirect payment is not paid yet: the order waits, hidden from the shops, until the gateway says so.
+        return new NewOrderCommand(customerId, placementKey, state.Method!.SystemName, string.IsNullOrEmpty(note) ? null : note, recipient, shops, discount,
+            state.Method.Kind == PaymentProviderKind.Hosted);
     }
 }

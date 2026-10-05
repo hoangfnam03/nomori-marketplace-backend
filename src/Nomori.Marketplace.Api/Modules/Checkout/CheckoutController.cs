@@ -26,6 +26,16 @@ public sealed class CheckoutController(ICheckoutService checkoutService, ICurren
     public async Task<IActionResult> Preview(CheckoutChoicesRequest request, CancellationToken cancellationToken) =>
         Ok(CheckoutPreviewResponse.From(await checkoutService.PreviewAsync(CustomerId, request.ToChoices(), cancellationToken)));
 
+    /// <summary>Whether one of the customer's orders waits for its payment, and where to pay it. Another customer's order is 404.</summary>
+    [HttpGet("orders/{orderId:int}/payment")]
+    public async Task<IActionResult> GetPaymentStatus(int orderId, CancellationToken cancellationToken)
+    {
+        var result = await checkoutService.GetPaymentStatusAsync(CustomerId, orderId, cancellationToken);
+        return result.Succeeded
+            ? Ok(new OrderPaymentInfoResponse(result.Value!.AwaitingPayment, result.Value.PaymentStatus is { } s ? PaymentRules.ToWire(s) : null, result.Value.RedirectUrl))
+            : this.ToFailure(result);
+    }
+
     [HttpPost("place")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> Place(PlaceOrderBody request, CancellationToken cancellationToken)
@@ -67,7 +77,7 @@ public sealed record CheckoutShippingOptionResponse(int RateId, string Name, dec
 public sealed record CheckoutShopResponse(
     int VendorId, string? VendorName, decimal Subtotal, IReadOnlyList<CheckoutShippingOptionResponse> Options, int? ChosenRateId, decimal? ShippingFee);
 
-public sealed record CheckoutPaymentMethodResponse(string SystemName, string DisplayName, bool IsOffline);
+public sealed record CheckoutPaymentMethodResponse(string SystemName, string DisplayName, bool IsOffline, bool Redirects);
 
 public sealed record CheckoutDiscountResponse(string Code, string Name, string Funding, decimal Amount, IReadOnlyDictionary<int, decimal> Split);
 
@@ -82,17 +92,19 @@ public sealed record CheckoutPreviewResponse(
         p.Cart, p.AddressId,
         p.Shops.Select(s => new CheckoutShopResponse(
             s.VendorId, s.VendorName, s.Subtotal, s.Options.Select(CheckoutShippingOptionResponse.From).ToList(), s.Chosen?.RateId, s.Chosen?.Fee)).ToList(),
-        p.PaymentMethods.Select(m => new CheckoutPaymentMethodResponse(m.SystemName, m.DisplayName, m.Kind == PaymentProviderKind.Offline)).ToList(),
+        p.PaymentMethods.Select(m => new CheckoutPaymentMethodResponse(m.SystemName, m.DisplayName, m.Kind == PaymentProviderKind.Offline, m.Kind == PaymentProviderKind.Hosted)).ToList(),
         p.PaymentMethod, p.Subtotal, p.ShippingTotal, p.Total, p.Problems, p.CanPlace,
         p.Discount is null ? null : new CheckoutDiscountResponse(p.Discount.Code, p.Discount.Name, Core.Discounts.DiscountRules.ToWire(p.Discount.Funding), p.Discount.Amount, p.Discount.Split),
         p.CouponReason, p.Tax is null ? null : new CheckoutTaxResponse(p.Tax.Total, p.Tax.PerShop));
 }
 
+public sealed record OrderPaymentInfoResponse(bool AwaitingPayment, string? PaymentStatus, string? RedirectUrl);
+
 public sealed record PlacedShopOrderResponse(int Id, string Number, int VendorId, string ShopName, decimal Total);
 
 public sealed record PlacedOrderResponse(
     int OrderId, string Number, string CurrencyCode, decimal Subtotal, decimal ShippingTotal, decimal DiscountTotal, decimal TaxTotal, decimal Total, string PaymentMethod,
-    string? PaymentStatus, bool Replayed, IReadOnlyList<PlacedShopOrderResponse> ShopOrders)
+    string? PaymentStatus, bool Replayed, IReadOnlyList<PlacedShopOrderResponse> ShopOrders, bool AwaitingPayment, string? PaymentRedirectUrl)
 {
     public static PlacedOrderResponse From(PlacedOrder placed)
     {
@@ -100,6 +112,7 @@ public sealed record PlacedOrderResponse(
         return new PlacedOrderResponse(
             o.Id, o.Number, o.CurrencyCode, o.Subtotal, o.ShippingTotal, o.DiscountTotal, o.TaxTotal, o.Total, o.PaymentMethod,
             placed.Payment is null ? null : PaymentRules.ToWire(placed.Payment.Status), placed.Replayed,
-            o.ShopOrders.Select(s => new PlacedShopOrderResponse(s.Id, s.Number, s.VendorId, s.ShopName, s.Total)).ToList());
+            o.ShopOrders.Select(s => new PlacedShopOrderResponse(s.Id, s.Number, s.VendorId, s.ShopName, s.Total)).ToList(),
+            o.AwaitingPayment, placed.Payment?.RedirectUrl);
     }
 }

@@ -44,7 +44,10 @@ public enum PaymentProviderKind
     Offline = 0,
 
     /// <summary>A gateway that answers for itself and may call back.</summary>
-    Gateway = 1
+    Gateway = 1,
+
+    /// <summary>A gateway with its own payment page: the customer is sent there and the result comes back later by a callback.</summary>
+    Hosted = 2
 }
 
 public sealed class PaymentTransaction
@@ -68,6 +71,9 @@ public sealed class PaymentTransaction
 
     public DateTime CreatedOnUtc { get; set; }
     public DateTime UpdatedOnUtc { get; set; }
+
+    /// <summary>Where the customer pays, for a hosted payment that is still pending. Worked out when asked, never stored.</summary>
+    public string? RedirectUrl { get; set; }
 }
 
 /// <summary>Which methods customers may be offered. A method also has to be registered as a provider.</summary>
@@ -119,11 +125,32 @@ public interface IPaymentProvider
     Task<PaymentProviderResult> VoidAsync(PaymentTransaction transaction, CancellationToken cancellationToken);
     Task<PaymentProviderResult> RefundAsync(PaymentTransaction transaction, decimal amount, CancellationToken cancellationToken);
 
+    /// <summary>The page where the customer pays, while a hosted payment is pending; null for every other provider and state.</summary>
+    string? GetRedirectUrl(PaymentTransaction transaction);
+
     /// <summary>
     /// Verifies the signature over the raw body and reads the event. Null when the signature is missing or wrong, or the body is not an event
     /// this provider understands. Headers are looked up case-insensitively.
     /// </summary>
     PaymentCallback? ParseCallback(string body, IReadOnlyDictionary<string, string> headers);
+}
+
+/// <summary>What the payment service has to do after a handler has dealt with a callback.</summary>
+public enum PaymentFollowUp
+{
+    None = 0,
+
+    /// <summary>Give all the money back: it arrived for something that no longer exists.</summary>
+    Refund = 1
+}
+
+/// <summary>
+/// Told when a gateway callback changed a payment (or repeated one that did). The order side implements it, so payments do not depend on
+/// orders. A handler has to be safe to run more than once for the same payment.
+/// </summary>
+public interface IPaymentOutcomeHandler
+{
+    Task<PaymentFollowUp> OnCallbackAppliedAsync(PaymentTransaction payment, CancellationToken cancellationToken);
 }
 
 // ---- Rules ----
@@ -232,6 +259,11 @@ public interface IPaymentService
     Task<CatalogResult<PaymentTransaction>> CaptureAsync(int id, int actorCustomerId, CancellationToken cancellationToken);
     Task<CatalogResult<PaymentTransaction>> VoidAsync(int id, int actorCustomerId, CancellationToken cancellationToken);
     Task<CatalogResult<PaymentTransaction>> RefundAsync(int id, decimal amount, int actorCustomerId, CancellationToken cancellationToken);
+
+    /// <summary>The page where the customer pays a pending hosted payment; null otherwise.</summary>
+    string? GetRedirectUrl(PaymentTransaction payment);
+
+    Task<PaymentTransaction?> FindByProviderReferenceAsync(string method, string providerReference, CancellationToken cancellationToken);
 
     // ---- Gateways ----
 

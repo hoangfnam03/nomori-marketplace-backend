@@ -55,7 +55,7 @@ Guests get `401` on every route except the callback, which answers `401` for a b
 
 | Deferred item | Goes to |
 |---|---|
-| Real gateways (card, wallet, bank), redirect and hosted pages, 3-D Secure | F19-B |
+| Real gateways (card, wallet, bank), 3-D Secure (the redirect flow itself is F19-B, done; a real adapter is F19-B2) | F19-B2 |
 | Customer payment screens and "pay again" | F17 |
 | Orders holding the payment, order status from payment status | F18 |
 | Method restrictions by country, amount, shop or customer role | F19-B |

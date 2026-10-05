@@ -72,7 +72,8 @@ public sealed class OrderTests
         public Task<PagedResult<ShopOrder>> GetShopOrdersAsync(OrderListQuery query, CancellationToken cancellationToken)
         {
             var all = Orders.SelectMany(o => o.ShopOrders.Select(s => { s.Order = o; return s; }))
-                .Where(s => (query.VendorId is null || s.VendorId == query.VendorId) && (query.Status is null || s.Status == query.Status)
+                // A shop only sees orders whose money is confirmed.
+                .Where(s => (query.VendorId is null || (s.VendorId == query.VendorId && !s.Order!.AwaitingPayment)) && (query.Status is null || s.Status == query.Status)
                     && (query.Search is null || s.Number.Contains(query.Search, StringComparison.OrdinalIgnoreCase)
                         || s.Order!.RecipientName.Contains(query.Search, StringComparison.OrdinalIgnoreCase)))
                 .OrderByDescending(s => s.Id).ToList();
@@ -81,7 +82,7 @@ public sealed class OrderTests
 
         public Task<IReadOnlyDictionary<ShopOrderStatus, int>> CountByStatusAsync(int vendorId, CancellationToken cancellationToken)
         {
-            var shops = Orders.SelectMany(o => o.ShopOrders).Where(s => s.VendorId == vendorId).ToList();
+            var shops = Orders.Where(o => !o.AwaitingPayment).SelectMany(o => o.ShopOrders).Where(s => s.VendorId == vendorId).ToList();
             return Task.FromResult<IReadOnlyDictionary<ShopOrderStatus, int>>(Enum.GetValues<ShopOrderStatus>().ToDictionary(s => s, s => shops.Count(x => x.Status == s)));
         }
 
@@ -95,6 +96,14 @@ public sealed class OrderTests
             shop.TrackingNumber = transition.TrackingNumber ?? shop.TrackingNumber;
             shop.CancelReason = transition.CancelReason ?? shop.CancelReason;
             History.Add(new OrderHistoryEntry(nextHistoryId++, shop.Id, transition.Expected, transition.Target, transition.Actor, transition.ActorCustomerId, transition.Note, transition.NowUtc));
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> ClearAwaitingPaymentAsync(int orderId, CancellationToken cancellationToken)
+        {
+            var order = Orders.FirstOrDefault(x => x.Id == orderId);
+            if (order is null || !order.AwaitingPayment) return Task.FromResult(false);
+            order.AwaitingPayment = false;
             return Task.FromResult(true);
         }
 
@@ -897,5 +906,72 @@ public sealed class OrderTests
     {
         foreach (var status in Enum.GetValues<ShopOrderStatus>())
             Assert.Equal(status is ShopOrderStatus.Pending or ShopOrderStatus.Confirmed, OrderRules.ReturnsStock(status));
+    }
+
+    // ---- Orders that wait for their payment ----
+
+    private static NewOrderCommand Awaiting(string key = "pay1") => Command(key) with { AwaitingPayment = true };
+
+    [Fact]
+    public async Task AnOrderAwaitingPaymentIsHiddenFromTheShopsEverywhere()
+    {
+        var f = new Fixture();
+        var order = (await f.Create().CreateAsync(Awaiting(), CancellationToken.None)).Value!;
+        var shop = order.ShopOrders[0];
+
+        var list = await f.Create().GetShopOrdersAsync(Shop, new OrderListQuery(null, null, null, null, null, null, 1, 20), CancellationToken.None);
+        var counts = await f.Create().GetCountsAsync(Shop, CancellationToken.None);
+
+        Assert.Empty(list.Items);
+        Assert.All(counts.Values, c => Assert.Equal(0, c));
+        Assert.Equal(CatalogErrors.NotFound, (await f.Create().GetShopOrderAsync(Shop, shop.Id, CancellationToken.None)).ErrorCode);
+        Assert.Equal(CatalogErrors.NotFound, (await f.Create().ConfirmAsync(Shop, shop.Id, Seller, CancellationToken.None)).ErrorCode);
+        Assert.Equal(CatalogErrors.NotFound, (await f.Create().ShipAsync(Shop, shop.Id, new ShipCommand("DHL", "1"), Seller, CancellationToken.None)).ErrorCode);
+        Assert.Equal(CatalogErrors.NotFound, (await f.Create().DeliverAsync(Shop, shop.Id, Seller, CancellationToken.None)).ErrorCode);
+        Assert.Equal(CatalogErrors.NotFound, (await f.Create().CancelAsShopAsync(Shop, shop.Id, "x", Seller, CancellationToken.None)).ErrorCode);
+        Assert.Equal(CatalogErrors.NotFound, (await f.Create().UpdateTrackingAsync(Shop, shop.Id, new ShipCommand("DHL", "1"), Seller, CancellationToken.None)).ErrorCode);
+        Assert.Equal(ShopOrderStatus.Pending, shop.Status);
+    }
+
+    [Fact]
+    public async Task TheCustomerAndTheAdministratorSeeAnOrderAwaitingPayment()
+    {
+        var f = new Fixture();
+        var order = (await f.Create().CreateAsync(Awaiting(), CancellationToken.None)).Value!;
+
+        var mine = await f.Create().GetMyOrderAsync(Buyer, order.Id, CancellationToken.None);
+        var admin = await f.Create().GetOrderAsync(order.Id, CancellationToken.None);
+        var customerCancel = await f.Create().CancelAsCustomerAsync(Buyer, order.ShopOrders[0].Id, "Changed my mind", CancellationToken.None);
+
+        Assert.True(mine.Value!.Order.AwaitingPayment);
+        Assert.True(admin.Value!.Order.AwaitingPayment);
+        Assert.True(customerCancel.Succeeded);
+    }
+
+    [Fact]
+    public async Task ThePaidOrderAppearsForTheShopsAndMarkingPaidCanBeRepeated()
+    {
+        var f = new Fixture();
+        var order = (await f.Create().CreateAsync(Awaiting(), CancellationToken.None)).Value!;
+
+        Assert.True((await f.Create().MarkPaidAsync(order.Id, CancellationToken.None)).Succeeded);
+        Assert.True((await f.Create().MarkPaidAsync(order.Id, CancellationToken.None)).Succeeded);
+
+        Assert.False(order.AwaitingPayment);
+        Assert.Single((await f.Create().GetShopOrdersAsync(Shop, new OrderListQuery(null, null, null, null, null, null, 1, 20), CancellationToken.None)).Items);
+        Assert.True((await f.Create().ConfirmAsync(Shop, order.ShopOrders[0].Id, Seller, CancellationToken.None)).Succeeded);
+        Assert.Single(f.Audit.Events, e => e == "order.payment_received");
+        Assert.Equal(CatalogErrors.NotFound, (await f.Create().MarkPaidAsync(999, CancellationToken.None)).ErrorCode);
+    }
+
+    [Fact]
+    public async Task AnOrderThatDoesNotWaitIsNotAwaiting()
+    {
+        var f = new Fixture();
+
+        var order = await f.PlaceAsync();
+
+        Assert.False(order.AwaitingPayment);
+        Assert.Single((await f.Create().GetShopOrdersAsync(Shop, new OrderListQuery(null, null, null, null, null, null, 1, 20), CancellationToken.None)).Items);
     }
 }
