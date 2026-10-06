@@ -11,6 +11,8 @@ using Nomori.Marketplace.Core.Cart;
 using Nomori.Marketplace.Core.Checkout;
 using Nomori.Marketplace.Core.Discounts;
 using Nomori.Marketplace.Core.Orders;
+using Nomori.Marketplace.Core.Returns;
+using Nomori.Marketplace.Services.Returns;
 using Nomori.Marketplace.Core.Payments;
 using Nomori.Marketplace.Core.Shipping;
 using Nomori.Marketplace.Core.Tax;
@@ -179,6 +181,11 @@ builder.Services.AddScoped<ICurrentUserValidator, CurrentUserValidator>();
 builder.Services.AddScoped<ISmtpBuilder, SmtpBuilder>();
 builder.Services.AddScoped<IEmailSender, SmtpEmailSender>();
 builder.Services.AddScoped<IEmailQueueService, EmailQueueService>();
+builder.Services.AddOptions<ReturnOptions>()
+    .Bind(builder.Configuration.GetSection(ReturnOptions.SectionName))
+    .Validate(options => options.WindowDays is >= 1 and <= 365, "Returns:WindowDays must be between 1 and 365.")
+    .ValidateOnStart();
+builder.Services.AddScoped<IReturnService, ReturnService>();
 builder.Services.AddScoped<IOrderNotifier, OrderNotifier>();
 builder.Services.AddScoped<IPermissionService, PermissionService>();
 builder.Services.AddScoped<IAuthorizationManagementService, AuthorizationManagementService>();
