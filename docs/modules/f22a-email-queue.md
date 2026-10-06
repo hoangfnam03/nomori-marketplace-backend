@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Module ID** | F22-A (slice of F22 "Messaging, notification and customer engagement"): a persistent email queue, a sending job and the first customer emails |
-| **Status** | Backend and Angular implemented. Angular build, lint and 30 unit tests pass; the backend builds and the Core, Data, Architecture and Api tests pass. **The new service tests (`EmailQueueTests`, three hook tests in `OrderTests`) were written but could not be run here: Windows Application Control blocked the freshly built `Nomori.Marketplace.Services.Tests.dll` (0x800711C7).** Run `dotnet test` once on a machine without that block. SQL store, migration, hosted run and screen not run against a real database (see 12). |
+| **Status** | Backend and Angular implemented and merged. 832 service tests (all F22-A tests included), 40 data tests, the Angular build, lint and 30 unit tests pass. SQL store, migration, hosted run and screen have not been run against a real database (see 12). |
 | **Branch** | `feat/email-queue/foundation` (backend and frontend) |
 | **Depends on** | F29-A (jobs), F18-A (orders), F03 (permissions), existing `IEmailSender` (SMTP) |
 | **Unblocks** | F22-B (templates, abandoned cart and pending order reminders), F21 (refund and return emails), F26 (email log) |
@@ -124,7 +124,7 @@ Two jobs on the F29-A runner (`email.send_queued`, `email.purge_queue`). Domain 
 | Order service | Announced at once when no payment is needed, once when a waiting order is paid (repeat sends nothing); ship, deliver, cancel announced, confirm not; a failed transition announces nothing |
 | Migration | Version ordering |
 
-Automated: pure rules and service tests with fakes (see the status line: not yet run). **Not automated:** SQL (the claim `UPDATE ... OUTPUT`, the list), the hosted run, SMTP, HTTP, Angular.
+Automated: pure rules and service tests with fakes. **Not automated:** SQL (the claim `UPDATE ... OUTPUT`, the list), the hosted run, SMTP, HTTP, Angular.
 
 ### Manual test guide
 
