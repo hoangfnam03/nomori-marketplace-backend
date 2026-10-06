@@ -28,6 +28,8 @@ public static class EmailKinds
     public const string OrderShipped = "order.shipped";
     public const string OrderDelivered = "order.delivered";
     public const string OrderCancelled = "order.cancelled";
+    public const string UnpaidOrderReminder = ReminderKinds.UnpaidOrder;
+    public const string AbandonedCartReminder = ReminderKinds.AbandonedCart;
 }
 
 public sealed class QueuedEmail

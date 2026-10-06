@@ -235,6 +235,17 @@ builder.Services.AddScoped<IScheduledJob, VoidStalePaymentsJob>();
 builder.Services.AddScoped<IScheduledJob, PurgeReservationsJob>();
 builder.Services.AddScoped<IScheduledJob, PurgeStaleCartsJob>();
 builder.Services.AddScoped<IScheduledJob, PurgeJobHistoryJob>();
+builder.Services.AddOptions<ReminderOptions>()
+    .Bind(builder.Configuration.GetSection(ReminderOptions.SectionName))
+    .Validate(options => options.UnpaidOrderMinutes >= 1 && options.AbandonedCartHours >= 1
+        && options.AbandonedCartMaxDays >= 1 && options.LogRetentionDays >= 1,
+        "Reminders: every time limit must be at least 1.")
+    .Validate(options => options.AbandonedCartMaxDays * 24 > options.AbandonedCartHours,
+        "Reminders:AbandonedCartMaxDays must be longer than Reminders:AbandonedCartHours.")
+    .ValidateOnStart();
+builder.Services.AddScoped<IScheduledJob, RemindUnpaidOrdersJob>();
+builder.Services.AddScoped<IScheduledJob, RemindAbandonedCartsJob>();
+builder.Services.AddScoped<IScheduledJob, PurgeReminderLogJob>();
 builder.Services.AddScoped<IScheduledJob, SendQueuedEmailsJob>();
 builder.Services.AddScoped<IScheduledJob, PurgeEmailQueueJob>();
 builder.Services.AddScoped<IJobService, JobService>();

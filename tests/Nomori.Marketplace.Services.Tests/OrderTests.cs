@@ -965,20 +965,20 @@ public sealed class OrderTests
     }
 
     [Fact]
-    public async Task ShippingDeliveringAndCancellingAreAnnouncedButConfirmingIsNot()
+    public async Task EveryCompletedTransitionIsPassedToTheNotifier()
     {
         var f = new Fixture();
         var order = await f.PlaceAsync(shops: [Shop, OtherShop]);
         var first = order.ShopOrders[0];
 
         await f.Create().ConfirmAsync(Shop, first.Id, Seller, CancellationToken.None);
-        Assert.DoesNotContain(f.Notifier.Changed, c => c.Status == ShopOrderStatus.Confirmed);
 
         await f.Create().ShipAsync(Shop, first.Id, new ShipCommand("DHL", "1"), Seller, CancellationToken.None);
         await f.Create().DeliverAsync(Shop, first.Id, Seller, CancellationToken.None);
         await f.Create().CancelAsAdminAsync(order.ShopOrders[1].Id, "Fraud check", Admin, CancellationToken.None);
 
-        Assert.Equal([ShopOrderStatus.Shipped, ShopOrderStatus.Delivered, ShopOrderStatus.Cancelled], f.Notifier.Changed.Select(c => c.Status).Where(s => s != ShopOrderStatus.Confirmed));
+        // The notifier decides which statuses are worth an email (see OrderNotifier tests).
+        Assert.Equal([ShopOrderStatus.Confirmed, ShopOrderStatus.Shipped, ShopOrderStatus.Delivered, ShopOrderStatus.Cancelled], f.Notifier.Changed.Select(c => c.Status));
     }
 
     [Fact]
