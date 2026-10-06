@@ -13,7 +13,8 @@ public sealed class OrderService(
     IPrimaryCurrencyProvider primaryCurrency,
     IInventoryService inventory,
     IAuditLogService auditLog,
-    IClock clock) : IOrderService
+    IClock clock,
+    IOrderNotifier notifier) : IOrderService
 {
     // ---- Checkout ----
 
@@ -104,6 +105,9 @@ public sealed class OrderService(
 
         await auditLog.WriteAsync("order.created", command.CustomerId, entityType: "Order", entityId: saved.Id,
             details: new { orderId = saved.Id, saved.Number, saved.Total, saved.CurrencyCode, shops = saved.ShopOrders.Count }, cancellationToken: cancellationToken);
+
+        // An order that waits for its payment is announced once the money is confirmed (MarkPaidAsync).
+        if (!saved.AwaitingPayment) await notifier.OrderPlacedAsync(saved, cancellationToken);
         return CatalogResult.Success(saved);
     }
 
@@ -117,7 +121,11 @@ public sealed class OrderService(
 
         // Repeating it is fine: the gateway may call back twice.
         if (await store.ClearAwaitingPaymentAsync(orderId, cancellationToken))
+        {
             await auditLog.WriteAsync("order.payment_received", entityType: "Order", entityId: orderId, details: new { orderId, order.Number }, cancellationToken: cancellationToken);
+            // Only the call that cleared the flag gets here, so a repeated callback does not send a second email.
+            await notifier.OrderPlacedAsync(order, cancellationToken);
+        }
         return CatalogResult.Success(true);
     }
 
@@ -287,7 +295,10 @@ public sealed class OrderService(
 
         // The change above happens once (compare-and-set), so the stock goes back once too.
         if (action == OrderAction.Cancel && OrderRules.ReturnsStock(from)) await ReturnStockAsync(shopOrder, actorCustomerId, cancellationToken);
-        return CatalogResult.Success(await DetailAsync((await store.GetShopOrderAsync(shopOrder.Id, cancellationToken))!, cancellationToken));
+
+        var updated = (await store.GetShopOrderAsync(shopOrder.Id, cancellationToken))!;
+        await notifier.ShopOrderChangedAsync(updated, cancellationToken);
+        return CatalogResult.Success(await DetailAsync(updated, cancellationToken));
     }
 
     private async Task ReturnStockAsync(ShopOrder shopOrder, int? actorCustomerId, CancellationToken cancellationToken)

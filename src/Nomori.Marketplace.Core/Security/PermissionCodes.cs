@@ -42,6 +42,9 @@ public static class PermissionCodes
     /// <summary>See and control background jobs (F29).</summary>
     public const string JobsManage = "jobs.manage";
 
+    /// <summary>See, retry and delete queued emails (F22).</summary>
+    public const string EmailsManage = "emails.manage";
+
     public const string VendorManage = "vendor.manage";
     public const string VendorPortal = "vendor.portal";
 }

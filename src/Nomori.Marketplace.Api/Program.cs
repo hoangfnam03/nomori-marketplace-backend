@@ -80,7 +80,11 @@ builder.Services.AddOptions<DatabaseOptions>()
 builder.Services.AddOptions<CorsOptions>()
     .Bind(builder.Configuration.GetSection(CorsOptions.SectionName));
 builder.Services.AddOptions<EmailOptions>()
-    .Bind(builder.Configuration.GetSection(EmailOptions.SectionName));
+    .Bind(builder.Configuration.GetSection(EmailOptions.SectionName))
+    .Validate(options => options.QueueMaxAttempts is >= 1 and <= 20, "Email:QueueMaxAttempts must be between 1 and 20.")
+    .Validate(options => options.QueueLeaseMinutes is >= 1 and <= 120, "Email:QueueLeaseMinutes must be between 1 and 120.")
+    .Validate(options => options.SentRetentionDays >= 1 && options.FailedRetentionDays >= 1, "Email: retention days must be at least 1.")
+    .ValidateOnStart();
 builder.Services.AddOptions<MediaOptions>()
     .Bind(builder.Configuration.GetSection(MediaOptions.SectionName))
     .Validate(options => options.MaxUploadBytes is > 0 and <= 20 * 1024 * 1024, "Media:MaxUploadBytes must be between 1 byte and 20 MiB.")
@@ -174,6 +178,8 @@ builder.Services.AddScoped<IEmailOtpService, EmailOtpService>();
 builder.Services.AddScoped<ICurrentUserValidator, CurrentUserValidator>();
 builder.Services.AddScoped<ISmtpBuilder, SmtpBuilder>();
 builder.Services.AddScoped<IEmailSender, SmtpEmailSender>();
+builder.Services.AddScoped<IEmailQueueService, EmailQueueService>();
+builder.Services.AddScoped<IOrderNotifier, OrderNotifier>();
 builder.Services.AddScoped<IPermissionService, PermissionService>();
 builder.Services.AddScoped<IAuthorizationManagementService, AuthorizationManagementService>();
 builder.Services.AddScoped<IAuditLogService, AuditLogService>();
@@ -229,6 +235,8 @@ builder.Services.AddScoped<IScheduledJob, VoidStalePaymentsJob>();
 builder.Services.AddScoped<IScheduledJob, PurgeReservationsJob>();
 builder.Services.AddScoped<IScheduledJob, PurgeStaleCartsJob>();
 builder.Services.AddScoped<IScheduledJob, PurgeJobHistoryJob>();
+builder.Services.AddScoped<IScheduledJob, SendQueuedEmailsJob>();
+builder.Services.AddScoped<IScheduledJob, PurgeEmailQueueJob>();
 builder.Services.AddScoped<IJobService, JobService>();
 builder.Services.AddHostedService<JobRunnerHostedService>();
 builder.Services.AddNomoriHealthChecks();

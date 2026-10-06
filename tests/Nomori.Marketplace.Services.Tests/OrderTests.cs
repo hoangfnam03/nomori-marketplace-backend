@@ -126,6 +126,7 @@ public sealed class OrderTests
         public FakeVendorStore Vendors { get; } = new();
         public FakeStockService Stock { get; } = new();
         public RecordingAuditLog Audit { get; } = new();
+        public RecordingOrderNotifier Notifier { get; } = new();
 
         public Fixture()
         {
@@ -133,7 +134,7 @@ public sealed class OrderTests
             Vendors.Vendors.Add(new Vendor { Id = OtherShop, Name = "Tea Co", Active = true });
         }
 
-        public OrderService Create(int decimals = 2) => new(Store, Vendors, new FakePrimaryCurrency(decimals), Stock, Audit, new TestClock());
+        public OrderService Create(int decimals = 2) => new(Store, Vendors, new FakePrimaryCurrency(decimals), Stock, Audit, new TestClock(), Notifier);
 
         /// <summary>An order with one shop order per given shop, owned by the buyer.</summary>
         public async Task<Order> PlaceAsync(string key = "k1", int customer = Buyer, params int[] shops)
@@ -946,6 +947,50 @@ public sealed class OrderTests
         Assert.True(mine.Value!.Order.AwaitingPayment);
         Assert.True(admin.Value!.Order.AwaitingPayment);
         Assert.True(customerCancel.Succeeded);
+    }
+
+    [Fact]
+    public async Task AnOrderThatNeedsNoPaymentIsAnnouncedAtOnceAndOneThatWaitsIsAnnouncedOnceWhenPaid()
+    {
+        var f = new Fixture();
+
+        var direct = (await f.Create().CreateAsync(Command("direct"), CancellationToken.None)).Value!;
+        var waiting = (await f.Create().CreateAsync(Awaiting(), CancellationToken.None)).Value!;
+        Assert.Equal([direct.Number], f.Notifier.Placed);
+
+        await f.Create().MarkPaidAsync(waiting.Id, CancellationToken.None);
+        await f.Create().MarkPaidAsync(waiting.Id, CancellationToken.None);
+
+        Assert.Equal([direct.Number, waiting.Number], f.Notifier.Placed);
+    }
+
+    [Fact]
+    public async Task ShippingDeliveringAndCancellingAreAnnouncedButConfirmingIsNot()
+    {
+        var f = new Fixture();
+        var order = await f.PlaceAsync(shops: [Shop, OtherShop]);
+        var first = order.ShopOrders[0];
+
+        await f.Create().ConfirmAsync(Shop, first.Id, Seller, CancellationToken.None);
+        Assert.DoesNotContain(f.Notifier.Changed, c => c.Status == ShopOrderStatus.Confirmed);
+
+        await f.Create().ShipAsync(Shop, first.Id, new ShipCommand("DHL", "1"), Seller, CancellationToken.None);
+        await f.Create().DeliverAsync(Shop, first.Id, Seller, CancellationToken.None);
+        await f.Create().CancelAsAdminAsync(order.ShopOrders[1].Id, "Fraud check", Admin, CancellationToken.None);
+
+        Assert.Equal([ShopOrderStatus.Shipped, ShopOrderStatus.Delivered, ShopOrderStatus.Cancelled], f.Notifier.Changed.Select(c => c.Status).Where(s => s != ShopOrderStatus.Confirmed));
+    }
+
+    [Fact]
+    public async Task AFailedTransitionAnnouncesNothing()
+    {
+        var f = new Fixture();
+        var order = await f.PlaceAsync();
+
+        // A pending shop order cannot be shipped.
+        await f.Create().ShipAsync(Shop, order.ShopOrders[0].Id, new ShipCommand("DHL", "1"), Seller, CancellationToken.None);
+
+        Assert.Empty(f.Notifier.Changed);
     }
 
     [Fact]
