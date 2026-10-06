@@ -39,4 +39,25 @@ public sealed class EmailOptions
     public string ProductUnhiddenSubject { get; init; } = "A product of your shop is visible again";
 
     public string VendorMemberSetupSubject { get; init; } = "You have been added to a shop on Nomori Marketplace";
+
+    // ---- Queue (F22-A) ----
+
+    /// <summary>A queued email that failed this many times is not tried again until an administrator retries it.</summary>
+    public int QueueMaxAttempts { get; init; } = 5;
+
+    /// <summary>How long a started send keeps its email. A node that dies mid-send frees it after this.</summary>
+    public int QueueLeaseMinutes { get; init; } = 10;
+
+    public int SentRetentionDays { get; init; } = 30;
+
+    public int FailedRetentionDays { get; init; } = 90;
+
+    /// <summary>Order emails. <c>{number}</c> is replaced by the order number.</summary>
+    public string OrderPlacedSubject { get; init; } = "Your Nomori Marketplace order {number}";
+
+    public string OrderShippedSubject { get; init; } = "Your order {number} was shipped";
+
+    public string OrderDeliveredSubject { get; init; } = "Your order {number} was delivered";
+
+    public string OrderCancelledSubject { get; init; } = "Your order {number} was cancelled";
 }

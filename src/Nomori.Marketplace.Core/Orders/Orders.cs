@@ -373,3 +373,16 @@ public interface IOrderService
     Task<CatalogResult<OrderDetail>> GetOrderAsync(int orderId, CancellationToken cancellationToken);
     Task<CatalogResult<ShopOrderDetail>> CancelAsAdminAsync(int shopOrderId, string? reason, int actorCustomerId, CancellationToken cancellationToken);
 }
+
+/// <summary>
+/// Tells the customer about their order by email (F22-A). It runs after the change is saved and must never throw or undo it: an email that
+/// could not be queued is logged and the order stays as it is.
+/// </summary>
+public interface IOrderNotifier
+{
+    /// <summary>The order is placed and, when it needed payment, paid: shops may see it now.</summary>
+    Task OrderPlacedAsync(Order order, CancellationToken cancellationToken);
+
+    /// <summary>A shop order was shipped, delivered or cancelled. Other statuses send nothing.</summary>
+    Task ShopOrderChangedAsync(ShopOrder shopOrder, CancellationToken cancellationToken);
+}
