@@ -263,5 +263,6 @@ public sealed class PaymentService(
     }
 
     private Task AuditAsync(string eventName, int? customerId, PaymentTransaction payment, object details, CancellationToken cancellationToken) =>
-        auditLog.WriteAsync(eventName, customerId, entityType: "PaymentTransaction", entityId: payment.Id, details: details, cancellationToken: cancellationToken);
+        // Actor 0 is the system (a job): the audit row has no customer, which the table's foreign key needs.
+        auditLog.WriteAsync(eventName, customerId is > 0 ? customerId : null, entityType: "PaymentTransaction", entityId: payment.Id, details: details, cancellationToken: cancellationToken);
 }
