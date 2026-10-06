@@ -39,6 +39,9 @@ public static class PermissionCodes
     /// <summary>Create and change platform-funded discounts (F15).</summary>
     public const string DiscountsManage = "discounts.manage";
 
+    /// <summary>See and control background jobs (F29).</summary>
+    public const string JobsManage = "jobs.manage";
+
     public const string VendorManage = "vendor.manage";
     public const string VendorPortal = "vendor.portal";
 }

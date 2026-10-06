@@ -3,6 +3,9 @@ using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.OpenApi;
 using Nomori.Marketplace.Api.Configuration;
 using Nomori.Marketplace.Api.Health;
+using Nomori.Marketplace.Api.Jobs;
+using Nomori.Marketplace.Core.Jobs;
+using Nomori.Marketplace.Services.Jobs;
 using Nomori.Marketplace.Api.Middleware;
 using Nomori.Marketplace.Core.Cart;
 using Nomori.Marketplace.Core.Checkout;
@@ -132,6 +135,7 @@ builder.Services.AddOpenApi(options =>
             "/api/v1/customer/profile"
             ,"/api/v1/customer/addresses", "/api/v1/customer/attributes", "/api/v1/customer/email-change/request"
             ,"/api/v1/media", "/api/v1/media/{id}", "/api/v1/media/uploads", "/api/v1/media/uploads/{id}/complete", "/api/v1/vendors/{vendorId}/products", "/api/v1/vendors/{vendorId}/products/{id}", "/api/v1/admin/catalog/products/{id}/transfer", "/api/v1/admin/catalog/products/{id}/hide", "/api/v1/admin/catalog/products/{id}/unhide", "/api/v1/vendors/{vendorId}/products/{id}/status", "/api/v1/vendors/{vendorId}/products/{id}/review-request", "/api/v1/vendor-applications", "/api/v1/vendor-applications/{id}", "/api/v1/vendor-applications/{id}/status",
+            "/api/v1/admin/jobs/{name}", "/api/v1/admin/jobs/{name}/run",
             "/api/v1/vendors/{id}", "/api/v1/vendors/{id}/members", "/api/v1/vendors/{id}/members/{customerId}",
             "/api/v1/vendors/{id}/members/{customerId}/setup-email", "/api/v1/vendors/{id}/notes", "/api/v1/vendors/{id}/notes/{noteId}"
         };
@@ -212,6 +216,21 @@ builder.Services.AddScoped<IVendorMemberService, VendorMemberService>();
 builder.Services.AddScoped<IVendorAccessContext, VendorAccessContext>();
 builder.Services.AddScoped<IMediaService, MediaService>();
 builder.Services.AddSingleton<Nomori.Marketplace.Services.ApplicationInfo.IApplicationInfoService, Nomori.Marketplace.Services.ApplicationInfo.ApplicationInfoService>();
+builder.Services.AddOptions<JobOptions>()
+    .Bind(builder.Configuration.GetSection(JobOptions.SectionName))
+    .Validate(options => options.PollSeconds is >= 5 and <= 600, "Jobs:PollSeconds must be between 5 and 600.")
+    .Validate(options => options.LeaseMinutes is >= 1 and <= 120, "Jobs:LeaseMinutes must be between 1 and 120.")
+    .Validate(options => options.AwaitingPaymentMinutes >= 1 && options.StalePaymentGraceHours >= 1
+        && options.ReservationRetentionDays >= 1 && options.CartRetentionDays >= 1 && options.RunRetentionDays >= 1,
+        "Jobs: every time limit must be at least 1.")
+    .ValidateOnStart();
+builder.Services.AddScoped<IScheduledJob, ExpireUnpaidOrdersJob>();
+builder.Services.AddScoped<IScheduledJob, VoidStalePaymentsJob>();
+builder.Services.AddScoped<IScheduledJob, PurgeReservationsJob>();
+builder.Services.AddScoped<IScheduledJob, PurgeStaleCartsJob>();
+builder.Services.AddScoped<IScheduledJob, PurgeJobHistoryJob>();
+builder.Services.AddScoped<IJobService, JobService>();
+builder.Services.AddHostedService<JobRunnerHostedService>();
 builder.Services.AddNomoriHealthChecks();
 builder.Services.AddCors(options =>
 {
