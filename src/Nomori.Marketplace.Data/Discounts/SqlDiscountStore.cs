@@ -114,6 +114,47 @@ public sealed class SqlDiscountStore(IOptions<DatabaseOptions> options) : IDisco
         return Convert.ToInt32(await cmd.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
     }
 
+    public async Task<IReadOnlyList<Discount>> GetOffersAsync(IReadOnlyCollection<int> vendorIds, DateTime nowUtc, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        var shops = vendorIds.Select((id, i) => (Name: $"@V{i}", Id: id)).ToList();
+        var shopFilter = shops.Count == 0 ? "VendorId IS NULL" : $"(VendorId IS NULL OR VendorId IN ({string.Join(", ", shops.Select(s => s.Name))}))";
+        // Same as DiscountRules.IsOffered: switched on, not over, the platform's or a shop's of the cart.
+        cmd.CommandText = $"""
+            SELECT TOP (@Max) {Columns} FROM Discount
+            WHERE Enabled = 1 AND (EndsOnUtc IS NULL OR EndsOnUtc > @Now) AND {shopFilter}
+            ORDER BY Id DESC
+            """;
+        cmd.Parameters.AddWithValue("@Max", DiscountLimits.MaxOffers);
+        cmd.Parameters.AddWithValue("@Now", nowUtc);
+        foreach (var (name, id) in shops) cmd.Parameters.AddWithValue(name, id);
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        var list = new List<Discount>();
+        while (await reader.ReadAsync(cancellationToken)) list.Add(Read(reader));
+        return list;
+    }
+
+    public async Task<IReadOnlyDictionary<int, int>> CountCustomerUsesAsync(IReadOnlyCollection<int> discountIds, int customerId, CancellationToken cancellationToken)
+    {
+        var uses = new Dictionary<int, int>();
+        if (discountIds.Count == 0) return uses;
+
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        var ids = discountIds.Select((id, i) => (Name: $"@D{i}", Id: id)).ToList();
+        cmd.CommandText = $"""
+            SELECT DiscountId, COUNT(*) FROM DiscountUsage
+            WHERE CustomerId = @CustomerId AND DiscountId IN ({string.Join(", ", ids.Select(d => d.Name))})
+            GROUP BY DiscountId
+            """;
+        cmd.Parameters.AddWithValue("@CustomerId", customerId);
+        foreach (var (name, id) in ids) cmd.Parameters.AddWithValue(name, id);
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken)) uses[reader.GetInt32(0)] = reader.GetInt32(1);
+        return uses;
+    }
+
     public async Task<RedeemOutcome> TryRedeemAsync(RedeemRequest request, CancellationToken cancellationToken)
     {
         await using var connection = await OpenAsync(cancellationToken);

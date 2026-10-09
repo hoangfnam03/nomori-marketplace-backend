@@ -844,6 +844,25 @@ public sealed class CheckoutTests
     }
 
     [Fact]
+    public async Task ThePreviewOffersTheCodesForTheLinesBeingBought()
+    {
+        var f = new Fixture();
+        f.Code("ALL10");
+        f.Code("TEA5", type: "fixed", value: 5, vendorId: OtherShop);
+        f.Code("MUGS3", type: "fixed", value: 3, vendorId: Shop);
+
+        var whole = await f.Create().PreviewAsync(Buyer, Choices(), CancellationToken.None);
+        // Only the Mugs Inc line: the Tea Co code is not offered, the platform code counts 20 instead of 40.
+        var chosen = await f.Create().PreviewAsync(Buyer, Choices() with { CartItemIds = [1] }, CancellationToken.None);
+
+        Assert.Equal(["TEA5", "ALL10", "MUGS3"], whole.Coupons!.Select(c => c.Discount.Code));
+        Assert.Equal([5m, 4m, 3m], whole.Coupons!.Select(c => c.Amount!.Value));
+        Assert.Equal([("MUGS3", 3m), ("ALL10", 2m)], chosen.Coupons!.Select(c => (c.Discount.Code, c.Amount!.Value)));
+        // Offering a code does not apply it.
+        Assert.Null(whole.Discount);
+    }
+
+    [Fact]
     public async Task NoCodeMeansNoDiscountAndNoProblem()
     {
         var f = new Fixture();

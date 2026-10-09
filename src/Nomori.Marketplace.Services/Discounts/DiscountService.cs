@@ -81,6 +81,20 @@ public sealed class DiscountService(
         return DiscountRules.Evaluate(discount, uses, clock.UtcNow, shopSubtotals, currency.DecimalPlaces);
     }
 
+    public async Task<IReadOnlyList<CouponOffer>> GetOffersAsync(int customerId, IReadOnlyDictionary<int, decimal> shopSubtotals, CancellationToken cancellationToken)
+    {
+        if (shopSubtotals.Count == 0) return [];
+
+        var now = clock.UtcNow;
+        var discounts = await store.GetOffersAsync(shopSubtotals.Keys.ToList(), now, cancellationToken);
+        if (discounts.Count == 0) return [];
+
+        var limited = discounts.Where(d => d.MaxUsesPerCustomer is not null).Select(d => d.Id).ToList();
+        var uses = limited.Count == 0 ? new Dictionary<int, int>() : await store.CountCustomerUsesAsync(limited, customerId, cancellationToken);
+        var places = (await primaryCurrency.GetPrimaryAsync(cancellationToken)).DecimalPlaces;
+        return DiscountRules.Rank(discounts.Select(d => DiscountRules.Offer(d, uses.GetValueOrDefault(d.Id), now, shopSubtotals, places)));
+    }
+
     public async Task<RedeemOutcome> RedeemAsync(AppliedDiscount applied, int customerId, int orderId, CancellationToken cancellationToken)
     {
         var outcome = await store.TryRedeemAsync(new RedeemRequest(applied.Discount.Id, customerId, orderId, applied.Amount, clock.UtcNow), cancellationToken);

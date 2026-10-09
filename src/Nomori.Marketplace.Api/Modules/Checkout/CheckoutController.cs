@@ -83,10 +83,21 @@ public sealed record CheckoutDiscountResponse(string Code, string Name, string F
 
 public sealed record CheckoutTaxResponse(decimal Total, IReadOnlyDictionary<int, decimal> PerShop);
 
+/// <summary>A code to pick at checkout. <c>Amount</c> is what it takes off now; when it is null, <c>Reason</c> says why it cannot be used.</summary>
+public sealed record CheckoutCouponResponse(
+    string Code, string Name, string Funding, int? VendorId, string Type, decimal Value, decimal? MaxDiscountAmount, decimal? MinSubtotal,
+    DateTime? StartsOnUtc, DateTime? EndsOnUtc, decimal? Amount, string? Reason, decimal? Shortfall)
+{
+    public static CheckoutCouponResponse From(Core.Discounts.CouponOffer o) => new(
+        o.Discount.Code, o.Discount.Name, Core.Discounts.DiscountRules.ToWire(o.Discount.Funding), o.Discount.VendorId,
+        Core.Discounts.DiscountRules.ToWire(o.Discount.Type), o.Discount.Value, o.Discount.MaxDiscountAmount, o.Discount.MinSubtotal,
+        o.Discount.StartsOnUtc, o.Discount.EndsOnUtc, o.Amount, o.Reason, o.Shortfall);
+}
+
 public sealed record CheckoutPreviewResponse(
     Core.Cart.CartView Cart, int? AddressId, IReadOnlyList<CheckoutShopResponse> Shops, IReadOnlyList<CheckoutPaymentMethodResponse> PaymentMethods,
     string? PaymentMethod, decimal Subtotal, decimal? ShippingTotal, decimal? Total, IReadOnlyList<string> Problems, bool CanPlace,
-    CheckoutDiscountResponse? Discount, string? CouponReason, CheckoutTaxResponse? Tax)
+    CheckoutDiscountResponse? Discount, string? CouponReason, CheckoutTaxResponse? Tax, IReadOnlyList<CheckoutCouponResponse> Coupons)
 {
     public static CheckoutPreviewResponse From(CheckoutPreview p) => new(
         p.Cart, p.AddressId,
@@ -95,7 +106,8 @@ public sealed record CheckoutPreviewResponse(
         p.PaymentMethods.Select(m => new CheckoutPaymentMethodResponse(m.SystemName, m.DisplayName, m.Kind == PaymentProviderKind.Offline, m.Kind == PaymentProviderKind.Hosted)).ToList(),
         p.PaymentMethod, p.Subtotal, p.ShippingTotal, p.Total, p.Problems, p.CanPlace,
         p.Discount is null ? null : new CheckoutDiscountResponse(p.Discount.Code, p.Discount.Name, Core.Discounts.DiscountRules.ToWire(p.Discount.Funding), p.Discount.Amount, p.Discount.Split),
-        p.CouponReason, p.Tax is null ? null : new CheckoutTaxResponse(p.Tax.Total, p.Tax.PerShop));
+        p.CouponReason, p.Tax is null ? null : new CheckoutTaxResponse(p.Tax.Total, p.Tax.PerShop),
+        (p.Coupons ?? []).Select(CheckoutCouponResponse.From).ToList());
 }
 
 public sealed record OrderPaymentInfoResponse(bool AwaitingPayment, string? PaymentStatus, string? RedirectUrl);

@@ -87,7 +87,8 @@ public sealed record CheckoutPreview(
     bool CanPlace,
     CheckoutDiscount? Discount = null,
     string? CouponReason = null,
-    CheckoutTax? Tax = null);
+    CheckoutTax? Tax = null,
+    IReadOnlyList<CouponOffer>? Coupons = null);
 
 public sealed record PlacedOrder(Order Order, PaymentTransaction? Payment, bool Replayed);
 
