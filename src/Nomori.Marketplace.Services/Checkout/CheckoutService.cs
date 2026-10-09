@@ -45,10 +45,14 @@ public sealed class CheckoutService(
         var discount = state.Discount is { } applied
             ? new CheckoutDiscount(applied.Discount.Code, applied.Discount.Name, applied.Discount.Funding, applied.Amount, applied.Split)
             : null;
+        // The codes to pick from, for the lines being bought. Only the preview lists them; placing checks the chosen code again.
+        var coupons = state.Cart.Groups.Count == 0
+            ? []
+            : await discountService.GetOffersAsync(customerId, state.Cart.Groups.ToDictionary(g => g.VendorId, g => g.Subtotal), cancellationToken);
         return new CheckoutPreview(
             state.Cart, state.Address?.Id, state.Shops, state.Methods, state.Method?.SystemName, state.Cart.Subtotal, state.ShippingTotal, total,
             state.Problems, state.Problems.Count == 0, discount, state.CouponReason,
-            state.Tax is { } tax ? new CheckoutTax(tax.Total, tax.ShopTax) : null);
+            state.Tax is { } tax ? new CheckoutTax(tax.Total, tax.ShopTax) : null, coupons);
     }
 
     // ---- Place ----

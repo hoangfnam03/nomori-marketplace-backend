@@ -54,6 +54,14 @@ public sealed class DiscountTests
         public Task<int> CountCustomerUsesAsync(int discountId, int customerId, CancellationToken cancellationToken) =>
             Task.FromResult(Usages.Count(u => u.DiscountId == discountId && u.CustomerId == customerId));
 
+        public Task<IReadOnlyList<Discount>> GetOffersAsync(IReadOnlyCollection<int> vendorIds, DateTime nowUtc, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<Discount>>(Discounts.Where(d => DiscountRules.IsOffered(d, nowUtc, vendorIds))
+                .OrderByDescending(d => d.Id).Take(DiscountLimits.MaxOffers).ToList());
+
+        public Task<IReadOnlyDictionary<int, int>> CountCustomerUsesAsync(IReadOnlyCollection<int> discountIds, int customerId, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyDictionary<int, int>>(Usages.Where(u => u.CustomerId == customerId && discountIds.Contains(u.DiscountId))
+                .GroupBy(u => u.DiscountId).ToDictionary(g => g.Key, g => g.Count()));
+
         public Task<RedeemOutcome> TryRedeemAsync(RedeemRequest request, CancellationToken cancellationToken)
         {
             BeforeRedeem?.Invoke();
@@ -470,6 +478,75 @@ public sealed class DiscountTests
 
         Assert.Equal(DiscountReasons.CustomerLimitReached, (await f.Create().CheckCouponAsync("WELCOME10", Buyer, Cart((Shop, 20)), CancellationToken.None)).Reason);
         Assert.NotNull((await f.Create().CheckCouponAsync("WELCOME10", Buyer + 1, Cart((Shop, 20)), CancellationToken.None)).Applied);
+    }
+
+    // ---- Pure rules and service: codes offered at checkout ----
+
+    [Fact]
+    public void ACodeIsOfferedWhenOnNotOverAndThePlatformsOrAShopsOfTheCart()
+    {
+        int[] shops = [Shop];
+
+        Assert.True(DiscountRules.IsOffered(Rule(), Now, shops));
+        Assert.True(DiscountRules.IsOffered(Rule(vendorId: Shop), Now, shops));
+        Assert.False(DiscountRules.IsOffered(Rule(vendorId: OtherShop), Now, shops));
+        Assert.False(DiscountRules.IsOffered(new Discount { Code = "OFF", Enabled = false }, Now, shops));
+        Assert.False(DiscountRules.IsOffered(new Discount { Code = "OVER", Enabled = true, EndsOnUtc = Now }, Now, shops));
+        // Not started yet: offered, so the customer sees it coming (disabled).
+        Assert.True(DiscountRules.IsOffered(new Discount { Code = "SOON", Enabled = true, StartsOnUtc = Now.AddDays(1) }, Now, shops));
+    }
+
+    [Fact]
+    public void AnOfferGivesTheAmountOrTheReasonAndWhatIsMissingForTheMinimum()
+    {
+        var usable = DiscountRules.Offer(Rule(value: 10), 0, Now, Cart((Shop, 40m)), 2);
+        Assert.Equal((4m, (string?)null, (decimal?)null), (usable.Amount, usable.Reason, usable.Shortfall));
+
+        var shopCode = Rule(vendorId: Shop);
+        shopCode.MinSubtotal = 50m;
+        var below = DiscountRules.Offer(shopCode, 0, Now, Cart((Shop, 30m), (OtherShop, 100m)), 2);
+        // Only the shop's own lines count toward its minimum.
+        Assert.Equal(((decimal?)null, DiscountReasons.MinSubtotal, (decimal?)20m), (below.Amount, below.Reason, below.Shortfall));
+
+        var used = Rule();
+        used.MaxUsesPerCustomer = 1;
+        Assert.Equal(DiscountReasons.CustomerLimitReached, DiscountRules.Offer(used, 1, Now, Cart((Shop, 40m)), 2).Reason);
+    }
+
+    [Fact]
+    public void UsableOffersComeFirstBiggestFirstThenTheClosestToUsable()
+    {
+        static CouponOffer O(string code, decimal? amount, decimal? shortfall = null) =>
+            new(new Discount { Code = code }, amount, amount is null ? DiscountReasons.MinSubtotal : null, shortfall);
+
+        var ranked = DiscountRules.Rank([O("FAR", null, 50m), O("SMALL", 2m), O("NOTYET", null), O("NEAR", null, 5m), O("BIG", 8m)]);
+
+        Assert.Equal(["BIG", "SMALL", "NEAR", "FAR", "NOTYET"], ranked.Select(o => o.Discount.Code));
+    }
+
+    [Fact]
+    public async Task TheOffersOfACartListThePlatformCodesAndTheCodesOfItsShops()
+    {
+        var f = new Fixture();
+        await f.MakeAsync(code: "ALL10");
+        await f.MakeAsync(vendorId: Shop, code: "MUGS", type: "fixed", value: 5);
+        await f.MakeAsync(vendorId: OtherShop, code: "TEA");
+        await f.MakeAsync(code: "BIGCART", minSubtotal: 100);
+        await f.MakeAsync(code: "ONCE", perCustomer: 1);
+        await f.MakeAsync(code: "OFF", enabled: false);
+        var once = f.Store.Discounts.Single(d => d.Code == "ONCE");
+        f.Store.Usages.Add((once.Id, 1, Buyer, 1m));
+
+        var offers = await f.Create().GetOffersAsync(Buyer, Cart((Shop, 40m)), CancellationToken.None);
+
+        // Another shop's code and a switched-off code are not offered; the rest are, usable ones first.
+        Assert.Equal(["MUGS", "ALL10", "BIGCART", "ONCE"], offers.Select(o => o.Discount.Code));
+        Assert.Equal([5m, 4m], offers.Take(2).Select(o => o.Amount!.Value));
+        Assert.Equal((DiscountReasons.MinSubtotal, (decimal?)60m), (offers[2].Reason, offers[2].Shortfall));
+        Assert.Equal(DiscountReasons.CustomerLimitReached, offers[3].Reason);
+        // Another customer has not used ONCE yet.
+        Assert.NotNull((await f.Create().GetOffersAsync(Buyer + 1, Cart((Shop, 40m)), CancellationToken.None)).Single(o => o.Discount.Code == "ONCE").Amount);
+        Assert.Empty(await f.Create().GetOffersAsync(Buyer, Cart(), CancellationToken.None));
     }
 
     // ---- Service: redeeming ----

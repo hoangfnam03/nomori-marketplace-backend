@@ -27,6 +27,7 @@ A customer can enter a code at checkout and pay less. This slice decides **who p
 | D8 | **A use is given back when checkout fails after redeeming** (payment refused). A shop order cancelled later does not give the use back (F15-B decides the policy). |
 | D9 | **A used discount is never deleted**, only disabled; its usage history stays. A discount that was never used can be deleted. A shop's discounts can only be edited by members of that shop; they cannot be moved between shops. |
 | D10 | **Orders keep the numbers they were placed with.** `Total = Subtotal - DiscountTotal + ShippingTotal`, enforced by the database for both the order and each shop order. |
+| D11 | **Codes can be picked from a list at checkout, as well as typed.** The preview lists every code that is switched on and not over, of the platform or of a shop among the lines being bought (at most 50), each with the amount it takes off now or the reason it cannot be used (`min_subtotal` with the amount still missing, `not_started` with its start, `limit_reached`, `customer_limit_reached`, `nothing_to_discount`). Usable codes come first, biggest discount first. Picking a code is the same as typing it; placing checks it again. **Every code is shown**, so a code meant to stay private (for example for one partner) has no way to be hidden yet; a "show in list" flag would be a follow-up. |
 
 ## 3. Actors and authorization matrix
 
@@ -124,7 +125,7 @@ Write routes need the CSRF token like every other write.
 ## 10. Angular
 
 - `core/discounts/discount-api.service.ts` and models; a shared `DiscountManagerComponent`; pages `/vendor/discounts` and `/admin/discounts`; links in the seller portal and admin menu.
-- Checkout page: a code field with "Apply", the discount line in the summary, the reason when a code does not apply.
+- Checkout page: a code field with "Apply", the discount line in the summary, the reason when a code does not apply; below it a "Choose a discount code (n usable)" button that opens a dialog with the codes for the lines being bought (D11), each code with a radio: ticking a usable code disables the others (one code per order; untick to choose another, which leaves room for several kinds of code later) and "Use code" applies it and closes the dialog, the others disabled with what is missing ("Buy X more", "Valid from ...").
 - Order totals (customer, shop, admin) show the discount line and, for shops, who funded it.
 - States: loading, empty, saving, field errors, code exists, limit, in use, network error.
 

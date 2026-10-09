@@ -121,6 +121,7 @@ public sealed class PaymentJobTests
         public Task<CatalogResult<bool>> DeleteAsync(int? vendorId, int id, int actorCustomerId, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<CouponCheck> CheckCouponAsync(string? code, int customerId, IReadOnlyDictionary<int, decimal> shopSubtotals, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<RedeemOutcome> RedeemAsync(AppliedDiscount applied, int customerId, int orderId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<IReadOnlyList<CouponOffer>> GetOffersAsync(int customerId, IReadOnlyDictionary<int, decimal> shopSubtotals, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
     private sealed class FakePayments : IPaymentService

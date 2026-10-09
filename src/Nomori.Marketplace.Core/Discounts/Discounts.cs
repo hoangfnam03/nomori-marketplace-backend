@@ -11,6 +11,9 @@ public static class DiscountLimits
     public const decimal MaxAmount = 1_000_000_000m;
     public const int MaxPerShop = 200;
     public const int MaxPlatform = 500;
+
+    /// <summary>At most this many codes are offered to pick from at checkout.</summary>
+    public const int MaxOffers = 50;
 }
 
 /// <summary>Business-rule codes of discounts (HTTP 409). Not found is <see cref="CatalogErrors.NotFound"/>.</summary>
@@ -94,6 +97,12 @@ public sealed record AppliedDiscount(Discount Discount, decimal Amount, IReadOnl
 /// <summary>Either the discount a code gives, or the reason it gives none.</summary>
 public sealed record CouponCheck(AppliedDiscount? Applied, string? Reason);
 
+/// <summary>
+/// A code offered at checkout: the amount it takes off this cart, or the reason it cannot be used (then the screen shows it disabled).
+/// <paramref name="Shortfall"/> is how much more the customer has to buy when the reason is the minimum subtotal.
+/// </summary>
+public sealed record CouponOffer(Discount Discount, decimal? Amount, string? Reason, decimal? Shortfall);
+
 public enum RedeemOutcome
 {
     Redeemed = 0,
@@ -154,6 +163,38 @@ public static class DiscountRules
     }
 
     private static CouponCheck Refuse(string reason) => new(null, reason);
+
+    /// <summary>
+    /// Whether a code is offered for a cart: switched on, not over, and the platform's or a shop's of the cart. A code that has not started yet
+    /// is offered (disabled, with its start), so the customer knows it is coming.
+    /// </summary>
+    public static bool IsOffered(Discount discount, DateTime nowUtc, IReadOnlyCollection<int> vendorIds) =>
+        discount.Enabled
+        && (discount.EndsOnUtc is not { } end || nowUtc < end)
+        && (discount.VendorId is not { } vendorId || vendorIds.Contains(vendorId));
+
+    /// <summary>The offer of one code for the subtotals of the shops in the cart, with the same checks as typing the code.</summary>
+    public static CouponOffer Offer(Discount discount, int customerUses, DateTime nowUtc, IReadOnlyDictionary<int, decimal> shopSubtotals, int decimalPlaces)
+    {
+        var check = Evaluate(discount, customerUses, nowUtc, shopSubtotals, decimalPlaces);
+        if (check.Applied is { } applied) return new CouponOffer(discount, applied.Amount, null, null);
+
+        decimal? shortfall = null;
+        if (check.Reason == DiscountReasons.MinSubtotal && discount.MinSubtotal is { } minimum)
+        {
+            var eligible = discount.VendorId is { } shop ? shopSubtotals.GetValueOrDefault(shop) : shopSubtotals.Values.Sum();
+            shortfall = minimum - eligible;
+        }
+        return new CouponOffer(discount, null, check.Reason, shortfall);
+    }
+
+    /// <summary>Usable codes first, the biggest discount first; then the others, the closest to being usable (smallest shortfall) first.</summary>
+    public static IReadOnlyList<CouponOffer> Rank(IEnumerable<CouponOffer> offers) =>
+        offers.OrderBy(o => o.Amount is null)
+            .ThenByDescending(o => o.Amount ?? 0m)
+            .ThenBy(o => o.Shortfall ?? decimal.MaxValue)
+            .ThenBy(o => o.Discount.Code, StringComparer.Ordinal)
+            .ToList();
 
     /// <summary>The amount for an eligible subtotal: a percentage (capped) or a fixed amount, never above the subtotal.</summary>
     public static decimal AmountFor(Discount discount, decimal eligibleSubtotal, int decimalPlaces)
@@ -216,6 +257,15 @@ public interface IDiscountStore
 
     Task<int> CountCustomerUsesAsync(int discountId, int customerId, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// The codes that can be offered for a cart with these shops (see <see cref="DiscountRules.IsOffered"/>), newest first, at most
+    /// <see cref="DiscountLimits.MaxOffers"/>.
+    /// </summary>
+    Task<IReadOnlyList<Discount>> GetOffersAsync(IReadOnlyCollection<int> vendorIds, DateTime nowUtc, CancellationToken cancellationToken);
+
+    /// <summary>How many times the customer used each of these discounts (discount id to uses; unused ones are left out).</summary>
+    Task<IReadOnlyDictionary<int, int>> CountCustomerUsesAsync(IReadOnlyCollection<int> discountIds, int customerId, CancellationToken cancellationToken);
+
     /// <summary>Locks the discount, checks the usage limits, records the use and counts it, all in one transaction.</summary>
     Task<RedeemOutcome> TryRedeemAsync(RedeemRequest request, CancellationToken cancellationToken);
 
@@ -236,6 +286,9 @@ public interface IDiscountService
 
     /// <summary>What a code gives for the subtotals of the shops in the cart (vendor id to subtotal), or why it gives nothing. Changes nothing.</summary>
     Task<CouponCheck> CheckCouponAsync(string? code, int customerId, IReadOnlyDictionary<int, decimal> shopSubtotals, CancellationToken cancellationToken);
+
+    /// <summary>The codes the customer can pick for these subtotals, each with its amount or the reason it cannot be used, ranked. Changes nothing.</summary>
+    Task<IReadOnlyList<CouponOffer>> GetOffersAsync(int customerId, IReadOnlyDictionary<int, decimal> shopSubtotals, CancellationToken cancellationToken);
 
     /// <summary>Records the use of the discount for an order, within its limits.</summary>
     Task<RedeemOutcome> RedeemAsync(AppliedDiscount applied, int customerId, int orderId, CancellationToken cancellationToken);
