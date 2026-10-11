@@ -188,6 +188,7 @@ builder.Services.AddOptions<ReturnOptions>()
     .Validate(options => options.WindowDays is >= 1 and <= 365, "Returns:WindowDays must be between 1 and 365.")
     .ValidateOnStart();
 builder.Services.AddScoped<IReturnService, ReturnService>();
+builder.Services.AddScoped<ITrackingService, TrackingService>();
 builder.Services.AddOptions<SettlementOptions>()
     .Bind(builder.Configuration.GetSection(SettlementOptions.SectionName))
     .Validate(options => options.MinimumPayout >= 0 && options.BankHoldHours is >= 0 and <= 720, "Settlement: MinimumPayout must be 0 or more and BankHoldHours between 0 and 720.")
