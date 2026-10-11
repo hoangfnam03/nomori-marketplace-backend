@@ -45,6 +45,9 @@ public static class PermissionCodes
     /// <summary>See, retry and delete queued emails (F22).</summary>
     public const string EmailsManage = "emails.manage";
 
+    /// <summary>Set commission rates, make adjustments, create and settle payouts (F05-S).</summary>
+    public const string FinanceManage = "finance.manage";
+
     public const string VendorManage = "vendor.manage";
     public const string VendorPortal = "vendor.portal";
 }
