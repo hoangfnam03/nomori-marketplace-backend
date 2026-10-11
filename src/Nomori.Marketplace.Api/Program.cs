@@ -11,6 +11,8 @@ using Nomori.Marketplace.Core.Cart;
 using Nomori.Marketplace.Core.Checkout;
 using Nomori.Marketplace.Core.Discounts;
 using Nomori.Marketplace.Core.Orders;
+using Nomori.Marketplace.Core.Reports;
+using Nomori.Marketplace.Services.Reports;
 using Nomori.Marketplace.Core.Returns;
 using Nomori.Marketplace.Core.Settlement;
 using Nomori.Marketplace.Services.Settlement;
@@ -188,6 +190,7 @@ builder.Services.AddOptions<ReturnOptions>()
     .Validate(options => options.WindowDays is >= 1 and <= 365, "Returns:WindowDays must be between 1 and 365.")
     .ValidateOnStart();
 builder.Services.AddScoped<IReturnService, ReturnService>();
+builder.Services.AddScoped<IReportService, ReportService>();
 builder.Services.AddScoped<ITrackingService, TrackingService>();
 builder.Services.AddOptions<SettlementOptions>()
     .Bind(builder.Configuration.GetSection(SettlementOptions.SectionName))
