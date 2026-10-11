@@ -60,7 +60,11 @@ internal sealed class FakeCustomerIdentityStore(params Customer[] customers) : I
     public Task<Customer?> FindByIdAsync(int id, CancellationToken cancellationToken) =>
         Task.FromResult(Customers.FirstOrDefault(c => c.Id == id));
 
-    public Task<CustomerPassword?> GetLatestPasswordAsync(int customerId, CancellationToken cancellationToken) => throw new NotSupportedException();
+    public Dictionary<int, CustomerPassword> Passwords { get; } = [];
+
+    public Task<CustomerPassword?> GetLatestPasswordAsync(int customerId, CancellationToken cancellationToken) =>
+        Task.FromResult(Passwords.GetValueOrDefault(customerId));
+
     public Task<IReadOnlyList<CustomerPassword>> GetPasswordHistoryAsync(int customerId, int take, CancellationToken cancellationToken) => throw new NotSupportedException();
     public Task<int> CreateCustomerAsync(Customer customer, CustomerPassword password, CancellationToken cancellationToken) => throw new NotSupportedException();
     public Task UpdateCustomerAsync(Customer customer, CancellationToken cancellationToken) => throw new NotSupportedException();

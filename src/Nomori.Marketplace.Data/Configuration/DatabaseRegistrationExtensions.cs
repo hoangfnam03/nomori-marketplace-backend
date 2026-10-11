@@ -20,8 +20,10 @@ using Nomori.Marketplace.Data.Cart;
 using Nomori.Marketplace.Data.Discounts;
 using Nomori.Marketplace.Data.Email;
 using Nomori.Marketplace.Core.Returns;
+using Nomori.Marketplace.Core.Settlement;
 using Nomori.Marketplace.Data.Jobs;
 using Nomori.Marketplace.Data.Returns;
+using Nomori.Marketplace.Data.Settlement;
 using Nomori.Marketplace.Data.Orders;
 using Nomori.Marketplace.Data.Payments;
 using Nomori.Marketplace.Data.Shipping;
@@ -62,6 +64,7 @@ public static class DatabaseRegistrationExtensions
         services.AddScoped<IEmailQueueStore, SqlEmailQueueStore>();
         services.AddScoped<IReminderStore, SqlReminderStore>();
         services.AddScoped<IReturnStore, SqlReturnStore>();
+        services.AddScoped<ISettlementStore, SqlSettlementStore>();
         services.AddScoped<IJobStore, SqlJobStore>();
         services.AddScoped<IMaintenanceStore, SqlMaintenanceStore>();
         services.AddScoped<IDiscountStore, SqlDiscountStore>();

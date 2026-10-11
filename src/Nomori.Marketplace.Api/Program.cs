@@ -12,6 +12,8 @@ using Nomori.Marketplace.Core.Checkout;
 using Nomori.Marketplace.Core.Discounts;
 using Nomori.Marketplace.Core.Orders;
 using Nomori.Marketplace.Core.Returns;
+using Nomori.Marketplace.Core.Settlement;
+using Nomori.Marketplace.Services.Settlement;
 using Nomori.Marketplace.Services.Returns;
 using Nomori.Marketplace.Core.Payments;
 using Nomori.Marketplace.Core.Shipping;
@@ -186,6 +188,13 @@ builder.Services.AddOptions<ReturnOptions>()
     .Validate(options => options.WindowDays is >= 1 and <= 365, "Returns:WindowDays must be between 1 and 365.")
     .ValidateOnStart();
 builder.Services.AddScoped<IReturnService, ReturnService>();
+builder.Services.AddOptions<SettlementOptions>()
+    .Bind(builder.Configuration.GetSection(SettlementOptions.SectionName))
+    .Validate(options => options.MinimumPayout >= 0 && options.BankHoldHours is >= 0 and <= 720, "Settlement: MinimumPayout must be 0 or more and BankHoldHours between 0 and 720.")
+    .ValidateOnStart();
+builder.Services.AddSingleton<ISecretProtector, DataProtectionSecretProtector>();
+builder.Services.AddScoped<ISettlementService, SettlementService>();
+builder.Services.AddScoped<IScheduledJob, RecordSettlementEntriesJob>();
 builder.Services.AddScoped<IOrderNotifier, OrderNotifier>();
 builder.Services.AddScoped<IPermissionService, PermissionService>();
 builder.Services.AddScoped<IAuthorizationManagementService, AuthorizationManagementService>();

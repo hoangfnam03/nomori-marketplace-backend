@@ -102,9 +102,13 @@ public sealed class SqlOrderStore(IOptions<DatabaseOptions> options) : IOrderSto
     private static async Task InsertShopOrderAsync(SqlConnection connection, SqlTransaction transaction, ShopOrder shop, int customerId, CancellationToken cancellationToken)
     {
         await using (var cmd = Command(connection, transaction, """
-            INSERT INTO ShopOrder (OrderId, VendorId, Number, ShopName, Status, Subtotal, ShippingFee, DiscountAmount, DiscountFunding, TaxAmount, Total, ShippingMethodName, ShippingRateId, CreatedOnUtc, UpdatedOnUtc)
+            INSERT INTO ShopOrder (OrderId, VendorId, Number, ShopName, Status, Subtotal, ShippingFee, DiscountAmount, DiscountFunding, TaxAmount, Total, ShippingMethodName, ShippingRateId, CommissionRate, CreatedOnUtc, UpdatedOnUtc)
             OUTPUT INSERTED.Id
-            VALUES (@OrderId, @VendorId, @Number, @ShopName, @Status, @Subtotal, @ShippingFee, @DiscountAmount, @DiscountFunding, @TaxAmount, @Total, @ShippingMethodName, @ShippingRateId, @CreatedOnUtc, @CreatedOnUtc)
+            VALUES (@OrderId, @VendorId, @Number, @ShopName, @Status, @Subtotal, @ShippingFee, @DiscountAmount, @DiscountFunding, @TaxAmount, @Total, @ShippingMethodName, @ShippingRateId,
+                -- F05-S: the commission rate is frozen with the order: the shop's own rate, else the platform default; the platform shop pays none unless it has its own.
+                CASE WHEN EXISTS (SELECT 1 FROM Vendor pv WHERE pv.Id = @VendorId AND pv.IsPlatformShop = 1) AND NOT EXISTS (SELECT 1 FROM VendorCommission WHERE VendorId = @VendorId) THEN 0
+                     ELSE COALESCE((SELECT Rate FROM VendorCommission WHERE VendorId = @VendorId), (SELECT DefaultRate FROM CommissionSetting WHERE Id = 1), 0) END,
+                @CreatedOnUtc, @CreatedOnUtc)
             """))
         {
             cmd.Parameters.AddWithValue("@OrderId", shop.OrderId);
