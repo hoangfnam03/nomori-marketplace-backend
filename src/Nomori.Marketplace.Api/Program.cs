@@ -14,6 +14,8 @@ using Nomori.Marketplace.Core.Orders;
 using Nomori.Marketplace.Core.Reports;
 using Nomori.Marketplace.Services.Reports;
 using Nomori.Marketplace.Core.Returns;
+using Nomori.Marketplace.Core.Seo;
+using Nomori.Marketplace.Services.Seo;
 using Nomori.Marketplace.Core.Settlement;
 using Nomori.Marketplace.Services.Settlement;
 using Nomori.Marketplace.Services.Returns;
@@ -190,6 +192,12 @@ builder.Services.AddOptions<ReturnOptions>()
     .Validate(options => options.WindowDays is >= 1 and <= 365, "Returns:WindowDays must be between 1 and 365.")
     .ValidateOnStart();
 builder.Services.AddScoped<IReturnService, ReturnService>();
+builder.Services.AddOptions<SeoOptions>()
+    .Bind(builder.Configuration.GetSection(SeoOptions.SectionName))
+    .Validate(options => Uri.TryCreate(options.SiteBaseUrl, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https", "Seo:SiteBaseUrl must be an absolute http or https address.")
+    .ValidateOnStart();
+builder.Services.AddScoped<ISeoSource, CatalogSeoSource>();
+builder.Services.AddScoped<ISeoService, SeoService>();
 builder.Services.AddScoped<IReportService, ReportService>();
 builder.Services.AddScoped<ITrackingService, TrackingService>();
 builder.Services.AddOptions<SettlementOptions>()
