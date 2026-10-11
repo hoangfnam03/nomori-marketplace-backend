@@ -64,6 +64,7 @@ public static class DatabaseRegistrationExtensions
         services.AddScoped<IEmailQueueStore, SqlEmailQueueStore>();
         services.AddScoped<IReminderStore, SqlReminderStore>();
         services.AddScoped<IReturnStore, SqlReturnStore>();
+        services.AddScoped<ITrackingStore, SqlTrackingStore>();
         services.AddScoped<ISettlementStore, SqlSettlementStore>();
         services.AddScoped<IJobStore, SqlJobStore>();
         services.AddScoped<IMaintenanceStore, SqlMaintenanceStore>();
