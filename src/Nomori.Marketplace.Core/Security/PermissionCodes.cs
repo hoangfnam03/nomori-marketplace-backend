@@ -48,6 +48,9 @@ public static class PermissionCodes
     /// <summary>Set commission rates, make adjustments, create and settle payouts (F05-S).</summary>
     public const string FinanceManage = "finance.manage";
 
+    /// <summary>See the platform dashboards and the reconciliation report (F26).</summary>
+    public const string ReportsView = "reports.view";
+
     public const string VendorManage = "vendor.manage";
     public const string VendorPortal = "vendor.portal";
 }
