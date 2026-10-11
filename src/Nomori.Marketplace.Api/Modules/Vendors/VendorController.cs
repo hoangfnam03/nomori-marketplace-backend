@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Nomori.Marketplace.Core.Security;
+using Nomori.Marketplace.Core.Seo;
 using Nomori.Marketplace.Core.Vendors;
 using Nomori.Marketplace.Web.Framework.Security;
 
@@ -113,7 +114,7 @@ public sealed record VendorPagedResponse(
 public sealed record VendorResponse(
     int Id, string Name, string Email, string? Description, int PictureId, int DisplayOrder,
     bool? Active, int? AddressId, DateTime? CreatedOnUtc, DateTime? UpdatedOnUtc, string? AdminComment,
-    string? PhoneNumber, string? TaxCode, string? BusinessAddress)
+    string? PhoneNumber, string? TaxCode, string? BusinessAddress, string Slug)
 {
     public static VendorResponse From(Vendor v, VendorCaller caller)
     {
@@ -127,6 +128,7 @@ public sealed record VendorResponse(
             caller.IsAdmin ? v.AdminComment : null,
             privileged ? v.PhoneNumber : null,
             privileged ? v.TaxCode : null,
-            privileged ? v.BusinessAddress : null);
+            privileged ? v.BusinessAddress : null,
+            SeoRules.Slugify(v.Name));
     }
 }

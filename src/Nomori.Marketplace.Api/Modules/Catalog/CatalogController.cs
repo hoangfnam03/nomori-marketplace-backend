@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Nomori.Marketplace.Core.Catalog;
+using Nomori.Marketplace.Core.Seo;
 
 namespace Nomori.Marketplace.Api.Modules.Catalog;
 
@@ -71,7 +72,7 @@ public sealed class CatalogController(
         var result = await searchService.SuggestAsync(q, cancellationToken);
         var items = result.Value ?? [];
         var pictures = await productService.GetMainPictureIdsAsync(items.Select(p => p.Id).ToList(), cancellationToken);
-        return Ok(items.Select(p => new ProductSuggestionResponse(p.Id, p.Name, p.Price, pictures.GetValueOrDefault(p.Id))));
+        return Ok(items.Select(p => new ProductSuggestionResponse(p.Id, p.Name, p.Price, pictures.GetValueOrDefault(p.Id), SeoRules.Slugify(p.Name))));
     }
 
     [HttpGet("products/{id:int}")]
@@ -142,7 +143,7 @@ public sealed class CatalogController(
     private static ProductResponse ToProductResponse(Product p, int mainPictureId) =>
         new(p.Id, p.Name, p.ShortDescription, p.Price, p.OldPrice, p.StockQuantity, p.ShowOnHomepage, p.DisplayOrder, p.CreatedOnUtc, p.VendorId, p.VendorName, mainPictureId,
             !p.TrackInventory || p.StockQuantity > 0,
-            PriceRules.CurrentPrice(p, DateTime.UtcNow), PriceRules.IsSpecialActive(p, DateTime.UtcNow));
+            PriceRules.CurrentPrice(p, DateTime.UtcNow), PriceRules.IsSpecialActive(p, DateTime.UtcNow), SeoRules.Slugify(p.Name));
 
     private static ManufacturerResponse ToManufacturerResponse(Manufacturer m) =>
         new(m.Id, m.Name, m.Description, m.PictureId, m.DisplayOrder);
@@ -169,7 +170,7 @@ public sealed record ProductListRequest(
         MinPrice, MaxPrice, InStock, Tags, SpecOptionIds, Sort, Page, PageSize, VendorId);
 }
 
-public sealed record ProductSuggestionResponse(int Id, string Name, decimal Price, int MainPictureId);
+public sealed record ProductSuggestionResponse(int Id, string Name, decimal Price, int MainPictureId, string Slug);
 
 public sealed record CatalogPagedResponse<T>(
     IReadOnlyList<T> Items,
@@ -191,7 +192,7 @@ public sealed record ProductResponse(
     int Id, string Name, string? ShortDescription,
     decimal Price, decimal OldPrice, int StockQuantity,
     bool ShowOnHomepage, int DisplayOrder, DateTime CreatedOnUtc,
-    int VendorId, string? VendorName, int MainPictureId, bool InStock, decimal FinalPrice, bool OnSale);
+    int VendorId, string? VendorName, int MainPictureId, bool InStock, decimal FinalPrice, bool OnSale, string Slug);
 
 public sealed record ProductDetailResponse(
     ProductResponse Product, string? FullDescription,
