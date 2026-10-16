@@ -16,7 +16,7 @@ public sealed class ShippingTests
     private const int Buyer = 100;
     private const int Seller = 10;
 
-    private sealed class FakeShippingStore : IShippingStore
+    internal sealed class FakeShippingStore : IShippingStore
     {
         private int nextId = 1;
 
@@ -47,7 +47,7 @@ public sealed class ShippingTests
             Task.FromResult(Rates.RemoveAll(r => r.VendorId == vendorId && r.Id == id) > 0);
     }
 
-    private sealed class StubCart : ICartService
+    internal sealed class StubCart : ICartService
     {
         public CartView View { get; set; } = new("USD", [], 0, 0, false);
 

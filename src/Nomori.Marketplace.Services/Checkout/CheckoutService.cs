@@ -328,7 +328,7 @@ public sealed class CheckoutService(
         var address = state.Address!;
         var recipient = new NewOrderRecipient(
             $"{address.FirstName} {address.LastName}".Trim(), address.PhoneNumber, address.Address1, address.Address2, address.City,
-            address.StateProvince, address.ZipPostalCode, address.CountryCode);
+            address.StateProvince, address.ZipPostalCode, address.CountryCode, address.GhnDistrictId, address.GhnWardCode, address.GhnArea);
 
         var shops = state.Shops.Select(shop => new NewShopOrder(
             shop.VendorId, shop.Chosen!.Name, shop.Chosen.RateId, shop.Chosen.Fee,

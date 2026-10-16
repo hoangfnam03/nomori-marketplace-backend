@@ -24,6 +24,13 @@ public sealed class CustomerAccountDataService(ICustomerAccountDataStore store, 
         // Country, state and postal code follow the directory (F07-C). Addresses saved earlier are only checked again when edited.
         var location = await directory.ResolveAddressAsync(address.CountryCode, address.StateProvinceId, address.StateProvince, address.ZipPostalCode, AddressUse.Any, cancellationToken);
         foreach (var error in location.Errors) errors[error.Key] = error.Value;
+        // GHN area (prototype): all three parts or none; the ids come from GHN's own lists, so only their shape is checked here.
+        address.GhnWardCode = string.IsNullOrWhiteSpace(address.GhnWardCode) ? null : address.GhnWardCode.Trim();
+        address.GhnArea = string.IsNullOrWhiteSpace(address.GhnArea) ? null : address.GhnArea.Trim();
+        var ghnParts = new object?[] { address.GhnProvinceId, address.GhnDistrictId, address.GhnWardCode }.Count(v => v is not null);
+        if (ghnParts is not (0 or 3) || address.GhnProvinceId <= 0 || address.GhnDistrictId <= 0 || address.GhnWardCode?.Length > 20 || address.GhnArea?.Length > 300)
+            errors["ghnWardCode"] = ["Choose the province, district and ward, or none of them."];
+        if (ghnParts == 0) address.GhnArea = null;
         if (address.PhoneNumber.Length is < 1 or > 32 || address.PhoneNumber.Any(c => !char.IsDigit(c) && !"+ -()".Contains(c))) errors["phoneNumber"] = ["Phone number is required and contains unsupported characters."];
         if (errors.Count > 0) return (null, errors);
         var resolved = location.Value!;

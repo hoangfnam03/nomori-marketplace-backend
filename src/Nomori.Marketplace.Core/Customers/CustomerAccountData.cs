@@ -19,6 +19,12 @@ public sealed class CustomerAddress
     public string? ZipPostalCode { get; set; }
     public string PhoneNumber { get; set; } = string.Empty;
     public bool IsDefault { get; set; }
+
+    // GHN (prototype): the carrier's own province, district and ward, picked from its lists. GhnArea is "ward, district, province" in words.
+    public int? GhnProvinceId { get; set; }
+    public int? GhnDistrictId { get; set; }
+    public string? GhnWardCode { get; set; }
+    public string? GhnArea { get; set; }
 }
 
 public sealed record CustomerAttributeDefinition(string SystemName, string Name, string DataType, bool IsRequired, int DisplayOrder);

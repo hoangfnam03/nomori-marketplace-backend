@@ -15,7 +15,8 @@ public sealed class ShippingService(
     ICustomerAccountDataService addressService,
     IPrimaryCurrencyProvider primaryCurrency,
     IAuditLogService auditLog,
-    IClock clock) : IShippingService
+    IClock clock,
+    IGhnShippingService? ghn = null) : IShippingService
 {
     // ---- Shop members ----
 
@@ -74,10 +75,11 @@ public sealed class ShippingService(
     {
         string countryCode;
         int? stateId;
+        CustomerAddress? address = null;
         if (request.AddressId is { } addressId)
         {
             // Only the customer's own addresses are searched, so another customer's address is simply not found.
-            var address = (await addressService.GetAddressesAsync(customerId, cancellationToken)).FirstOrDefault(a => a.Id == addressId);
+            address = (await addressService.GetAddressesAsync(customerId, cancellationToken)).FirstOrDefault(a => a.Id == addressId);
             if (address is null) return CatalogResult.Error<ShippingQuote>(CatalogErrors.NotFound);
             (countryCode, stateId) = (address.CountryCode, address.StateProvinceId);
 
@@ -97,11 +99,17 @@ public sealed class ShippingService(
         var cart = CartRules.Narrow(await cartService.GetAsync(customerId, cancellationToken), request.CartItemIds);
         var rates = await store.GetPublishedRatesAsync(cart.Groups.Select(g => g.VendorId).ToList(), countryCode, cancellationToken);
 
-        var shops = cart.Groups.Select(group =>
+        var shops = new List<ShippingShopQuote>();
+        foreach (var group in cart.Groups)
         {
-            var options = ShippingRules.Options(rates.Where(r => r.VendorId == group.VendorId), countryCode, stateId, group.Subtotal);
-            return new ShippingShopQuote(group.VendorId, group.VendorName, group.Subtotal, options, options.Count > 0);
-        }).ToList();
+            var options = ShippingRules.Options(rates.Where(r => r.VendorId == group.VendorId), countryCode, stateId, group.Subtotal).ToList();
+            // GHN (prototype): a live option next to the shop's own rates, for a shop with a GHN pickup address and an address with GHN's area.
+            if (ghn is { IsConfigured: true } && address is { GhnDistrictId: { } districtId, GhnWardCode: { Length: > 0 } wardCode }
+                && await ghn.QuoteAsync(group.VendorId, districtId, wardCode, group.Lines.Select(l => l.Quantity).ToList(), cancellationToken) is { } live)
+                options = [.. options, live];
+            options = [.. options.OrderBy(o => o.Fee)];
+            shops.Add(new ShippingShopQuote(group.VendorId, group.VendorName, group.Subtotal, options, options.Count > 0));
+        }
 
         return CatalogResult.Success(new ShippingQuote(
             cart.CurrencyCode, countryCode, stateId, shops, shops.Count > 0 && shops.All(s => s.CanShip), ShippingRules.ShippingTotal(shops)));

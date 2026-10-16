@@ -97,6 +97,11 @@ public sealed class Order
     public string? PostalCode { get; set; }
     public string CountryCode { get; set; } = string.Empty;
 
+    /// <summary>GHN (prototype): the district and ward of the address, copied when the order was placed. Written only; GHN reads them back.</summary>
+    public int? GhnDistrictId { get; set; }
+    public string? GhnWardCode { get; set; }
+    public string? GhnArea { get; set; }
+
     public DateTime CreatedOnUtc { get; set; }
 
     /// <summary>Filled by reads that ask for them.</summary>
@@ -167,7 +172,8 @@ public sealed record OrderHistoryEntry(
 // ---- Commands ----
 
 public sealed record NewOrderRecipient(
-    string? Name, string? Phone, string? Address1, string? Address2, string? City, string? StateProvince, string? PostalCode, string? CountryCode);
+    string? Name, string? Phone, string? Address1, string? Address2, string? City, string? StateProvince, string? PostalCode, string? CountryCode,
+    int? GhnDistrictId = null, string? GhnWardCode = null, string? GhnArea = null);
 
 public sealed record NewOrderLine(
     int ProductId, int? CombinationId, string? Name, string? VariantLabel, string? Sku, int PictureId, int Quantity, decimal UnitPrice,
@@ -213,7 +219,8 @@ public static class OrderRules
     {
         (OrderAction.Confirm, ShopOrderStatus.Pending, OrderActor.Shop) => ShopOrderStatus.Confirmed,
         (OrderAction.Ship, ShopOrderStatus.Confirmed, OrderActor.Shop) => ShopOrderStatus.Shipped,
-        (OrderAction.Deliver, ShopOrderStatus.Shipped, OrderActor.Shop) => ShopOrderStatus.Delivered,
+        // The shop, or the system when the carrier reports the delivery (GHN webhook).
+        (OrderAction.Deliver, ShopOrderStatus.Shipped, OrderActor.Shop or OrderActor.System) => ShopOrderStatus.Delivered,
         (OrderAction.Complete, ShopOrderStatus.Delivered, OrderActor.Customer or OrderActor.System) => ShopOrderStatus.Completed,
 
         (OrderAction.Cancel, ShopOrderStatus.Pending or ShopOrderStatus.Confirmed, OrderActor.Shop) => ShopOrderStatus.Cancelled,
@@ -348,6 +355,9 @@ public interface IOrderService
 
     /// <summary>Cancels every shop order of the order that is still pending, as the system (checkout does it when the payment fails). Stock goes back.</summary>
     Task<CatalogResult<Order>> CancelAsSystemAsync(int orderId, string reason, CancellationToken cancellationToken);
+
+    /// <summary>The carrier reports the parcel delivered: the system moves the shipped shop order to delivered.</summary>
+    Task<CatalogResult<ShopOrderDetail>> DeliverByCarrierAsync(int shopOrderId, string note, CancellationToken cancellationToken);
 
     // ---- Customers ----
 

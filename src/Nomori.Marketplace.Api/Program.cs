@@ -50,6 +50,8 @@ using Nomori.Marketplace.Services.Vendors;
 using Nomori.Marketplace.Web.Framework.Security;
 using Nomori.Marketplace.Web.Framework.Vendors;
 
+// Local secrets from a git-ignored .env next to the source (see .env.example); the real environment still wins.
+DotEnv.Load();
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Logging.AddJsonConsole();
@@ -227,6 +229,10 @@ builder.Services.AddScoped<IDirectoryService, DirectoryService>();
 builder.Services.AddScoped<IPriceCalculationService, PriceCalculationService>();
 builder.Services.AddScoped<ICartService, CartService>();
 builder.Services.AddScoped<IShippingService, ShippingService>();
+// GHN (prototype): off unless Shipping:Ghn:Enabled, a token and a shop id are set (the secrets as environment variables).
+builder.Services.AddOptions<GhnOptions>().Bind(builder.Configuration.GetSection(GhnOptions.SectionName));
+builder.Services.AddHttpClient<IGhnClient, GhnClient>(client => client.Timeout = TimeSpan.FromSeconds(15));
+builder.Services.AddScoped<IGhnShippingService, GhnShippingService>();
 builder.Services.AddOptions<PaymentOptions>().Bind(builder.Configuration.GetSection(PaymentOptions.SectionName));
 builder.Services.AddSingleton<IPaymentProvider, CashOnDeliveryProvider>();
 // The test gateway only exists where a secret is configured, so production cannot offer it by accident.
