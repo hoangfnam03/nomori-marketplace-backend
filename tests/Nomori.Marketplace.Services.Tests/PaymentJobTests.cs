@@ -71,7 +71,7 @@ public sealed class PaymentJobTests
         }
     }
 
-    private sealed class FakeOrders : IOrderService
+    internal sealed class FakeOrders : IOrderService
     {
         public List<(int OrderId, string Reason)> Cancelled { get; } = [];
         public HashSet<int> Throwing { get; } = [];
@@ -103,6 +103,13 @@ public sealed class PaymentJobTests
         public Task<PagedResult<Order>> GetOrdersAsync(OrderListQuery query, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<CatalogResult<OrderDetail>> GetOrderAsync(int orderId, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<CatalogResult<ShopOrderDetail>> CancelAsAdminAsync(int shopOrderId, string? reason, int actorCustomerId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public List<(int ShopOrderId, string Note)> DeliveredByCarrier { get; } = [];
+
+        public Task<CatalogResult<ShopOrderDetail>> DeliverByCarrierAsync(int shopOrderId, string note, CancellationToken cancellationToken)
+        {
+            DeliveredByCarrier.Add((shopOrderId, note));
+            return Task.FromResult(CatalogResult.Success(new ShopOrderDetail(new ShopOrder { Id = shopOrderId, Status = ShopOrderStatus.Delivered }, [])));
+        }
     }
 
     private sealed class FakeDiscounts : IDiscountService

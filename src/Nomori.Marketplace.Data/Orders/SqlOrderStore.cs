@@ -38,12 +38,12 @@ public sealed class SqlOrderStore(IOptions<DatabaseOptions> options) : IOrderSto
         {
             await using (var cmd = Command(connection, transaction, """
                 INSERT INTO CustomerOrder (Number, CustomerId, PlacementKey, CurrencyCode, Subtotal, ShippingTotal, DiscountTotal, DiscountCode, TaxTotal, AwaitingPayment, Total, PaymentMethod, CustomerNote,
-                    RecipientName, RecipientPhone, Address1, Address2, City, StateProvince, PostalCode, CountryCode, CreatedOnUtc)
+                    RecipientName, RecipientPhone, Address1, Address2, City, StateProvince, PostalCode, CountryCode, CreatedOnUtc, GhnDistrictId, GhnWardCode, GhnArea)
                 OUTPUT INSERTED.Id
                 -- The real number needs the id; until then a throw-away value keeps the unique index happy.
                 VALUES (REPLACE(CONVERT(nvarchar(36), NEWID()), '-', ''), @CustomerId, @PlacementKey, @CurrencyCode, @Subtotal, @ShippingTotal, @DiscountTotal, @DiscountCode, @TaxTotal, @AwaitingPayment, @Total,
                     @PaymentMethod, @CustomerNote, @RecipientName, @RecipientPhone, @Address1, @Address2, @City, @StateProvince, @PostalCode,
-                    @CountryCode, @CreatedOnUtc)
+                    @CountryCode, @CreatedOnUtc, @GhnDistrictId, @GhnWardCode, @GhnArea)
                 """))
             {
                 cmd.Parameters.AddWithValue("@CustomerId", order.CustomerId);
@@ -61,6 +61,9 @@ public sealed class SqlOrderStore(IOptions<DatabaseOptions> options) : IOrderSto
                 cmd.Parameters.AddWithValue("@RecipientName", order.RecipientName);
                 cmd.Parameters.AddWithValue("@RecipientPhone", order.RecipientPhone);
                 cmd.Parameters.AddWithValue("@Address1", order.Address1);
+                cmd.Parameters.AddWithValue("@GhnDistrictId", (object?)order.GhnDistrictId ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("@GhnWardCode", (object?)order.GhnWardCode ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("@GhnArea", (object?)order.GhnArea ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("@Address2", (object?)order.Address2 ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("@City", order.City);
                 cmd.Parameters.AddWithValue("@StateProvince", (object?)order.StateProvince ?? DBNull.Value);

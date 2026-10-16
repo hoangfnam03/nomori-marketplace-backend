@@ -60,7 +60,8 @@ public sealed class OrderService(
             CustomerNote = string.IsNullOrEmpty(note) ? null : note, AwaitingPayment = command.AwaitingPayment,
             RecipientName = recipient.Name!.Trim(), RecipientPhone = recipient.Phone!.Trim(), Address1 = recipient.Address1!.Trim(),
             Address2 = Clean(recipient.Address2), City = recipient.City!.Trim(), StateProvince = Clean(recipient.StateProvince),
-            PostalCode = Clean(recipient.PostalCode), CountryCode = recipient.CountryCode!.Trim().ToUpperInvariant(), CreatedOnUtc = now
+            PostalCode = Clean(recipient.PostalCode), CountryCode = recipient.CountryCode!.Trim().ToUpperInvariant(), CreatedOnUtc = now,
+            GhnDistrictId = recipient.GhnDistrictId, GhnWardCode = Clean(recipient.GhnWardCode), GhnArea = Clean(recipient.GhnArea)
         };
 
         // Every total is computed here from prices and quantities; nothing a caller adds up is trusted.
@@ -140,6 +141,14 @@ public sealed class OrderService(
             await CancelAsync(shop, OrderActor.System, null, reason, cancellationToken);
         }
         return CatalogResult.Success((await store.GetOrderAsync(orderId, cancellationToken))!);
+    }
+
+    public async Task<CatalogResult<ShopOrderDetail>> DeliverByCarrierAsync(int shopOrderId, string note, CancellationToken cancellationToken)
+    {
+        var shopOrder = await store.GetShopOrderAsync(shopOrderId, cancellationToken);
+        return shopOrder is null
+            ? CatalogResult.Error<ShopOrderDetail>(CatalogErrors.NotFound)
+            : await MoveAsync(shopOrder, OrderAction.Deliver, OrderActor.System, null, note, null, null, cancellationToken);
     }
 
     // ---- Customers ----
