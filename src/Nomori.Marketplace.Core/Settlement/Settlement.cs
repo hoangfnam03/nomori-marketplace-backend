@@ -9,7 +9,7 @@ public sealed class SettlementOptions
     public const string SectionName = "Settlement";
 
     /// <summary>A shop is paid only when its available balance is at least this (in the primary currency).</summary>
-    public decimal MinimumPayout { get; set; } = 10m;
+    public decimal MinimumPayout { get; set; } = 100_000m;
 
     /// <summary>How long a new or changed bank account waits before a payout may use it.</summary>
     public int BankHoldHours { get; set; } = 48;
@@ -137,9 +137,11 @@ public sealed record VendorCommission(int VendorId, string ShopName, decimal Rat
 public sealed record CommissionOverview(decimal DefaultRate, IReadOnlyList<VendorCommission> Overrides, IReadOnlyList<CommissionChange> History);
 
 /// <summary>A shop order as settlement sees it. <see cref="Rate"/> is the one frozen when the order was created.</summary>
+/// <param name="PlatformShips">GHN carried it: the customer's shipping went to the platform, which pays GHN.</param>
+/// <param name="ShopShippingCost">Shipping the shop pays for (its free shipping).</param>
 public sealed record SettlementOrderRow(
     int ShopOrderId, string Number, int VendorId, decimal Subtotal, decimal ShippingFee, decimal DiscountAmount, string? DiscountFunding,
-    decimal TaxAmount, decimal Rate, string CurrencyCode);
+    decimal TaxAmount, decimal Rate, string CurrencyCode, bool PlatformShips = false, decimal ShopShippingCost = 0m, decimal ShippingAdjustment = 0m);
 
 /// <summary>A refunded return and the order it belongs to.</summary>
 public sealed record SettlementRefundRow(int ReturnRequestId, decimal RefundAmount, SettlementOrderRow Order);
@@ -202,7 +204,10 @@ public static class SettlementRules
 
     public static decimal Commission(decimal baseAmount, decimal rate, int places) => Round(baseAmount * rate / 100m, places);
 
-    /// <summary>The sale line of a completed shop order. Shipping is added after the commission: the shop owes it to the carrier.</summary>
+    /// <summary>
+    /// The sale line of a completed shop order. Shipping is outside the commission. A shop that shipped itself (orders before GHN) is owed the
+    /// shipping the customer paid; with GHN the platform pays the carrier, so the shop is not, and it pays the shipping it offered for free.
+    /// </summary>
     public static SettlementEntry Sale(SettlementOrderRow order, DateTime nowUtc, int places)
     {
         var goods = Base(order);
@@ -210,9 +215,17 @@ public static class SettlementRules
         return new SettlementEntry
         {
             VendorId = order.VendorId, Kind = EntryKind.Sale, ShopOrderId = order.ShopOrderId, ShopOrderNumber = order.Number,
-            Gross = goods, Commission = commission, Amount = goods - commission + order.ShippingFee, CurrencyCode = order.CurrencyCode, CreatedOnUtc = nowUtc
+            Gross = goods, Commission = commission, Amount = goods - commission + ShopShipping(order), CurrencyCode = order.CurrencyCode, CreatedOnUtc = nowUtc
         };
     }
+
+    /// <summary>What shipping adds to (or takes from) the shop's sale line.</summary>
+    public static decimal ShopShipping(SettlementOrderRow order) =>
+        (order.PlatformShips ? 0m : order.ShippingFee) - order.ShopShippingCost - order.ShippingAdjustment;
+
+    /// <summary>What shipping leaves with the platform: the customer's shipping on a GHN order, plus what the shop paid for its free shipping.</summary>
+    public static decimal PlatformShipping(SettlementOrderRow order) =>
+        (order.PlatformShips ? order.ShippingFee : 0m) + order.ShopShippingCost + order.ShippingAdjustment;
 
     /// <summary>
     /// The refund line of a return: the shop gives back the share of its revenue that matches the share of the items the customer got back.

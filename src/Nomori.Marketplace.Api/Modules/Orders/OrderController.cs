@@ -31,7 +31,7 @@ public sealed class CustomerOrdersController(IOrderService orderService, ICurren
     public async Task<IActionResult> Get(int id, CancellationToken cancellationToken)
     {
         var result = await orderService.GetMyOrderAsync(CustomerId, id, cancellationToken);
-        return result.Succeeded ? Ok(OrderDetailResponse.From(result.Value!, forAdmin: false)) : this.ToFailure(result);
+        return result.Succeeded ? Ok(OrderDetailResponse.From(result.Value!, forAdmin: false, forCustomer: true)) : this.ToFailure(result);
     }
 
     [HttpPost("shop-orders/{shopOrderId:int}/cancel")]
@@ -39,7 +39,7 @@ public sealed class CustomerOrdersController(IOrderService orderService, ICurren
     public async Task<IActionResult> Cancel(int shopOrderId, ReasonRequest request, CancellationToken cancellationToken)
     {
         var result = await orderService.CancelAsCustomerAsync(CustomerId, shopOrderId, request.Reason, cancellationToken);
-        return result.Succeeded ? Ok(ShopOrderDetailResponse.From(result.Value!, forAdmin: false)) : this.ToFailure(result);
+        return result.Succeeded ? Ok(ShopOrderDetailResponse.From(result.Value!, forAdmin: false, forCustomer: true)) : this.ToFailure(result);
     }
 
     [HttpPost("shop-orders/{shopOrderId:int}/confirm-receipt")]
@@ -47,7 +47,7 @@ public sealed class CustomerOrdersController(IOrderService orderService, ICurren
     public async Task<IActionResult> ConfirmReceipt(int shopOrderId, CancellationToken cancellationToken)
     {
         var result = await orderService.ConfirmReceiptAsync(CustomerId, shopOrderId, cancellationToken);
-        return result.Succeeded ? Ok(ShopOrderDetailResponse.From(result.Value!, forAdmin: false)) : this.ToFailure(result);
+        return result.Succeeded ? Ok(ShopOrderDetailResponse.From(result.Value!, forAdmin: false, forCustomer: true)) : this.ToFailure(result);
     }
 }
 
@@ -251,27 +251,38 @@ public sealed record ShopOrderDetailResponse(
     int Id, string Number, int OrderId, string OrderNumber, int VendorId, string ShopName, string Status, string CurrencyCode, string PaymentMethod,
     decimal Subtotal, decimal ShippingFee, decimal DiscountAmount, string? DiscountFunding, decimal TaxAmount, decimal Total, string ShippingMethodName, string? Carrier, string? TrackingNumber, string? CancelReason,
     string? CustomerNote, RecipientResponse Recipient, DateTime CreatedOnUtc, DateTime UpdatedOnUtc,
-    IReadOnlyList<OrderLineResponse> Lines, IReadOnlyList<OrderHistoryResponse> History)
+    IReadOnlyList<OrderLineResponse> Lines, IReadOnlyList<OrderHistoryResponse> History,
+    DateTime? ExpectedDeliveryUtc = null, ShipmentCostResponse? Shipment = null)
 {
-    public static ShopOrderDetailResponse From(ShopOrderDetail detail, bool forAdmin) =>
-        From(detail.ShopOrder, detail.ShopOrder.Order!, detail.History, forAdmin);
+    public static ShopOrderDetailResponse From(ShopOrderDetail detail, bool forAdmin, bool forCustomer = false) =>
+        From(detail.ShopOrder, detail.ShopOrder.Order!, detail.History, forAdmin, forCustomer);
 
-    public static ShopOrderDetailResponse From(ShopOrder s, Order o, IReadOnlyList<OrderHistoryEntry> history, bool forAdmin) => new(
+    /// <param name="forCustomer">The customer sees the expected day but not what shipping costs the platform and the shop.</param>
+    public static ShopOrderDetailResponse From(ShopOrder s, Order o, IReadOnlyList<OrderHistoryEntry> history, bool forAdmin, bool forCustomer = false) => new(
         s.Id, s.Number, s.OrderId, o.Number, s.VendorId, s.ShopName, OrderRules.ToWire(s.Status), o.CurrencyCode, o.PaymentMethod,
         s.Subtotal, s.ShippingFee, s.DiscountAmount, s.DiscountFunding, s.TaxAmount, s.Total, s.ShippingMethodName, s.Carrier, s.TrackingNumber, s.CancelReason, o.CustomerNote, RecipientResponse.From(o),
-        s.CreatedOnUtc, s.UpdatedOnUtc, s.Lines.Select(OrderLineResponse.From).ToList(), history.Select(h => OrderHistoryResponse.Of(h, forAdmin)).ToList());
+        s.CreatedOnUtc, s.UpdatedOnUtc, s.Lines.Select(OrderLineResponse.From).ToList(), history.Select(h => OrderHistoryResponse.Of(h, forAdmin)).ToList(),
+        s.ExpectedDeliveryUtc, forCustomer ? null : ShipmentCostResponse.From(s));
+}
+
+/// <summary>What shipping a shop order cost (shops and administrators): GHN's real fee, what the shop pays, the cash GHN collects.</summary>
+public sealed record ShipmentCostResponse(
+    decimal? CarrierFee, int? ParcelWeightGrams, decimal ShopShippingCost, decimal ShippingAdjustment, decimal CodAmount, DateTime? CodTransferredOnUtc)
+{
+    public static ShipmentCostResponse From(ShopOrder s) =>
+        new(s.CarrierFee, s.ParcelWeightGrams, s.ShopShippingCost, s.ShippingAdjustment, s.CodAmount, s.CodTransferredOnUtc);
 }
 
 public sealed record OrderDetailResponse(
     int Id, string Number, int CustomerId, string CurrencyCode, decimal Subtotal, decimal ShippingTotal, decimal DiscountTotal, string? DiscountCode, decimal TaxTotal, decimal Total, string Status, string PaymentMethod,
     bool AwaitingPayment, string? CustomerNote, RecipientResponse Recipient, DateTime CreatedOnUtc, IReadOnlyList<ShopOrderDetailResponse> ShopOrders)
 {
-    public static OrderDetailResponse From(OrderDetail detail, bool forAdmin)
+    public static OrderDetailResponse From(OrderDetail detail, bool forAdmin, bool forCustomer = false)
     {
         var o = detail.Order;
         return new OrderDetailResponse(
             o.Id, o.Number, forAdmin ? o.CustomerId : 0, o.CurrencyCode, o.Subtotal, o.ShippingTotal, o.DiscountTotal, o.DiscountCode, o.TaxTotal, o.Total,
             OrderRules.ToWire(OrderRules.Overall(o.ShopOrders.Select(s => s.Status))), o.PaymentMethod, o.AwaitingPayment, o.CustomerNote, RecipientResponse.From(o), o.CreatedOnUtc,
-            o.ShopOrders.Select(s => ShopOrderDetailResponse.From(s, o, detail.History.GetValueOrDefault(s.Id) ?? [], forAdmin)).ToList());
+            o.ShopOrders.Select(s => ShopOrderDetailResponse.From(s, o, detail.History.GetValueOrDefault(s.Id) ?? [], forAdmin, forCustomer)).ToList());
     }
 }

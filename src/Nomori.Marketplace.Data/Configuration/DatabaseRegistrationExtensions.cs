@@ -62,7 +62,7 @@ public static class DatabaseRegistrationExtensions
         services.AddScoped<IProductFacetStore, SqlProductFacetStore>();
         services.AddScoped<ICurrencyStore, SqlCurrencyStore>();
         services.AddScoped<ICartStore, SqlCartStore>();
-        services.AddScoped<IShippingStore, SqlShippingStore>();
+        services.AddScoped<IGhnStore, SqlGhnStore>();
         services.AddScoped<IPaymentStore, SqlPaymentStore>();
         services.AddScoped<IOrderStore, SqlOrderStore>();
         services.AddScoped<IEmailQueueStore, SqlEmailQueueStore>();

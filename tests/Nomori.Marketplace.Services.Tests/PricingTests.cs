@@ -109,7 +109,7 @@ public sealed class PricingTests
         public async Task<int> ProductAsync(decimal price = 10, decimal oldPrice = 0)
         {
             var result = await CreateProducts().CreateForVendorAsync(Shop,
-                new SaveVendorProductCommand("Mug", null, null, price, oldPrice, 3, [1], []), Seller, CancellationToken.None);
+                new SaveVendorProductCommand("Mug", null, null, price, oldPrice, 3, [1], [], WeightGrams: 500), Seller, CancellationToken.None);
             return result.Value!.Id;
         }
 
@@ -250,7 +250,7 @@ public sealed class PricingTests
 
     // ---- Changing the regular price ----
 
-    private static SaveVendorProductCommand Edit(decimal price) => new("Mug", null, null, price, 0, 3, [1], []);
+    private static SaveVendorProductCommand Edit(decimal price) => new("Mug", null, null, price, 0, 3, [1], [], WeightGrams: 500);
 
     [Fact]
     public async Task TheRegularPriceCannotDropToOrBelowTheSpecialOrATierPrice()

@@ -1,5 +1,8 @@
 # F20-A Shipping rates per shop
 
+> **Removed (2026-10-18).** The marketplace serves Vietnam only and every parcel goes with GHN: shops no longer set rates. The `ShippingRate` table, its store, service, API and the `/vendor/shipping` rate screens were removed (migration `202611200001 GhnOnlyMigration`). Shipping is now priced by GHN from each shop's pickup address, with shop-funded free shipping and a fallback fee; see `docs/ghn-shipper-simulation.md` and the GHN code (`Core/Shipping/Ghn.cs`). Shop orders placed before keep their rate id and fee; settlement still pays their shipping to the shop.
+
+
 | | |
 |---|---|
 | **Module ID** | F20-A (slice of F20 "Shipping, pickup, shipment, warehouse and fulfilment") |

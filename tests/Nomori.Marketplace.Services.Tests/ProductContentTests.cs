@@ -31,7 +31,7 @@ public sealed class ProductContentTests
     private static SaveVendorProductCommand Save(
         string name = "Mug", string? sku = null, string? gtin = null, string? description = null,
         DateTime? start = null, DateTime? end = null) =>
-        new(name, null, description, 10, 0, 3, [1], [], sku, gtin, null, start, end);
+        new(name, null, description, 10, 0, 3, [1], [], sku, gtin, null, start, end, WeightGrams: 500);
 
     private static Task<CatalogResult<Product>> CreateAsync(ProductService service, SaveVendorProductCommand command, int vendorId = Shop) =>
         service.CreateForVendorAsync(vendorId, command, Seller, CancellationToken.None);
@@ -236,7 +236,7 @@ public sealed class ProductContentTests
         var f = new Fixture();
         var service = f.Create();
         var start = new DateTime(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc);
-        var source = (await CreateAsync(service, new SaveVendorProductCommand("Mug", "short", "<p>full</p>", 10, 0, 3, [1, 2], [], "SKU-1", "12345678", "MPN", start, start.AddDays(5)))).Value!;
+        var source = (await CreateAsync(service, new SaveVendorProductCommand("Mug", "short", "<p>full</p>", 10, 0, 3, [1, 2], [], "SKU-1", "12345678", "MPN", start, start.AddDays(5), WeightGrams: 500))).Value!;
         source.Status = ProductStatus.Live;
 
         var result = await service.CopyForVendorAsync(Shop, source.Id, Seller, CancellationToken.None);

@@ -183,11 +183,15 @@ public sealed record SaveVendorProductRequest(
     string? Gtin = null,
     string? ManufacturerPartNumber = null,
     DateTime? AvailableStartUtc = null,
-    DateTime? AvailableEndUtc = null)
+    DateTime? AvailableEndUtc = null,
+    int? WeightGrams = null,
+    int? LengthCm = null,
+    int? WidthCm = null,
+    int? HeightCm = null)
 {
     public SaveVendorProductCommand ToCommand() =>
         new(Name, ShortDescription, FullDescription, Price, OldPrice, StockQuantity, CategoryIds ?? [], ManufacturerIds ?? [],
-            Sku, Gtin, ManufacturerPartNumber, AvailableStartUtc, AvailableEndUtc);
+            Sku, Gtin, ManufacturerPartNumber, AvailableStartUtc, AvailableEndUtc, WeightGrams, LengthCm, WidthCm, HeightCm);
 }
 
 /// <summary>Seller view of a product. Has no homepage or ordering fields because sellers do not control them.</summary>
@@ -200,7 +204,8 @@ public sealed record VendorProductResponse(
     bool TrackInventory, int LowStockThreshold, bool IsLowStock,
     string? Sku, string? Gtin, string? ManufacturerPartNumber, DateTime? AvailableStartUtc, DateTime? AvailableEndUtc,
     int[]? RelatedProductIds,
-    decimal? SpecialPrice, DateTime? SpecialPriceStartUtc, DateTime? SpecialPriceEndUtc, IReadOnlyList<TierPriceResponse>? TierPrices)
+    decimal? SpecialPrice, DateTime? SpecialPriceStartUtc, DateTime? SpecialPriceEndUtc, IReadOnlyList<TierPriceResponse>? TierPrices,
+    int? WeightGrams = null, int? LengthCm = null, int? WidthCm = null, int? HeightCm = null)
 {
     /// <param name="pictureIds">Ordered picture ids; only known when a single product is read.</param>
     /// <param name="mainPictureId">First picture id, or 0 when there is none or it is not known.</param>
@@ -212,7 +217,7 @@ public sealed record VendorProductResponse(
         categoryIds, manufacturerIds, p.CreatedOnUtc, p.UpdatedOnUtc, pictureIds, mainPictureId,
         p.TrackInventory, p.LowStockThreshold, p.IsLowStock,
         p.Sku, p.Gtin, p.ManufacturerPartNumber, AsUtc(p.AvailableStartUtc), AsUtc(p.AvailableEndUtc), relatedProductIds,
-        p.SpecialPrice, AsUtc(p.SpecialPriceStartUtc), AsUtc(p.SpecialPriceEndUtc), tierPrices);
+        p.SpecialPrice, AsUtc(p.SpecialPriceStartUtc), AsUtc(p.SpecialPriceEndUtc), tierPrices, p.WeightGrams, p.LengthCm, p.WidthCm, p.HeightCm);
 
     // Values read from SQL have no kind; mark them UTC so JSON carries a trailing Z.
     private static DateTime? AsUtc(DateTime? value) => value is null ? null : DateTime.SpecifyKind(value.Value, DateTimeKind.Utc);
