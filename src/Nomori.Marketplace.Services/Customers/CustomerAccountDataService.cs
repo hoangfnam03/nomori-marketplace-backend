@@ -25,12 +25,15 @@ public sealed class CustomerAccountDataService(ICustomerAccountDataStore store, 
         var location = await directory.ResolveAddressAsync(address.CountryCode, address.StateProvinceId, address.StateProvince, address.ZipPostalCode, AddressUse.Any, cancellationToken);
         foreach (var error in location.Errors) errors[error.Key] = error.Value;
         // GHN area (prototype): all three parts or none; the ids come from GHN's own lists, so only their shape is checked here.
-        address.GhnWardCode = string.IsNullOrWhiteSpace(address.GhnWardCode) ? null : address.GhnWardCode.Trim();
-        address.GhnArea = string.IsNullOrWhiteSpace(address.GhnArea) ? null : address.GhnArea.Trim();
-        var ghnParts = new object?[] { address.GhnProvinceId, address.GhnDistrictId, address.GhnWardCode }.Count(v => v is not null);
-        if (ghnParts is not (0 or 3) || address.GhnProvinceId <= 0 || address.GhnDistrictId <= 0 || address.GhnWardCode?.Length > 20 || address.GhnArea?.Length > 300)
-            errors["ghnWardCode"] = ["Choose the province, district and ward, or none of them."];
-        if (ghnParts == 0) address.GhnArea = null;
+        // GHN place (two-level units): the province and the ward, or neither. Their names are kept for the label and the screens.
+        address.GhnProvinceName = string.IsNullOrWhiteSpace(address.GhnProvinceName) ? null : address.GhnProvinceName.Trim();
+        address.GhnWardName = string.IsNullOrWhiteSpace(address.GhnWardName) ? null : address.GhnWardName.Trim();
+        var hasPlace = address.GhnProvinceId is not null || address.GhnWardId is not null;
+        if (hasPlace && (address.GhnProvinceId is not > 0 || address.GhnWardId is not > 0 || address.GhnProvinceName is not { Length: > 0 and <= 100 }
+                         || address.GhnWardName is not { Length: > 0 and <= 100 }))
+            errors["ghnWardId"] = ["Choose the province and the ward, or neither."];
+        if (hasPlace) address.GhnArea = $"{address.GhnWardName}, {address.GhnProvinceName}";
+        else (address.GhnProvinceName, address.GhnWardName, address.GhnArea) = (null, null, null);
         if (address.PhoneNumber.Length is < 1 or > 32 || address.PhoneNumber.Any(c => !char.IsDigit(c) && !"+ -()".Contains(c))) errors["phoneNumber"] = ["Phone number is required and contains unsupported characters."];
         if (errors.Count > 0) return (null, errors);
         var resolved = location.Value!;

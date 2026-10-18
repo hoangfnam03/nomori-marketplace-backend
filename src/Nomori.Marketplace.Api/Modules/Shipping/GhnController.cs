@@ -10,7 +10,7 @@ using Nomori.Marketplace.Web.Framework.Security;
 
 namespace Nomori.Marketplace.Api.Modules.Shipping;
 
-/// <summary>GHN's own provinces, districts and wards, for the address form. Signed-in users only, since every call spends the platform's GHN quota.</summary>
+/// <summary>GHN's provinces and wards (two-level units), for the address forms. Signed-in users only, since every call spends the platform's GHN quota.</summary>
 [ApiController]
 [Route("api/v1/shipping/ghn")]
 [Authorize]
@@ -22,13 +22,10 @@ public sealed class GhnController(IGhnShippingService ghn) : ControllerBase
     [HttpGet("provinces")]
     public async Task<IActionResult> Provinces(CancellationToken cancellationToken) => Answer(await ghn.GetProvincesAsync(cancellationToken));
 
-    [HttpGet("districts")]
-    public async Task<IActionResult> Districts([FromQuery] int provinceId, CancellationToken cancellationToken) =>
-        provinceId > 0 ? Answer(await ghn.GetDistrictsAsync(provinceId, cancellationToken)) : BadRequest();
-
+    /// <summary>The wards of a province (two-level units: there is no district any more).</summary>
     [HttpGet("wards")]
-    public async Task<IActionResult> Wards([FromQuery] int districtId, CancellationToken cancellationToken) =>
-        districtId > 0 ? Answer(await ghn.GetWardsAsync(districtId, cancellationToken)) : BadRequest();
+    public async Task<IActionResult> Wards([FromQuery] int provinceId, CancellationToken cancellationToken) =>
+        provinceId > 0 ? Answer(await ghn.GetWardsAsync(provinceId, cancellationToken)) : BadRequest();
 
     /// <summary>
     /// GHN's order callback. Anonymous (GHN has no account here) but only with the shared secret in <c>X-Nomori-Webhook-Secret</c>; without a

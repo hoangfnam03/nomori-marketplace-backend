@@ -9,58 +9,56 @@ namespace Nomori.Marketplace.Services.Shipping;
 
 /// <summary>
 /// The GHN public API over HTTP. GHN answers <c>{ code, message, data }</c>; any code other than 200, a network failure or an unreadable body
-/// becomes a failed result with GHN's message.
+/// becomes a failed result with GHN's message. Places use the two-level units (v3 master data, <c>*_v2</c> ids with <c>is_new_*_address</c>).
 /// </summary>
 public sealed class GhnClient(HttpClient http, IOptions<GhnOptions> options) : IGhnClient
 {
+    private const int PageSize = 200;
+    private static readonly StringComparer VietnameseOrder = StringComparer.Create(CultureInfo.GetCultureInfo("vi-VN"), true);
+
     private readonly GhnOptions settings = options.Value;
 
     public async Task<GhnResult<IReadOnlyList<GhnProvince>>> GetProvincesAsync(CancellationToken cancellationToken)
     {
-        var answer = await SendAsync(HttpMethod.Get, "/master-data/province", null, withShop: false, cancellationToken);
-        return Map<IReadOnlyList<GhnProvince>>(answer, data => data.AsArray()
-            .Select(p => new GhnProvince(Int(p, "ProvinceID"), Str(p, "ProvinceName")))
+        var answer = await PagedAsync("/v3/master-data/province/all?", cancellationToken);
+        return MapItems<IReadOnlyList<GhnProvince>>(answer, items => items
+            .Where(Active)
+            .Select(p => new GhnProvince(Int(p, "_id"), Str(p, "name")))
             .Where(p => p.Id > 0 && p.Name.Length > 0)
-            .OrderBy(p => p.Name, StringComparer.Create(CultureInfo.GetCultureInfo("vi-VN"), true))
+            .OrderBy(p => p.Name, VietnameseOrder)
             .ToList());
     }
 
-    public async Task<GhnResult<IReadOnlyList<GhnDistrict>>> GetDistrictsAsync(int provinceId, CancellationToken cancellationToken)
+    public async Task<GhnResult<IReadOnlyList<GhnWard>>> GetWardsAsync(int provinceId, CancellationToken cancellationToken)
     {
-        var answer = await SendAsync(HttpMethod.Post, "/master-data/district", new { province_id = provinceId }, withShop: false, cancellationToken);
-        return Map<IReadOnlyList<GhnDistrict>>(answer, data => data.AsArray()
-            .Select(d => new GhnDistrict(Int(d, "DistrictID"), Int(d, "ProvinceID"), Str(d, "DistrictName")))
-            .Where(d => d.Id > 0 && d.Name.Length > 0)
-            .OrderBy(d => d.Name, StringComparer.Create(CultureInfo.GetCultureInfo("vi-VN"), true))
-            .ToList());
-    }
-
-    public async Task<GhnResult<IReadOnlyList<GhnWard>>> GetWardsAsync(int districtId, CancellationToken cancellationToken)
-    {
-        var answer = await SendAsync(HttpMethod.Post, "/master-data/ward", new { district_id = districtId }, withShop: false, cancellationToken);
-        return Map<IReadOnlyList<GhnWard>>(answer, data => data.AsArray()
-            .Select(w => new GhnWard(Str(w, "WardCode"), Int(w, "DistrictID"), Str(w, "WardName")))
-            .Where(w => w.Code.Length > 0 && w.Name.Length > 0)
-            .OrderBy(w => w.Name, StringComparer.Create(CultureInfo.GetCultureInfo("vi-VN"), true))
+        var answer = await PagedAsync($"/v3/master-data/ward/all-by-province-id?province_id={provinceId}&", cancellationToken);
+        return MapItems<IReadOnlyList<GhnWard>>(answer, items => items
+            .Where(Active)
+            .Select(w => new GhnWard(Int(w, "_id"), Int(w, "parent_id"), Str(w, "name")))
+            .Where(w => w.Id > 0 && w.Name.Length > 0)
+            .OrderBy(w => w.Name, VietnameseOrder)
             .ToList());
     }
 
     public async Task<GhnResult<long>> GetFeeAsync(GhnFeeRequest request, CancellationToken cancellationToken)
     {
-        var answer = await SendAsync(HttpMethod.Post, "/v2/shipping-order/fee", new
-        {
-            service_type_id = request.ServiceTypeId,
-            from_district_id = request.FromDistrictId,
-            from_ward_code = request.FromWardCode,
-            to_district_id = request.ToDistrictId,
-            to_ward_code = request.ToWardCode,
-            weight = request.WeightGrams,
-            length = request.LengthCm,
-            width = request.WidthCm,
-            height = request.HeightCm,
-            insurance_value = 0
-        }, withShop: true, cancellationToken);
+        var answer = await SendAsync(HttpMethod.Post, "/v2/shipping-order/fee", Priced(request), withShop: true, cancellationToken);
         return Map(answer, data => Long(data, "total"));
+    }
+
+    public async Task<GhnResult<GhnLeadtime>> GetLeadtimeAsync(GhnFeeRequest request, CancellationToken cancellationToken)
+    {
+        var answer = await SendAsync(HttpMethod.Post, "/v2/shipping-order/leadtime", Priced(request), withShop: true, cancellationToken);
+        return Map(answer, data =>
+        {
+            var order = data["leadtime_order"];
+            var from = Date(order, "from_estimate_date");
+            var to = Date(order, "to_estimate_date");
+            // Only the single timestamp: both ends are that day.
+            if (from is null && to is null && Long(data, "leadtime") is > 0 and var seconds)
+                from = to = DateTimeOffset.FromUnixTimeSeconds(seconds).UtcDateTime;
+            return new GhnLeadtime(from, to);
+        });
     }
 
     public async Task<GhnResult<GhnCreatedOrder>> CreateOrderAsync(GhnCreateOrderRequest request, CancellationToken cancellationToken)
@@ -73,24 +71,29 @@ public sealed class GhnClient(HttpClient http, IOptions<GhnOptions> options) : I
             required_note = request.RequiredNote,
             client_order_code = request.ClientOrderCode,
             // The shop's own address: GHN picks up there, and returns there.
+            is_new_from_address = true,
             from_name = request.From.Name,
             from_phone = request.From.Phone,
             from_address = request.From.Address,
-            from_ward_name = request.From.WardName,
-            from_district_name = request.From.DistrictName,
             from_province_name = request.From.ProvinceName,
+            from_ward_name = request.From.WardName,
+            from_province_id_v2 = request.From.ProvinceId,
+            from_ward_id_v2 = request.From.WardId,
+            is_new_to_address = true,
             to_name = request.ToName,
             to_phone = request.ToPhone,
             to_address = request.ToAddress,
-            to_ward_code = request.ToWardCode,
-            to_district_id = request.ToDistrictId,
+            to_province_name = request.ToProvinceName,
+            to_ward_name = request.ToWardName,
+            to_province_id_v2 = request.ToProvinceId,
+            to_ward_id_v2 = request.ToWardId,
             cod_amount = request.CodAmountVnd,
+            insurance_value = request.InsuranceVnd,
             content = request.Content,
-            weight = request.WeightGrams,
-            length = request.LengthCm,
-            width = request.WidthCm,
-            height = request.HeightCm,
-            insurance_value = 0,
+            weight = request.Parcel.WeightGrams,
+            length = request.Parcel.LengthCm,
+            width = request.Parcel.WidthCm,
+            height = request.Parcel.HeightCm,
             service_type_id = request.ServiceTypeId,
             items = request.Items.Select(i => new { name = i.Name, quantity = i.Quantity, weight = i.WeightGrams, price = i.PriceVnd }).ToList()
         }, withShop: true, cancellationToken);
@@ -124,6 +127,44 @@ public sealed class GhnClient(HttpClient http, IOptions<GhnOptions> options) : I
 
     // ---- Plumbing ----
 
+    /// <summary>The body shared by the fee and the leadtime calls: both places in two-level ids, the parcel and its declared value.</summary>
+    private static object Priced(GhnFeeRequest request) => new
+    {
+        service_type_id = request.ServiceTypeId,
+        is_new_from_address = true,
+        from_province_id_v2 = request.From.ProvinceId,
+        from_ward_id_v2 = request.From.WardId,
+        is_new_to_address = true,
+        to_province_id_v2 = request.To.ProvinceId,
+        to_ward_id_v2 = request.To.WardId,
+        weight = request.Parcel.WeightGrams,
+        length = request.Parcel.LengthCm,
+        width = request.Parcel.WidthCm,
+        height = request.Parcel.HeightCm,
+        insurance_value = request.InsuranceVnd
+    };
+
+    private static bool Active(JsonNode? node) => node?["status"] is not JsonValue status || status.ToString() == "1";
+
+    /// <summary>Reads every page of a master-data list (GHN gives at most 200 items a call).</summary>
+    private async Task<GhnResult<JsonNode>> PagedAsync(string pathWithQuery, CancellationToken cancellationToken)
+    {
+        var all = new JsonArray();
+        for (var offset = 0; ; offset += PageSize)
+        {
+            var page = await SendAsync(HttpMethod.Get, $"{pathWithQuery}offset={offset}&limit={PageSize}", null, withShop: true, cancellationToken);
+            if (!page.Succeeded) return page;
+            if (page.Value is not JsonArray items) break;
+            foreach (var item in items.ToList())
+            {
+                items.Remove(item);
+                all.Add(item);
+            }
+            if (all.Count < offset + PageSize) break;
+        }
+        return GhnResult.Ok<JsonNode>(all);
+    }
+
     private async Task<GhnResult<JsonNode>> SendAsync(HttpMethod method, string path, object? body, bool withShop, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(settings.Token)) return GhnResult.Fail<JsonNode>("GHN is not configured.");
@@ -139,12 +180,13 @@ public sealed class GhnClient(HttpClient http, IOptions<GhnOptions> options) : I
             var text = await response.Content.ReadAsStringAsync(cancellationToken);
             var json = string.IsNullOrWhiteSpace(text) ? null : JsonNode.Parse(text);
             var code = json?["code"]?.GetValueKind() == JsonValueKind.Number ? json["code"]!.GetValue<int>() : (int)response.StatusCode;
-            if (code != 200 || json?["data"] is not { } data)
+            if (code != 200)
             {
                 var message = json?["code_message_value"]?.ToString() ?? json?["message"]?.ToString();
                 return GhnResult.Fail<JsonNode>(string.IsNullOrWhiteSpace(message) ? $"GHN answered {(int)response.StatusCode}." : message);
             }
-            return GhnResult.Ok<JsonNode>(data);
+            // A list with nothing in it comes back as data: null.
+            return GhnResult.Ok<JsonNode>(json?["data"] ?? new JsonArray());
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or InvalidOperationException or FormatException)
         {
@@ -157,13 +199,16 @@ public sealed class GhnClient(HttpClient http, IOptions<GhnOptions> options) : I
         if (!answer.Succeeded) return GhnResult.Fail<T>(answer.Error!);
         try
         {
-            return GhnResult.Ok<T>(read(answer.Value!));
+            return GhnResult.Ok(read(answer.Value!));
         }
         catch (Exception ex) when (ex is InvalidOperationException or FormatException or JsonException or NullReferenceException)
         {
             return GhnResult.Fail<T>($"GHN gave an answer that could not be read: {ex.Message}");
         }
     }
+
+    private static GhnResult<T> MapItems<T>(GhnResult<JsonNode> answer, Func<IEnumerable<JsonNode?>, T> readItems) =>
+        Map(answer, data => readItems(data is JsonArray array ? array : []));
 
     private static string Str(JsonNode? node, string name) => node?[name]?.ToString().Trim() ?? string.Empty;
 

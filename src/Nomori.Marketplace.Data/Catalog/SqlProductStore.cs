@@ -9,7 +9,7 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
 {
     // Every read joins the owning shop so callers get its name and status without a second query.
     private const string SelectColumns =
-        "p.Id, p.Name, p.ShortDescription, p.FullDescription, p.Price, p.OldPrice, p.StockQuantity, p.Status, p.Deleted, p.VendorId, p.ShowOnHomepage, p.DisplayOrder, p.CreatedOnUtc, p.UpdatedOnUtc, v.Name, v.Active, p.StatusBeforeHidden, p.HiddenReason, p.HiddenOnUtc, p.HiddenByCustomerId, p.ReviewRequestedOnUtc, p.Sku, p.Gtin, p.ManufacturerPartNumber, p.AvailableStartUtc, p.AvailableEndUtc, p.TrackInventory, p.LowStockThreshold, p.SpecialPrice, p.SpecialPriceStartUtc, p.SpecialPriceEndUtc";
+        "p.Id, p.Name, p.ShortDescription, p.FullDescription, p.Price, p.OldPrice, p.StockQuantity, p.Status, p.Deleted, p.VendorId, p.ShowOnHomepage, p.DisplayOrder, p.CreatedOnUtc, p.UpdatedOnUtc, v.Name, v.Active, p.StatusBeforeHidden, p.HiddenReason, p.HiddenOnUtc, p.HiddenByCustomerId, p.ReviewRequestedOnUtc, p.Sku, p.Gtin, p.ManufacturerPartNumber, p.AvailableStartUtc, p.AvailableEndUtc, p.TrackInventory, p.LowStockThreshold, p.SpecialPrice, p.SpecialPriceStartUtc, p.SpecialPriceEndUtc, p.WeightGrams, p.LengthCm, p.WidthCm, p.HeightCm";
 
     private const string FromClause = "FROM Product p INNER JOIN Vendor v ON v.Id = p.VendorId";
 
@@ -75,9 +75,9 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
         await using var connection = await OpenAsync(cancellationToken);
         await using var cmd = connection.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO Product (Name, ShortDescription, FullDescription, Price, OldPrice, StockQuantity, Status, Deleted, VendorId, ShowOnHomepage, DisplayOrder, CreatedOnUtc, UpdatedOnUtc, Sku, Gtin, ManufacturerPartNumber, AvailableStartUtc, AvailableEndUtc)
+            INSERT INTO Product (Name, ShortDescription, FullDescription, Price, OldPrice, StockQuantity, Status, Deleted, VendorId, ShowOnHomepage, DisplayOrder, CreatedOnUtc, UpdatedOnUtc, Sku, Gtin, ManufacturerPartNumber, AvailableStartUtc, AvailableEndUtc, WeightGrams, LengthCm, WidthCm, HeightCm)
             OUTPUT INSERTED.Id
-            VALUES (@Name, @ShortDescription, @FullDescription, @Price, @OldPrice, @StockQuantity, @Status, 0, @VendorId, @ShowOnHomepage, @DisplayOrder, @CreatedOnUtc, @UpdatedOnUtc, @Sku, @Gtin, @ManufacturerPartNumber, @AvailableStartUtc, @AvailableEndUtc)
+            VALUES (@Name, @ShortDescription, @FullDescription, @Price, @OldPrice, @StockQuantity, @Status, 0, @VendorId, @ShowOnHomepage, @DisplayOrder, @CreatedOnUtc, @UpdatedOnUtc, @Sku, @Gtin, @ManufacturerPartNumber, @AvailableStartUtc, @AvailableEndUtc, @WeightGrams, @LengthCm, @WidthCm, @HeightCm)
             """;
         AddWriteParams(cmd, product);
         AddContentParams(cmd, product);
@@ -110,7 +110,8 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
         cmd.CommandText = """
             UPDATE Product SET
                 Sku = @Sku, Gtin = @Gtin, ManufacturerPartNumber = @ManufacturerPartNumber,
-                AvailableStartUtc = @AvailableStartUtc, AvailableEndUtc = @AvailableEndUtc
+                AvailableStartUtc = @AvailableStartUtc, AvailableEndUtc = @AvailableEndUtc,
+                WeightGrams = @WeightGrams, LengthCm = @LengthCm, WidthCm = @WidthCm, HeightCm = @HeightCm
             WHERE Id = @Id AND Deleted = 0
             """;
         cmd.Parameters.AddWithValue("@Id", product.Id);
@@ -398,6 +399,10 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
         cmd.Parameters.AddWithValue("@ManufacturerPartNumber", (object?)p.ManufacturerPartNumber ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@AvailableStartUtc", (object?)p.AvailableStartUtc ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@AvailableEndUtc", (object?)p.AvailableEndUtc ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@WeightGrams", (object?)p.WeightGrams ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@LengthCm", (object?)p.LengthCm ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@WidthCm", (object?)p.WidthCm ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@HeightCm", (object?)p.HeightCm ?? DBNull.Value);
     }
 
     private static void AddWriteParams(SqlCommand cmd, Product p)
@@ -448,6 +453,10 @@ public sealed class SqlProductStore(IOptions<DatabaseOptions> options) : IProduc
         LowStockThreshold = r.GetInt32(27),
         SpecialPrice = r.IsDBNull(28) ? null : r.GetDecimal(28),
         SpecialPriceStartUtc = r.IsDBNull(29) ? null : r.GetDateTime(29),
-        SpecialPriceEndUtc = r.IsDBNull(30) ? null : r.GetDateTime(30)
+        SpecialPriceEndUtc = r.IsDBNull(30) ? null : r.GetDateTime(30),
+        WeightGrams = r.IsDBNull(31) ? null : r.GetInt32(31),
+        LengthCm = r.IsDBNull(32) ? null : r.GetInt32(32),
+        WidthCm = r.IsDBNull(33) ? null : r.GetInt32(33),
+        HeightCm = r.IsDBNull(34) ? null : r.GetInt32(34)
     };
 }

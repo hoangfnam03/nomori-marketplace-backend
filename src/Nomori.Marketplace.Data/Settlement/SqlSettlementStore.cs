@@ -10,7 +10,8 @@ namespace Nomori.Marketplace.Data.Settlement;
 public sealed class SqlSettlementStore(IOptions<DatabaseOptions> options) : ISettlementStore
 {
     private const string OrderColumns =
-        "s.Id, s.Number, s.VendorId, s.Subtotal, s.ShippingFee, s.DiscountAmount, s.DiscountFunding, s.TaxAmount, s.CommissionRate, o.CurrencyCode";
+        "s.Id, s.Number, s.VendorId, s.Subtotal, s.ShippingFee, s.DiscountAmount, s.DiscountFunding, s.TaxAmount, s.CommissionRate, o.CurrencyCode, " +
+        "CAST(CASE WHEN s.ShippingRateId = -100 THEN 1 ELSE 0 END AS bit), s.ShopShippingCost, s.ShippingAdjustment"; // -100: GhnRules.RateId
 
     private const string EntryColumns =
         "e.Id, e.VendorId, e.Kind, e.ShopOrderId, e.ReturnRequestId, e.ShopOrderNumber, e.Gross, e.Commission, e.Amount, e.CurrencyCode, e.Note, e.PayoutId, " +
@@ -630,7 +631,7 @@ public sealed class SqlSettlementStore(IOptions<DatabaseOptions> options) : ISet
 
     private static SettlementOrderRow ReadOrder(SqlDataReader r, int o) => new(
         r.GetInt32(o), r.GetString(o + 1), r.GetInt32(o + 2), r.GetDecimal(o + 3), r.GetDecimal(o + 4), r.GetDecimal(o + 5), NullableString(r, o + 6),
-        r.GetDecimal(o + 7), r.GetDecimal(o + 8), r.GetString(o + 9));
+        r.GetDecimal(o + 7), r.GetDecimal(o + 8), r.GetString(o + 9), r.GetBoolean(o + 10), r.GetDecimal(o + 11), r.GetDecimal(o + 12));
 
     private static SettlementEntry ReadEntry(SqlDataReader r) => new()
     {

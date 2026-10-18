@@ -40,6 +40,8 @@ public static class CheckoutProblems
     public const string PricesChanged = "prices_changed";
     public const string AddressRequired = "address_required";
     public const string AddressInvalid = "address_invalid";
+    /// <summary>The address has no GHN province, district and ward: the customer completes it before GHN can deliver.</summary>
+    public const string AddressAreaMissing = "address_area_missing";
     public const string ShippingUnavailable = "shipping_unavailable";
     public const string ShippingNotChosen = "shipping_not_chosen";
     public const string ShippingInvalid = "shipping_invalid";
@@ -132,7 +134,7 @@ public static class CheckoutRules
     /// <summary>The field of the request a choice problem belongs to.</summary>
     public static string FieldOf(string problem) => problem switch
     {
-        CheckoutProblems.AddressRequired or CheckoutProblems.AddressInvalid => "addressId",
+        CheckoutProblems.AddressRequired or CheckoutProblems.AddressInvalid or CheckoutProblems.AddressAreaMissing => "addressId",
         CheckoutProblems.ShippingUnavailable or CheckoutProblems.ShippingNotChosen or CheckoutProblems.ShippingInvalid => "shippingChoices",
         CheckoutProblems.CouponInvalid => "couponCode",
         _ => "paymentMethod"
@@ -142,6 +144,7 @@ public static class CheckoutRules
     {
         CheckoutProblems.AddressRequired => "Choose an address to deliver to.",
         CheckoutProblems.AddressInvalid => "We cannot ship to this address. Choose another one.",
+        CheckoutProblems.AddressAreaMissing => "Add the province, district and ward to this address so it can be delivered.",
         CheckoutProblems.ShippingUnavailable => "A shop in your cart does not ship to this address.",
         CheckoutProblems.ShippingNotChosen => "Choose a shipping option for every shop.",
         CheckoutProblems.ShippingInvalid => "A chosen shipping option is not available for this address.",

@@ -61,12 +61,12 @@ Dev (giả lập)
 ### 5.1. Shop bật GHN
 Đăng nhập **thành viên shop**, vào `/vendor/shipping`, khung **Giao Hàng Nhanh (GHN)** → **Bật GHN**:
 - Tên người gửi và số điện thoại được điền sẵn từ thông tin shop. Số điện thoại phải là số Việt Nam hợp lệ, ví dụ `0901234567`.
-- Chọn tỉnh, quận, phường (danh sách lấy từ GHN), nhập số nhà và tên đường → **Lưu và bật GHN**.
+- Chọn **tỉnh/thành** rồi **phường/xã** theo địa giới hành chính mới (từ 1/7/2025, không còn quận/huyện; danh sách lấy từ GHN), nhập số nhà và tên đường → **Lưu địa chỉ lấy hàng**.
 
 Shop chưa bật GHN thì khách **không thấy** lựa chọn GHN cho hàng của shop đó.
 
 ### 5.2. Khách có địa chỉ theo GHN
-Đăng nhập **khách**, vào `/customer/account-data`, thêm hoặc sửa một địa chỉ **Việt Nam** và chọn đủ **Tỉnh/Thành (GHN)**, **Quận/Huyện (GHN)**, **Phường/Xã (GHN)**.
+Đăng nhập **khách**, vào `/customer/account-data`, thêm hoặc sửa một địa chỉ và chọn **Tỉnh/Thành** rồi **Phường/Xã** (địa giới mới).
 
 ### 5.3. Đặt hàng
 Thêm sản phẩm của shop vào giỏ → Mua → ở checkout chọn địa chỉ vừa sửa → phần vận chuyển chọn **Giao Hàng Nhanh (GHN)** (phí do GHN tính, quy đổi sang tiền tệ chính) → đặt hàng.
@@ -186,7 +186,16 @@ Trang **không tự cập nhật**. Sau mỗi lần gửi, **tải lại (F5)**:
 
 ## 10. Giới hạn của bản thử nghiệm
 
-- Sản phẩm chưa có cân nặng: mỗi sản phẩm tính **500 g** (`Shipping:Ghn:ItemWeightGrams`), kiện cố định 20×15×10 cm.
+- Địa chỉ dùng **địa giới hành chính mới** (tỉnh/thành và phường/xã). GHN nhận qua các trường `is_new_*_address` và `*_province_id_v2` / `*_ward_id_v2`. Địa chỉ cũ (có quận/huyện) đã bị xoá phần GHN khi nâng cấp, khách và shop phải chọn lại.
+- Checkout hiện **ngày giao dự kiến** do GHN tính (API leadtime); đơn đã gửi hiện ngày GHN hẹn giao.
+- Khi gửi hàng, hệ thống lưu **phí GHN thực tế**, cân nặng đã khai, tiền thu hộ (COD). Webhook `update_weight` báo cân nặng lớn hơn khai báo thì phần phí tăng thêm **trừ vào đối soát của shop**; webhook có `CODTransferDate` thì ghi nhận GHN đã chuyển tiền COD. Báo cáo đối chiếu có thêm tổng phí GHN thực tế và tiền COD GHN còn giữ.
+- Hàng được **khai giá trị bảo hiểm** bằng tiền hàng của shop (tối đa 5.000.000đ, `Shipping:Ghn:InsureParcels`), phí bảo hiểm tính luôn vào phí ship.
+
+- Shop không còn tự đặt phí ship: mọi đơn đi GHN. Shop phải khai địa chỉ lấy hàng mới **thêm được sản phẩm** (khi GHN đang bật).
+- **Phí dự phòng**: khi GHN không báo được phí (lỗi, hoặc máy chưa cấu hình GHN), checkout tính `Shipping:Ghn:FallbackFeeVnd` (mặc định 30.000đ) với tên "Giao Hàng Nhanh (GHN) - phí tạm tính"; sàn chịu phần chênh lệch với phí thật.
+- **Miễn phí vận chuyển**: shop đặt mức "miễn phí cho đơn từ X" trong khung GHN. Đạt mức thì khách trả 0đ, phí GHN ghi vào đơn (`ShopShippingCost`) và trừ vào đối soát của shop. Phí ship khách trả cho đơn GHN thuộc về sàn (sàn trả GHN), không cộng cho shop.
+
+- Phí GHN tính theo **cân nặng sau đóng gói** (bắt buộc khi shop tạo hoặc sửa sản phẩm) và **kích thước đóng gói** (không bắt buộc) của từng sản phẩm. Kiện = tổng cân nặng × số lượng; kích thước kiện xếp chồng các sản phẩm có kích thước (dài, rộng lớn nhất, chiều cao cộng dồn, tối đa 200 cm), không có thì hộp 20×15×10 cm. Sản phẩm cũ chưa có cân nặng tạm tính **500 g** (`Shipping:Ghn:ItemWeightGrams`).
 - Phí GHN (VND) quy đổi theo tỷ giá của tiền tệ VND nếu có, nếu không thì theo `Shipping:Ghn:VndPerPrimaryUnit` (mặc định 25.000).
 - Khi GHN báo huỷ hoặc hoàn hàng, hệ thống **chỉ thêm dòng hành trình**; đơn vẫn **Đã gửi** và shop phải tự xử lý.
 - Webhook không có chữ ký của GHN; bảo vệ duy nhất là header bí mật dùng chung.

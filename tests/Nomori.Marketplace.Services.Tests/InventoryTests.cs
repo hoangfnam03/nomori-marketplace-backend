@@ -74,7 +74,7 @@ public sealed class InventoryTests
         public async Task<int> ProductAsync(int stock = 10, int vendorId = Shop)
         {
             var result = await CreateProducts().CreateForVendorAsync(vendorId,
-                new SaveVendorProductCommand("Mug", null, null, 10, 0, stock, [1], []), Seller, CancellationToken.None);
+                new SaveVendorProductCommand("Mug", null, null, 10, 0, stock, [1], [], WeightGrams: 500), Seller, CancellationToken.None);
             return result.Value!.Id;
         }
 
@@ -379,7 +379,7 @@ public sealed class InventoryTests
         var products = f.CreateProducts();
         var id = await f.ProductAsync(7);
 
-        var saved = await products.UpdateForVendorAsync(Shop, id, new SaveVendorProductCommand("Mug", null, null, 10, 0, 999, [1], []), Seller, CancellationToken.None);
+        var saved = await products.UpdateForVendorAsync(Shop, id, new SaveVendorProductCommand("Mug", null, null, 10, 0, 999, [1], [], WeightGrams: 500), Seller, CancellationToken.None);
 
         Assert.Equal(7, saved.Value!.StockQuantity);
         Assert.Single(f.Inventory.Movements);

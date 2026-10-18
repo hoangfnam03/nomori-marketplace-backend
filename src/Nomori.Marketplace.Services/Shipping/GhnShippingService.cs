@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Extensions.Options;
 using Nomori.Marketplace.Core.Catalog;
 using Nomori.Marketplace.Core.Directory;
@@ -23,33 +24,39 @@ public sealed class GhnShippingService(
 
     public bool IsConfigured => settings.IsConfigured;
 
-    // ---- Address picker ----
+    // ---- Address picker (two-level units) ----
 
     public Task<GhnResult<IReadOnlyList<GhnProvince>>> GetProvincesAsync(CancellationToken cancellationToken) =>
         IsConfigured ? client.GetProvincesAsync(cancellationToken) : Task.FromResult(GhnResult.Fail<IReadOnlyList<GhnProvince>>("GHN is not configured."));
 
-    public Task<GhnResult<IReadOnlyList<GhnDistrict>>> GetDistrictsAsync(int provinceId, CancellationToken cancellationToken) =>
-        IsConfigured ? client.GetDistrictsAsync(provinceId, cancellationToken) : Task.FromResult(GhnResult.Fail<IReadOnlyList<GhnDistrict>>("GHN is not configured."));
-
-    public Task<GhnResult<IReadOnlyList<GhnWard>>> GetWardsAsync(int districtId, CancellationToken cancellationToken) =>
-        IsConfigured ? client.GetWardsAsync(districtId, cancellationToken) : Task.FromResult(GhnResult.Fail<IReadOnlyList<GhnWard>>("GHN is not configured."));
+    public Task<GhnResult<IReadOnlyList<GhnWard>>> GetWardsAsync(int provinceId, CancellationToken cancellationToken) =>
+        IsConfigured ? client.GetWardsAsync(provinceId, cancellationToken) : Task.FromResult(GhnResult.Fail<IReadOnlyList<GhnWard>>("GHN is not configured."));
 
     // ---- Checkout ----
 
-    public async Task<ShippingOption?> QuoteAsync(int vendorId, int districtId, string wardCode, IReadOnlyList<int> quantities, CancellationToken cancellationToken)
+    public async Task<ShippingOption?> QuoteAsync(int vendorId, GhnPlace? destination, IReadOnlyList<GhnLineRef> lines, decimal subtotal, CancellationToken cancellationToken)
     {
-        if (!IsConfigured || quantities.Count == 0) return null;
-        // A shop without a pickup address does not ship with GHN.
-        if (await store.GetPickupAsync(vendorId, cancellationToken) is not { } pickup) return null;
+        if (lines.Count == 0) return null;
+        // Without GHN (a machine with no token) every shop ships at the fallback fee, so checkout keeps working.
+        if (!IsConfigured) return GhnRules.Option(await ToPrimaryAsync(settings.FallbackFeeVnd, cancellationToken), true, subtotal, null);
 
-        var fee = await client.GetFeeAsync(new GhnFeeRequest(
-            districtId, wardCode, GhnRules.WeightOf(quantities, settings.ItemWeightGrams),
-            settings.ParcelLengthCm, settings.ParcelWidthCm, settings.ParcelHeightCm, settings.ServiceTypeId, pickup.DistrictId, pickup.WardCode), cancellationToken);
-        if (!fee.Succeeded) return null;
+        // A shop without a pickup address, or an address without GHN's place, does not ship.
+        if (await store.GetPickupAsync(vendorId, cancellationToken) is not { } pickup || destination is null) return null;
 
-        var amount = await ToPrimaryAsync(fee.Value, cancellationToken);
-        return new ShippingOption(GhnRules.RateId, GhnRules.MethodName, amount, amount == 0m, null, null);
+        var parcel = await ParcelOfAsync(lines.Select(l => (l.ProductId, l.Quantity)), cancellationToken);
+        var request = new GhnFeeRequest(pickup.Place, destination, parcel, GhnRules.InsuranceOf(await ToVndAsync(subtotal, cancellationToken), settings), settings.ServiceTypeId);
+        var feeCall = client.GetFeeAsync(request, cancellationToken);
+        var leadtimeCall = client.GetLeadtimeAsync(request, cancellationToken);
+        await Task.WhenAll(feeCall, leadtimeCall);
+        var (fee, leadtime) = (await feeCall, await leadtimeCall);
+
+        // GHN could not price it: the fallback fee, so the customer can still order.
+        var amount = await ToPrimaryAsync(fee.Succeeded ? fee.Value : settings.FallbackFeeVnd, cancellationToken);
+        return GhnRules.Option(amount, !fee.Succeeded, subtotal, pickup.FreeShippingOverSubtotal, leadtime.Succeeded ? leadtime.Value : null);
     }
+
+    public async Task<bool> CanShipAsync(int vendorId, CancellationToken cancellationToken) =>
+        !IsConfigured || await store.GetPickupAsync(vendorId, cancellationToken) is not null;
 
     // ---- The shop's pickup address ----
 
@@ -62,24 +69,29 @@ public sealed class GhnShippingService(
         var name = Clean(command.ContactName);
         var phone = new string(Clean(command.Phone).Where(c => !char.IsWhiteSpace(c) && c is not '.' and not '-').ToArray());
         var address = Clean(command.Address);
-        var (province, district, ward, wardCode) = (Clean(command.ProvinceName), Clean(command.DistrictName), Clean(command.WardName), Clean(command.WardCode));
+        var (province, ward) = (Clean(command.ProvinceName), Clean(command.WardName));
 
-        if (name.Length is 0 or > 100) errors["contactName"] = ["Enter the name of the person who hands over the parcels (at most 100 characters)."];
+        if (name.Length is 0 or > 100) errors["contactName"] = ["Enter the sender's name (at most 100 characters)."];
         if (!GhnRules.IsVietnamesePhone(phone)) errors["phone"] = ["Enter a Vietnamese phone number, for example 0901234567."];
         if (address.Length is 0 or > 200) errors["address"] = ["Enter the house number and street (at most 200 characters)."];
-        if (command.ProvinceId <= 0 || command.DistrictId <= 0 || wardCode.Length is 0 or > 20
-            || province.Length is 0 or > 100 || district.Length is 0 or > 100 || ward.Length is 0 or > 100)
-            errors["wardCode"] = ["Choose the province, district and ward."];
+        if (command.FreeShippingOverSubtotal is { } freeOver)
+        {
+            var places = (await primaryCurrency.GetPrimaryAsync(cancellationToken)).DecimalPlaces;
+            if (freeOver <= 0m || freeOver > 1_000_000_000m || !CurrencyRules.HasValidScale(freeOver, places))
+                errors["freeShippingOverSubtotal"] = [$"The amount must be above 0, with at most {places} decimal places."];
+        }
+        if (command.ProvinceId <= 0 || command.WardId <= 0 || province.Length is 0 or > 100 || ward.Length is 0 or > 100)
+            errors["wardId"] = ["Choose the province and the ward."];
         if (errors.Count > 0) return CatalogResult.Failure<GhnPickup>(errors);
 
         var pickup = new GhnPickup
         {
             VendorId = vendorId, ContactName = name, Phone = phone, Address = address, ProvinceId = command.ProvinceId, ProvinceName = province,
-            DistrictId = command.DistrictId, DistrictName = district, WardCode = wardCode, WardName = ward, UpdatedOnUtc = clock.UtcNow
+            WardId = command.WardId, WardName = ward, FreeShippingOverSubtotal = command.FreeShippingOverSubtotal, UpdatedOnUtc = clock.UtcNow
         };
         await store.SavePickupAsync(pickup, cancellationToken);
         await auditLog.WriteAsync("shipping.ghn_pickup_saved", actorCustomerId, entityType: "Vendor", entityId: vendorId,
-            details: new { vendorId, pickup.DistrictId, pickup.WardCode }, cancellationToken: cancellationToken);
+            details: new { vendorId, pickup.ProvinceId, pickup.WardId }, cancellationToken: cancellationToken);
         return CatalogResult.Success(pickup);
     }
 
@@ -102,31 +114,36 @@ public sealed class GhnShippingService(
         if (shopOrder.Status != ShopOrderStatus.Confirmed) return CatalogResult.Error<ShopOrderDetail>(GhnErrors.NotConfirmed);
 
         var destination = await store.GetDestinationAsync(shopOrder.OrderId, cancellationToken);
-        if (destination?.DistrictId is not { } districtId || string.IsNullOrWhiteSpace(destination.WardCode))
-            return CatalogResult.Error<ShopOrderDetail>(GhnErrors.NoArea);
+        if (destination?.Place is not { } to) return CatalogResult.Error<ShopOrderDetail>(GhnErrors.NoArea);
         if (await store.GetPickupAsync(vendorId, cancellationToken) is not { } pickup) return CatalogResult.Error<ShopOrderDetail>(GhnErrors.NoPickup);
 
         // Cash on delivery: the GHN driver collects what the customer owes for this shop's parcel.
-        var cod = string.Equals(destination.PaymentMethod, "cod", StringComparison.OrdinalIgnoreCase) ? await ToVndAsync(shopOrder.Total, cancellationToken) : 0L;
+        var isCod = string.Equals(destination.PaymentMethod, "cod", StringComparison.OrdinalIgnoreCase);
+        var cod = isCod ? await ToVndAsync(shopOrder.Total, cancellationToken) : 0L;
+        var sizes = await store.GetProductSizesAsync(shopOrder.Lines.Select(l => l.ProductId).ToList(), cancellationToken);
         var items = new List<GhnItem>();
         foreach (var line in shopOrder.Lines)
         {
             var name = line.VariantLabel is null ? line.Name : $"{line.Name} ({line.VariantLabel})";
-            items.Add(new GhnItem(name, line.Quantity, settings.ItemWeightGrams, await ToVndAsync(line.UnitPrice, cancellationToken)));
+            var grams = sizes.GetValueOrDefault(line.ProductId)?.WeightGrams ?? settings.ItemWeightGrams;
+            items.Add(new GhnItem(name, line.Quantity, grams, await ToVndAsync(line.UnitPrice, cancellationToken)));
         }
+        var parcel = GhnRules.Parcel(shopOrder.Lines.Select(l => (l.Quantity, sizes.GetValueOrDefault(l.ProductId))), settings);
+        var insurance = GhnRules.InsuranceOf(await ToVndAsync(shopOrder.Subtotal - shopOrder.DiscountAmount, cancellationToken), settings);
 
-        var address = string.Join(", ", new[] { destination.Address1, destination.Address2, destination.Area, destination.City }
-            .Where(p => !string.IsNullOrWhiteSpace(p)));
+        var address = string.Join(", ", new[] { destination.Address1, destination.Address2 }.Where(p => !string.IsNullOrWhiteSpace(p)));
+        var content = string.Join(", ", items.Select(i => $"{i.Quantity} x {i.Name}"));
         var created = await client.CreateOrderAsync(new GhnCreateOrderRequest(
-            destination.RecipientName, destination.RecipientPhone, address, districtId, destination.WardCode!, cod, null,
-            string.Join(", ", items.Select(i => $"{i.Quantity} x {i.Name}")) is { Length: > 0 } content ? content[..Math.Min(content.Length, 2000)] : shopOrder.Number,
-            GhnRules.WeightOf(shopOrder.Lines.Select(l => l.Quantity), settings.ItemWeightGrams),
-            settings.ParcelLengthCm, settings.ParcelWidthCm, settings.ParcelHeightCm, settings.ServiceTypeId, settings.RequiredNote, shopOrder.Number, items,
-            pickup.ToSender()),
-            cancellationToken);
+            destination.RecipientName, destination.RecipientPhone, address, to.ProvinceId, destination.ProvinceName ?? string.Empty, to.WardId,
+            destination.WardName ?? string.Empty, cod, insurance, null, content.Length > 0 ? content[..Math.Min(content.Length, 2000)] : shopOrder.Number,
+            parcel, settings.ServiceTypeId, settings.RequiredNote, shopOrder.Number, items, pickup.ToSender()), cancellationToken);
         if (!created.Succeeded) return CatalogResult.Failure<ShopOrderDetail>("ghn", $"GHN: {created.Error}");
 
-        return await orderService.ShipAsync(vendorId, shopOrderId, new ShipCommand(GhnRules.CarrierName, created.Value!.OrderCode), actorCustomerId, cancellationToken);
+        // What GHN really charges, and what it was told, so a later weighing or the books can be checked against it.
+        await store.SaveShipmentAsync(new GhnShipment(
+            shopOrderId, await ToPrimaryAsync(created.Value!.TotalFeeVnd, cancellationToken), GhnRules.ChargeableWeight(parcel),
+            isCod ? shopOrder.Total : 0m, created.Value.ExpectedDeliveryUtc), cancellationToken);
+        return await orderService.ShipAsync(vendorId, shopOrderId, new ShipCommand(GhnRules.CarrierName, created.Value.OrderCode), actorCustomerId, cancellationToken);
     }
 
     public async Task<CatalogResult<ShopOrderDetail>> SyncAsync(int vendorId, int shopOrderId, int actorCustomerId, CancellationToken cancellationToken)
@@ -181,17 +198,25 @@ public sealed class GhnShippingService(
 
     public async Task<GhnWebhookOutcome> HandleWebhookAsync(GhnWebhook webhook, CancellationToken cancellationToken)
     {
-        // Only status changes of this platform's GHN shop are read; the other event types (weight, COD, fee) are not used yet.
-        if (!string.Equals(webhook.Type, "switch_status", StringComparison.OrdinalIgnoreCase)) return GhnWebhookOutcome.Handled;
-        if (webhook.ShopID != settings.ShopId || string.IsNullOrWhiteSpace(webhook.OrderCode) || string.IsNullOrWhiteSpace(webhook.Status))
-            return GhnWebhookOutcome.Ignored;
-
+        if (webhook.ShopID != settings.ShopId || string.IsNullOrWhiteSpace(webhook.OrderCode)) return GhnWebhookOutcome.Ignored;
         var target = await store.FindByOrderCodeAsync(webhook.OrderCode.Trim(), cancellationToken);
         if (target is null) return GhnWebhookOutcome.Ignored;
 
-        var status = webhook.Status.Trim().ToLowerInvariant();
-        var at = DateTime.TryParse(webhook.Time, System.Globalization.CultureInfo.InvariantCulture,
-            System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out var time) ? time : (DateTime?)null;
+        if (string.Equals(webhook.Type, "switch_status", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(webhook.Status))
+            await ApplyStatusAsync(target, webhook, cancellationToken);
+
+        // Every callback carries GHN's weighing: heavier than declared means the shop under-declared and owes the rise in fee.
+        await ApplyWeighingAsync(target, webhook, cancellationToken);
+
+        // GHN paid over the cash it collected.
+        if (Parse(webhook.CODTransferDate) is { } transferred) await store.MarkCodTransferredAsync(target.ShopOrderId, transferred, cancellationToken);
+        return GhnWebhookOutcome.Handled;
+    }
+
+    private async Task ApplyStatusAsync(GhnShopOrderRef target, GhnWebhook webhook, CancellationToken cancellationToken)
+    {
+        var status = webhook.Status!.Trim().ToLowerInvariant();
+        var at = Parse(webhook.Time);
 
         // GHN may send the same event twice: the same line at the same time is not added again.
         var note = GhnRules.NoteOf(status);
@@ -206,7 +231,43 @@ public sealed class GhnShippingService(
 
         // "delivered" also moves the shop order; a repeat finds it delivered already and the refused transition changes nothing.
         if (status == "delivered") await orderService.DeliverByCarrierAsync(target.ShopOrderId, note, cancellationToken);
-        return GhnWebhookOutcome.Handled;
+    }
+
+    private async Task ApplyWeighingAsync(GhnShopOrderRef target, GhnWebhook webhook, CancellationToken cancellationToken)
+    {
+        var measured = Math.Max(webhook.Weight, webhook.ConvertedWeight);
+        if (target.ParcelWeightGrams is not { } declared || target.CarrierFee is not { } declaredFee || measured <= declared) return;
+
+        // GHN's new fee when it sends one; otherwise ask GHN what the parcel costs at the weight it found.
+        var newFeeVnd = webhook.TotalFee;
+        if (newFeeVnd <= 0)
+        {
+            var destination = await store.GetDestinationAsync(target.OrderId, cancellationToken);
+            var pickup = await store.GetPickupAsync(target.VendorId, cancellationToken);
+            if (destination?.Place is not { } to || pickup is null) return;
+            var insurance = GhnRules.InsuranceOf(await ToVndAsync(target.Subtotal - target.DiscountAmount, cancellationToken), settings);
+            // The weight GHN found already includes the box's volume, so the box is left out of the new price.
+            var fee = await client.GetFeeAsync(new GhnFeeRequest(pickup.Place, to, new GhnParcel(measured, 1, 1, 1), insurance, settings.ServiceTypeId), cancellationToken);
+            if (!fee.Succeeded) return;
+            newFeeVnd = fee.Value;
+        }
+
+        var owed = GhnRules.WeightAdjustment(declared, measured, declaredFee, await ToPrimaryAsync(newFeeVnd, cancellationToken));
+        if (owed <= 0m) return;
+        await store.SetShippingAdjustmentAsync(target.ShopOrderId, owed, cancellationToken);
+        await auditLog.WriteAsync("shipping.ghn_weight_adjusted", entityType: "ShopOrder", entityId: target.ShopOrderId,
+            details: new { shopOrderId = target.ShopOrderId, declared, measured, owed }, cancellationToken: cancellationToken);
+    }
+
+    private static DateTime? Parse(string? value) =>
+        DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var time) ? time : null;
+
+    /// <summary>The parcel of some lines, from the weight and size each product declares.</summary>
+    private async Task<GhnParcel> ParcelOfAsync(IEnumerable<(int ProductId, int Quantity)> lines, CancellationToken cancellationToken)
+    {
+        var list = lines.ToList();
+        var sizes = await store.GetProductSizesAsync(list.Select(l => l.ProductId).ToList(), cancellationToken);
+        return GhnRules.Parcel(list.Select(l => (l.Quantity, sizes.GetValueOrDefault(l.ProductId))), settings);
     }
 
     // ---- Money: GHN counts in VND ----

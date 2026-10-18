@@ -33,7 +33,7 @@ public sealed class ProductOwnershipTests
 
     private static SaveVendorProductCommand Seller(
         string name = "Mug", decimal price = 10, decimal oldPrice = 0, int stock = 3, int[]? categories = null) =>
-        new(name, " short ", null, price, oldPrice, stock, categories ?? [1], []);
+        new(name, " short ", null, price, oldPrice, stock, categories ?? [1], [], WeightGrams: 500);
 
     private static CreateProductCommand Admin(int? vendorId = null) =>
         new("Plate", null, null, 5, 0, 1, true, vendorId, true, 7, [1], []);

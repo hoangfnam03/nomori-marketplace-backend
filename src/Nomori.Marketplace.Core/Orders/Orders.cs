@@ -98,8 +98,10 @@ public sealed class Order
     public string CountryCode { get; set; } = string.Empty;
 
     /// <summary>GHN (prototype): the district and ward of the address, copied when the order was placed. Written only; GHN reads them back.</summary>
-    public int? GhnDistrictId { get; set; }
-    public string? GhnWardCode { get; set; }
+    public int? GhnProvinceId { get; set; }
+    public string? GhnProvinceName { get; set; }
+    public int? GhnWardId { get; set; }
+    public string? GhnWardName { get; set; }
     public string? GhnArea { get; set; }
 
     public DateTime CreatedOnUtc { get; set; }
@@ -131,6 +133,22 @@ public sealed class ShopOrder
     public decimal Total { get; set; }
     public string ShippingMethodName { get; set; } = string.Empty;
     public int? ShippingRateId { get; set; }
+
+    /// <summary>The shipping the shop pays for (free shipping it offers: the GHN fee the customer did not pay). Taken off its settlement.</summary>
+    public decimal ShopShippingCost { get; set; }
+
+    // Filled when GHN takes the parcel: what GHN really charges, the weight it was declared at, the cash GHN collects (COD) and its expected day.
+    public decimal? CarrierFee { get; set; }
+    public int? ParcelWeightGrams { get; set; }
+    public DateTime? ExpectedDeliveryUtc { get; set; }
+    public decimal CodAmount { get; set; }
+
+    /// <summary>When GHN paid the cash it collected to the platform; null while it still holds it.</summary>
+    public DateTime? CodTransferredOnUtc { get; set; }
+
+    /// <summary>The rise in GHN's fee because the shop declared the parcel lighter than GHN weighed it. Taken off the shop's settlement.</summary>
+    public decimal ShippingAdjustment { get; set; }
+
     public string? Carrier { get; set; }
     public string? TrackingNumber { get; set; }
     public string? CancelReason { get; set; }
@@ -173,14 +191,15 @@ public sealed record OrderHistoryEntry(
 
 public sealed record NewOrderRecipient(
     string? Name, string? Phone, string? Address1, string? Address2, string? City, string? StateProvince, string? PostalCode, string? CountryCode,
-    int? GhnDistrictId = null, string? GhnWardCode = null, string? GhnArea = null);
+    int? GhnProvinceId = null, string? GhnProvinceName = null, int? GhnWardId = null, string? GhnWardName = null, string? GhnArea = null);
 
 public sealed record NewOrderLine(
     int ProductId, int? CombinationId, string? Name, string? VariantLabel, string? Sku, int PictureId, int Quantity, decimal UnitPrice,
     decimal TaxRate = 0m, decimal TaxAmount = 0m);
 
 public sealed record NewShopOrder(
-    int VendorId, string? ShippingMethodName, int? ShippingRateId, decimal ShippingFee, IReadOnlyList<NewOrderLine>? Lines, decimal DiscountAmount = 0m);
+    int VendorId, string? ShippingMethodName, int? ShippingRateId, decimal ShippingFee, IReadOnlyList<NewOrderLine>? Lines, decimal DiscountAmount = 0m,
+    decimal ShopShippingCost = 0m);
 
 /// <summary>The code behind the discount amounts of the shop orders, and who funds it (<c>platform</c> or <c>shop</c>).</summary>
 public sealed record NewOrderDiscount(string? Code, string? Funding);

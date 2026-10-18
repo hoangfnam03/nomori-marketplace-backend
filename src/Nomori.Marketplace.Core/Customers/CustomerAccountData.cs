@@ -20,10 +20,11 @@ public sealed class CustomerAddress
     public string PhoneNumber { get; set; } = string.Empty;
     public bool IsDefault { get; set; }
 
-    // GHN (prototype): the carrier's own province, district and ward, picked from its lists. GhnArea is "ward, district, province" in words.
+    // The province and ward from GHN's lists, in the two-level units in force since 1 July 2025 (no district). GhnArea is "ward, province".
     public int? GhnProvinceId { get; set; }
-    public int? GhnDistrictId { get; set; }
-    public string? GhnWardCode { get; set; }
+    public string? GhnProvinceName { get; set; }
+    public int? GhnWardId { get; set; }
+    public string? GhnWardName { get; set; }
     public string? GhnArea { get; set; }
 }
 
