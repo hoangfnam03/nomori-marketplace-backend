@@ -1,0 +1,10 @@
+**/bin
+**/obj
+.git
+.vs
+.idea
+docs
+tests
+infra
+deploy
+**/*.user

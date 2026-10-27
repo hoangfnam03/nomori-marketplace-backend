@@ -1,0 +1,121 @@
+# Nomori Marketplace for testing and demos: the whole system with one command. Guide: docs/deployment-guide.md
+#
+#   cd deploy
+#   cp .env.example .env        (then edit it)
+#   docker compose up -d --build
+#   docker compose --profile tunnel up -d     <- also gives a public https address (Cloudflare quick tunnel, free)
+#
+# Not for production data: see "Bảo mật" in the guide.
+
+name: nomori
+
+x-connection: &connection
+  Database__ConnectionString: "Server=sqlserver;Database=NomoriMarketplace_Db;User Id=sa;Password=${SA_PASSWORD};TrustServerCertificate=True;Command Timeout=0"
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    restart: unless-stopped
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${SA_PASSWORD:?Set SA_PASSWORD in deploy/.env}
+      # Express is free for any use (10 GB per database); Developer is free for testing only.
+      MSSQL_PID: ${MSSQL_PID:-Express}
+      MSSQL_MEMORY_LIMIT_MB: ${MSSQL_MEMORY_LIMIT_MB:-1536}
+    volumes:
+      - sql-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q \"SELECT 1\" -b -o /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  # Creates the database if needed and applies the migrations; runs at every "up" and exits.
+  migrate:
+    build:
+      context: ..
+      dockerfile: deploy/api.Dockerfile
+      target: migrator
+    environment:
+      <<: *connection
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/api.Dockerfile
+      target: api
+    restart: unless-stopped
+    # Root, so that the key ring of the cookies (and of the encrypted bank account numbers) can live in a volume.
+    user: "0:0"
+    environment:
+      <<: *connection
+      # "Development" shows the verification and OTP codes on screen and serves Swagger: right for a test environment
+      # with nobody else's data, wrong for anything public. See the guide.
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
+      ASPNETCORE_URLS: http://+:8080
+      # Behind a proxy: trust X-Forwarded-For/-Proto, so that the rate limit is per visitor and cookies are issued over "https".
+      ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
+      Seo__SiteBaseUrl: ${PUBLIC_URL}
+      Email__FrontendBaseUrl: ${PUBLIC_URL}
+      Payments__Sandbox__Secret: ${SANDBOX_SECRET:-change-me-sandbox-secret}
+      Payments__Sandbox__PageBaseUrl: ${PUBLIC_URL}
+      # Every poll keeps the database awake; set to false on a database that bills by use, and run the jobs from /admin/jobs.
+      Jobs__Enabled: ${JOBS_ENABLED:-true}
+      Email__Enabled: ${EMAIL_ENABLED:-false}
+      Email__SmtpHost: ${SMTP_HOST:-}
+      Email__SmtpPort: ${SMTP_PORT:-587}
+      Email__Username: ${SMTP_USER:-}
+      Email__Password: ${SMTP_PASSWORD:-}
+      Email__FromAddress: ${SMTP_FROM:-}
+    volumes:
+      - dp-keys:/root/.aspnet/DataProtection-Keys
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    build:
+      # The Angular repository, next to this one. It has its own Dockerfile.
+      context: ${FRONTEND_DIR:-../../nomori-marketplace-frontend}
+    restart: unless-stopped
+    environment:
+      PORT: "4000"
+      API_ORIGIN: http://api:8080
+      PUBLIC_URL: ${PUBLIC_URL}
+    depends_on:
+      - api
+
+  # The single entrance. SITE_ADDRESS=":80" for HTTP behind a tunnel; a domain name for automatic HTTPS on a server of your own.
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+      - "${HTTPS_PORT:-8443}:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on:
+      - api
+      - web
+
+  # Free public https address without an account or a domain (it changes every time the tunnel starts): docker compose --profile tunnel up -d
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://proxy:80
+    depends_on:
+      - proxy
+
+volumes:
+  sql-data:
+  dp-keys:
+  caddy-data:

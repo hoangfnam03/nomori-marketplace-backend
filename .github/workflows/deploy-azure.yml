@@ -1,0 +1,151 @@
+name: Deploy to Azure Container Apps
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Image version tag to deploy (e.g., v1, v2, latest)'
+        required: true
+        default: 'latest'
+      run_migration:
+        description: 'Run database migration before deployment?'
+        required: false
+        type: boolean
+        default: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_OWNER: ${{ github.repository_owner }}
+  RG: nomori-demo-rg
+  LOCATION: southeastasia
+  ENV_NAME: nomori-demo-env
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: azure-production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Run Database Migration
+        if: github.event.inputs.run_migration == 'true'
+        run: |
+          echo "🔄 Running database migration..."
+          az containerapp job update \
+            --name nomori-migrate \
+            --resource-group ${{ env.RG }} \
+            --image "${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/nomori-migrator:${{ github.event.inputs.version }}"
+          
+          az containerapp job start \
+            --name nomori-migrate \
+            --resource-group ${{ env.RG }}
+          
+          echo "⏳ Waiting for migration to complete..."
+          # Wait for migration (max 10 minutes)
+          TIMEOUT=600
+          ELAPSED=0
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            STATUS=$(az containerapp job execution list \
+              --name nomori-migrate \
+              --resource-group ${{ env.RG }} \
+              --query "[0].status" -o tsv)
+            
+            if [ "$STATUS" = "Succeeded" ]; then
+              echo "✅ Migration succeeded"
+              exit 0
+            elif [ "$STATUS" = "Failed" ]; then
+              echo "❌ Migration failed"
+              exit 1
+            fi
+            
+            echo "Status: $STATUS... (${ELAPSED}s)"
+            sleep 10
+            ELAPSED=$((ELAPSED + 10))
+          done
+          
+          echo "⚠️ Migration timeout after ${TIMEOUT}s"
+          exit 1
+
+      - name: Update API Image
+        run: |
+          echo "🚀 Updating API image..."
+          az containerapp update \
+            --name nomori-api \
+            --resource-group ${{ env.RG }} \
+            --image "${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/nomori-api:${{ github.event.inputs.version }}"
+
+      - name: Update Web Image
+        run: |
+          echo "🚀 Updating Web image..."
+          az containerapp update \
+            --name nomori-web \
+            --resource-group ${{ env.RG }} \
+            --image "${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/nomori-web:${{ github.event.inputs.version }}"
+
+      - name: Update Proxy Image
+        run: |
+          echo "🚀 Updating Proxy image..."
+          az containerapp update \
+            --name nomori-proxy \
+            --resource-group ${{ env.RG }} \
+            --image "${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/nomori-proxy:${{ github.event.inputs.version }}"
+
+      - name: Get Application URL
+        run: |
+          PROXY_FQDN=$(az containerapp show \
+            --name nomori-proxy \
+            --resource-group ${{ env.RG }} \
+            --query properties.configuration.ingress.fqdn -o tsv)
+          
+          echo "✅ Deployment completed!"
+          echo ""
+          echo "🌐 Application URL: https://${PROXY_FQDN}"
+          echo ""
+          echo "Health check: https://${PROXY_FQDN}/health/ready"
+
+      - name: Verify Deployment
+        run: |
+          PROXY_FQDN=$(az containerapp show \
+            --name nomori-proxy \
+            --resource-group ${{ env.RG }} \
+            --query properties.configuration.ingress.fqdn -o tsv)
+          
+          echo "⏳ Waiting for API to be healthy..."
+          TIMEOUT=120
+          ELAPSED=0
+          
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            HEALTH=$(curl -s https://${PROXY_FQDN}/health/ready | grep -o '"status":"[^"]*"' | cut -d'"' -f4)
+            
+            if [ "$HEALTH" = "Healthy" ]; then
+              echo "✅ API is healthy"
+              exit 0
+            fi
+            
+            echo "Status: $HEALTH... (${ELAPSED}s)"
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+          done
+          
+          echo "⚠️ API health check timeout"
+          exit 1
+
+      - name: Send Deployment Notification
+        if: success()
+        run: |
+          PROXY_FQDN=$(az containerapp show \
+            --name nomori-proxy \
+            --resource-group ${{ env.RG }} \
+            --query properties.configuration.ingress.fqdn -o tsv)
+          
+          echo "📢 Deployment Successful!"
+          echo "Version: ${{ github.event.inputs.version }}"
+          echo "URL: https://${PROXY_FQDN}"
+          echo "Time: $(date)"

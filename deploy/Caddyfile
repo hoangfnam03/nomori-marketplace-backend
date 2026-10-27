@@ -1,0 +1,31 @@
+# One address for everything, so that cookies are same-site and no CORS is needed:
+#   /api/*, /health/*, /swagger*, /openapi/*  ->  the API
+#   everything else                           ->  the storefront (Angular, server-side rendered)
+#
+# SITE_ADDRESS is ":80" behind a tunnel or another proxy that already does HTTPS, or a domain name ("demo.example.com")
+# on a server of your own: then Caddy gets and renews the certificate by itself.
+
+{
+	servers {
+		# Keep X-Forwarded-For of a tunnel or a load balancer in front of us (private addresses only), so that the API
+		# sees the real visitor: its rate limit is counted per address.
+		trusted_proxies static private_ranges
+	}
+}
+
+{$SITE_ADDRESS} {
+	encode zstd gzip
+
+	@api path /api/* /health/* /swagger* /openapi/*
+	handle @api {
+		reverse_proxy {$API_UPSTREAM:api:8080} {
+			# Visitors always reach the site over HTTPS (the tunnel or Caddy itself). Outside Development the API refuses
+			# to issue its cookies on a request it believes is plain HTTP, so it is told so explicitly.
+			header_up X-Forwarded-Proto https
+		}
+	}
+
+	handle {
+		reverse_proxy {$WEB_UPSTREAM:web:4000}
+	}
+}
