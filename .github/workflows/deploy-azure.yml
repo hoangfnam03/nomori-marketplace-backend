@@ -34,6 +34,13 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      - name: Register Azure Resource Providers
+        run: |
+          echo "📦 Registering Azure resource providers..."
+          az provider register -n Microsoft.App --wait
+          az provider register -n Microsoft.OperationalInsights --wait
+          echo "✅ Resource providers registered"
+
       - name: Run Database Migration
         if: github.event.inputs.run_migration == 'true'
         run: |
