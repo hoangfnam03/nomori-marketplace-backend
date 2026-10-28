@@ -53,5 +53,13 @@ static async Task EnsureDatabaseExistsAsync(string connectionString)
     await using var command = connection.CreateCommand();
     command.CommandText = $"IF DB_ID(@databaseName) IS NULL CREATE DATABASE [{escapedDatabaseName}];";
     command.Parameters.AddWithValue("@databaseName", databaseName);
-    await command.ExecuteNonQueryAsync();
+
+    try
+    {
+        await command.ExecuteNonQueryAsync();
+    }
+    catch (SqlException ex) when (ex.Number == 1801) // Database already exists
+    {
+        Console.WriteLine($"Database '{databaseName}' already exists. Skipping creation.");
+    }
 }
