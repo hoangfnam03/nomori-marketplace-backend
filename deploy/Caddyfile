@@ -22,10 +22,17 @@
 			# Visitors always reach the site over HTTPS (the tunnel or Caddy itself). Outside Development the API refuses
 			# to issue its cookies on a request it believes is plain HTTP, so it is told so explicitly.
 			header_up X-Forwarded-Proto https
+			# Azure Container Apps routes by Host header: forwarding the proxy's own hostname ends in a 404 from its ingress.
+			header_up X-Forwarded-Host {host}
+			header_up Host {upstream_hostport}
 		}
 	}
 
 	handle {
-		reverse_proxy {$WEB_UPSTREAM:web:4000}
+		reverse_proxy {$WEB_UPSTREAM:web:4000} {
+			header_up X-Forwarded-Proto https
+			header_up X-Forwarded-Host {host}
+			header_up Host {upstream_hostport}
+		}
 	}
 }
