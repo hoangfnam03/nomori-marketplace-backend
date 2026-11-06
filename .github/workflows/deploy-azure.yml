@@ -26,6 +26,22 @@ jobs:
     environment: azure-production
 
     steps:
+      - name: Check GHN secrets
+        env:
+          GHN_TOKEN: ${{ secrets.GHN_TOKEN }}
+          GHN_SHOP_ID: ${{ secrets.GHN_SHOP_ID }}
+          GHN_WEBHOOK_SECRET: ${{ secrets.GHN_WEBHOOK_SECRET }}
+        run: |
+          # Stop before anything changes: an empty secret would overwrite the API's GHN settings.
+          missing=""
+          [ -n "$GHN_TOKEN" ] || missing="$missing GHN_TOKEN"
+          [ -n "$GHN_SHOP_ID" ] || missing="$missing GHN_SHOP_ID"
+          [ -n "$GHN_WEBHOOK_SECRET" ] || missing="$missing GHN_WEBHOOK_SECRET"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing GitHub secrets:$missing"
+            exit 1
+          fi
+
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -79,6 +95,27 @@ jobs:
           
           echo "⚠️ Migration timeout after ${TIMEOUT}s"
           exit 1
+
+      - name: Configure GHN on the API
+        env:
+          GHN_TOKEN: ${{ secrets.GHN_TOKEN }}
+          GHN_SHOP_ID: ${{ secrets.GHN_SHOP_ID }}
+          GHN_WEBHOOK_SECRET: ${{ secrets.GHN_WEBHOOK_SECRET }}
+        run: |
+          echo "🚚 Configuring GHN..."
+          az containerapp secret set \
+            --name nomori-api \
+            --resource-group ${{ env.RG }} \
+            --secrets ghn-token="$GHN_TOKEN" ghn-webhook-secret="$GHN_WEBHOOK_SECRET"
+          # --set-env-vars keeps the API's other variables.
+          az containerapp update \
+            --name nomori-api \
+            --resource-group ${{ env.RG }} \
+            --set-env-vars \
+              Shipping__Ghn__Enabled=true \
+              Shipping__Ghn__ShopId="$GHN_SHOP_ID" \
+              Shipping__Ghn__Token=secretref:ghn-token \
+              Shipping__Ghn__WebhookSecret=secretref:ghn-webhook-secret
 
       - name: Update API Image
         run: |

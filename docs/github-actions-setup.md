@@ -70,6 +70,14 @@ Ví dụ:
 
 ## 🔄 Phần 2: Build + Push (Tự động)
 
+**Secrets của GHN** (cùng trang trên): workflow `deploy-azure.yml` dùng chúng để đặt cấu hình GHN cho `nomori-api`, và dừng lại trước khi đổi gì nếu thiếu.
+
+| Secret | Giá trị |
+|---|---|
+| `GHN_TOKEN` | Token API của tài khoản GHN |
+| `GHN_SHOP_ID` | ID cửa hàng GHN (không phải Client ID) |
+| `GHN_WEBHOOK_SECRET` | Chuỗi ngẫu nhiên, ví dụ từ `openssl rand -hex 32`; khai cùng giá trị ở header `X-Nomori-Webhook-Secret` trên trang webhook của GHN |
+
 ### Workflow: `build-and-push.yml` (Backend)
 
 **Kích hoạt khi:**
@@ -243,6 +251,7 @@ Mặc định kích hoạt khi:
 
 - [ ] Tạo Azure Service Principal
 - [ ] Tạo GitHub Secret `AZURE_CREDENTIALS`
+- [ ] Tạo GitHub Secrets `GHN_TOKEN`, `GHN_SHOP_ID`, `GHN_WEBHOOK_SECRET` (workflow deploy dừng lại nếu thiếu)
 - [ ] Push ba file workflow vào repo
 - [ ] Test build-and-push (backend) thủ công
 - [ ] Kiểm tra image trong GitHub Packages
