@@ -99,7 +99,11 @@ public sealed record SaveVendorProductCommand(
     string? Gtin = null,
     string? ManufacturerPartNumber = null,
     DateTime? AvailableStartUtc = null,
-    DateTime? AvailableEndUtc = null);
+    DateTime? AvailableEndUtc = null,
+    int? WeightGrams = null,
+    int? LengthCm = null,
+    int? WidthCm = null,
+    int? HeightCm = null);
 
 public sealed record UpdateProductCommand(
     int Id,

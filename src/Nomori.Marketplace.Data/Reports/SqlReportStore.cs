@@ -225,13 +225,15 @@ public sealed class SqlReportStore(IOptions<DatabaseOptions> options) : IReportS
         await using var connection = await OpenAsync(cancellationToken);
 
         int saleLines;
-        decimal items, shopDiscount, platformDiscount, shipping, tax, paid, revenue, commission;
+        decimal items, shopDiscount, platformDiscount, shipping, tax, paid, revenue, commission, platformShipping, carrierFees;
         await using (var cmd = Command(connection, """
             SELECT COUNT(*), COALESCE(SUM(s.Subtotal), 0),
                    COALESCE(SUM(CASE WHEN s.DiscountFunding = 'shop' THEN s.DiscountAmount ELSE 0 END), 0),
                    COALESCE(SUM(CASE WHEN s.DiscountFunding = 'platform' THEN s.DiscountAmount ELSE 0 END), 0),
                    COALESCE(SUM(s.ShippingFee), 0), COALESCE(SUM(s.TaxAmount), 0), COALESCE(SUM(s.Total), 0),
-                   COALESCE(SUM(e.Amount), 0), COALESCE(SUM(e.Commission), 0)
+                   COALESCE(SUM(e.Amount), 0), COALESCE(SUM(e.Commission), 0),
+                   COALESCE(SUM(CASE WHEN s.ShippingRateId = -100 THEN s.ShippingFee ELSE 0 END + s.ShopShippingCost + s.ShippingAdjustment), 0),
+                   COALESCE(SUM(s.CarrierFee), 0)
             FROM SettlementEntry e INNER JOIN ShopOrder s ON s.Id = e.ShopOrderId
             WHERE e.Kind = 0 AND e.CreatedOnUtc >= @From AND e.CreatedOnUtc < @To
             """, fromUtc, toExclusiveUtc))
@@ -241,6 +243,7 @@ public sealed class SqlReportStore(IOptions<DatabaseOptions> options) : IReportS
             saleLines = reader.GetInt32(0);
             (items, shopDiscount, platformDiscount, shipping) = (reader.GetDecimal(1), reader.GetDecimal(2), reader.GetDecimal(3), reader.GetDecimal(4));
             (tax, paid, revenue, commission) = (reader.GetDecimal(5), reader.GetDecimal(6), reader.GetDecimal(7), reader.GetDecimal(8));
+            (platformShipping, carrierFees) = (reader.GetDecimal(9), reader.GetDecimal(10));
         }
 
         int refundLines;
@@ -253,6 +256,14 @@ public sealed class SqlReportStore(IOptions<DatabaseOptions> options) : IReportS
             await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
             await reader.ReadAsync(cancellationToken);
             (refundLines, refundedFromShops, commissionReturned) = (reader.GetInt32(0), reader.GetDecimal(1), reader.GetDecimal(2));
+        }
+
+        // Cash GHN collected and has not paid over yet, whatever the range: a figure of today.
+        decimal codOutstanding;
+        await using (var cmd = connection.CreateCommand())
+        {
+            cmd.CommandText = "SELECT COALESCE(SUM(CodAmount), 0) FROM ShopOrder WHERE CodAmount > 0 AND CodTransferredOnUtc IS NULL AND Status IN (2, 3, 4)";
+            codOutstanding = (decimal)(await cmd.ExecuteScalarAsync(cancellationToken))!;
         }
 
         int mismatches;
@@ -268,7 +279,8 @@ public sealed class SqlReportStore(IOptions<DatabaseOptions> options) : IReportS
 
         return new Reconciliation(
             string.Empty, fromUtc, toExclusiveUtc, saleLines, items, shopDiscount, platformDiscount, shipping, tax, paid, revenue, commission,
-            ReportRules.Difference(paid, revenue, commission, tax, platformDiscount), refundLines, refundedFromShops, commissionReturned, mismatches);
+            ReportRules.Difference(paid, revenue, commission, tax, platformDiscount, platformShipping), refundLines, refundedFromShops, commissionReturned,
+            mismatches, platformShipping, carrierFees, codOutstanding);
     }
 
     private static SqlCommand Command(SqlConnection connection, string sql, DateTime fromUtc, DateTime toExclusiveUtc)

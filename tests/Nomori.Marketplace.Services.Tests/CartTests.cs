@@ -107,7 +107,7 @@ public sealed class CartTests
         public async Task<int> LiveAsync(string name = "Mug", decimal price = 10, int stock = 10, int vendorId = Shop)
         {
             var result = await CreateProducts().CreateForVendorAsync(vendorId,
-                new SaveVendorProductCommand(name, null, null, price, 0, stock, [1], []), Seller, CancellationToken.None);
+                new SaveVendorProductCommand(name, null, null, price, 0, stock, [1], [], WeightGrams: 500), Seller, CancellationToken.None);
             var product = result.Value!;
             product.Status = ProductStatus.Live;
             product.VendorActive = true;

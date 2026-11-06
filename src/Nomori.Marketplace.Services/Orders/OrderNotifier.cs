@@ -6,6 +6,7 @@ using Microsoft.Extensions.Options;
 using Nomori.Marketplace.Core.Customers;
 using Nomori.Marketplace.Core.Email;
 using Nomori.Marketplace.Core.Orders;
+using Nomori.Marketplace.Core.Shipping;
 
 namespace Nomori.Marketplace.Services.Orders;
 
@@ -61,7 +62,10 @@ public sealed partial class OrderNotifier(
                 case ShopOrderStatus.Shipped:
                     (kind, subject) = (EmailKinds.OrderShipped, settings.OrderShippedSubject);
                     body.Append("<p>Your order <strong>").Append(number).Append("</strong> from ").Append(shop).Append(" is on its way.</p>");
-                    if (!string.IsNullOrWhiteSpace(shopOrder.Carrier))
+                    // The platform's own carrier (GHN) is not named to customers; a carrier a shop chose itself still is.
+                    if (GhnRules.IsGhnOrder(shopOrder))
+                        body.Append("<p>Tracking number: ").Append(Html(shopOrder.TrackingNumber)).Append("</p>");
+                    else if (!string.IsNullOrWhiteSpace(shopOrder.Carrier))
                         body.Append("<p>Carrier: ").Append(Html(shopOrder.Carrier)).Append("<br/>Tracking number: ").Append(Html(shopOrder.TrackingNumber)).Append("</p>");
                     break;
                 case ShopOrderStatus.Delivered:

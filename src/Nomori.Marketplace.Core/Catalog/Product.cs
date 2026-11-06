@@ -9,6 +9,13 @@ public enum ProductStatus
     HiddenByAdmin = 3
 }
 
+/// <summary>What a packed product may weigh and measure: GHN's own limits for one parcel.</summary>
+public static class ProductShippingLimits
+{
+    public const int MaxWeightGrams = 50_000;
+    public const int MaxSideCm = 200;
+}
+
 public sealed class Product
 {
     public int Id { get; set; }
@@ -40,6 +47,15 @@ public sealed class Product
 
     public string? Gtin { get; set; }
     public string? ManufacturerPartNumber { get; set; }
+
+    /// <summary>Weight once packed, in grams: what the carrier charges by. Required from sellers; null on products saved before it existed.</summary>
+    public int? WeightGrams { get; set; }
+
+    /// <summary>Packed size in centimetres; all three or none. A bulky parcel is charged by its size (volumetric weight).</summary>
+    public int? LengthCm { get; set; }
+
+    public int? WidthCm { get; set; }
+    public int? HeightCm { get; set; }
 
     /// <summary>Optional publication window; a missing bound is open. Only matters while the product is live.</summary>
     public DateTime? AvailableStartUtc { get; set; }

@@ -50,7 +50,8 @@ public sealed record Operations(
 public sealed record Reconciliation(
     string CurrencyCode, DateTime FromUtc, DateTime ToUtc, int SaleLines, decimal Items, decimal ShopFundedDiscount, decimal PlatformFundedDiscount,
     decimal Shipping, decimal Tax, decimal CustomerPaid, decimal ShopRevenue, decimal Commission, decimal Difference,
-    int RefundLines, decimal RefundedFromShops, decimal CommissionReturned, int PayoutMismatches);
+    int RefundLines, decimal RefundedFromShops, decimal CommissionReturned, int PayoutMismatches, decimal PlatformShipping = 0m,
+    decimal CarrierFees = 0m, decimal CodOutstanding = 0m);
 
 public static class ReportRules
 {
@@ -88,9 +89,13 @@ public static class ReportRules
     public static decimal Average(decimal sales, int orders, int places) =>
         orders == 0 ? 0m : Math.Round(sales / orders, places, MidpointRounding.AwayFromZero);
 
-    /// <summary>What the customers paid, less everything that is accounted for. 0 when the books agree.</summary>
-    public static decimal Difference(decimal customerPaid, decimal shopRevenue, decimal commission, decimal tax, decimal platformFundedDiscount) =>
-        customerPaid - (shopRevenue + commission + tax - platformFundedDiscount);
+    /// <summary>
+    /// What the customers paid, less everything that is accounted for. 0 when the books agree. Platform shipping is what stays with the platform
+    /// to pay GHN (the customers' shipping on GHN orders and the free shipping the shops paid for).
+    /// </summary>
+    public static decimal Difference(
+        decimal customerPaid, decimal shopRevenue, decimal commission, decimal tax, decimal platformFundedDiscount, decimal platformShipping = 0m) =>
+        customerPaid - (shopRevenue + commission + tax - platformFundedDiscount + platformShipping);
 }
 
 public interface IReportStore

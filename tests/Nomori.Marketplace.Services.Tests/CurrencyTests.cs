@@ -257,7 +257,7 @@ public sealed class CurrencyTests
     }
 
     [Fact]
-    public async Task ThePrimaryProviderFallsBackToDollarsOnlyWhenThereIsNone()
+    public async Task ThePrimaryProviderFallsBackToDongOnlyWhenThereIsNone()
     {
         var f = new Fixture();
         var provider = new PrimaryCurrencyProvider(f.Store);
@@ -266,7 +266,7 @@ public sealed class CurrencyTests
         f.Store.Currencies[0].Code = "EUR";
         Assert.Equal("EUR", (await provider.GetPrimaryAsync(CancellationToken.None)).Code);
         f.Store.Currencies.Clear();
-        Assert.Equal(("USD", 2), ((await provider.GetPrimaryAsync(CancellationToken.None)) is var c ? (c.Code, c.DecimalPlaces) : default));
+        Assert.Equal(("VND", 0), ((await provider.GetPrimaryAsync(CancellationToken.None)) is var c ? (c.Code, c.DecimalPlaces) : default));
     }
 
     // ---- Prices follow the primary currency ----
@@ -299,7 +299,7 @@ public sealed class CurrencyTests
         var service = new PriceFixture(2).WithShop().Create();
 
         Task<CatalogResult<Product>> Create(decimal price, decimal oldPrice = 0) =>
-            service.CreateForVendorAsync(5, new SaveVendorProductCommand("Mug", null, null, price, oldPrice, 1, [1], []), 10, CancellationToken.None);
+            service.CreateForVendorAsync(5, new SaveVendorProductCommand("Mug", null, null, price, oldPrice, 1, [1], [], WeightGrams: 500), 10, CancellationToken.None);
 
         Assert.True((await Create(10.99m)).Succeeded);
         Assert.True((await Create(10.990m)).Succeeded);
@@ -314,10 +314,10 @@ public sealed class CurrencyTests
     {
         var service = new PriceFixture(0).WithShop().Create();
 
-        var result = await service.CreateForVendorAsync(5, new SaveVendorProductCommand("Mug", null, null, 10.5m, 0, 1, [1], []), 10, CancellationToken.None);
+        var result = await service.CreateForVendorAsync(5, new SaveVendorProductCommand("Mug", null, null, 10.5m, 0, 1, [1], [], WeightGrams: 500), 10, CancellationToken.None);
 
         Assert.Contains("price", result.Errors.Keys);
-        Assert.True((await service.CreateForVendorAsync(5, new SaveVendorProductCommand("Mug", null, null, 10m, 0, 1, [1], []), 10, CancellationToken.None)).Succeeded);
+        Assert.True((await service.CreateForVendorAsync(5, new SaveVendorProductCommand("Mug", null, null, 10m, 0, 1, [1], [], WeightGrams: 500), 10, CancellationToken.None)).Succeeded);
     }
 
     [Fact]
@@ -341,7 +341,7 @@ public sealed class CurrencyTests
     {
         var f = new PriceFixture(2).WithShop();
         f.Attributes.Attributes.Add(new ProductAttributeSpec { Id = 1, Name = "Color" });
-        var id = (await f.Create().CreateForVendorAsync(5, new SaveVendorProductCommand("Shirt", null, null, 10m, 0, 1, [1], []), 10, CancellationToken.None)).Value!.Id;
+        var id = (await f.Create().CreateForVendorAsync(5, new SaveVendorProductCommand("Shirt", null, null, 10m, 0, 1, [1], [], WeightGrams: 500), 10, CancellationToken.None)).Value!.Id;
         var details = f.CreateDetails();
 
         Task<CatalogResult<ProductAttributeDetail>> Try(decimal adjustment, decimal? overridden) => details.SetVariantsAsync(5, id,

@@ -115,6 +115,8 @@ public sealed class ReportTests
         // Customer paid 101 = shop 95 + commission 10 + tax 6 - platform discount 10.
         Assert.Equal(0m, ReportRules.Difference(101m, 95m, 10m, 6m, 10m));
         Assert.Equal(1m, ReportRules.Difference(102m, 95m, 10m, 6m, 10m));
+        // With GHN: customer paid 106 = shop 95 + commission 10 + tax 6 - platform discount 10 + shipping kept to pay GHN 5.
+        Assert.Equal(0m, ReportRules.Difference(106m, 95m, 10m, 6m, 10m, 5m));
     }
 
     // ---- Service ----

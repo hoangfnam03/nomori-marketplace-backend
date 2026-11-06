@@ -103,13 +103,8 @@ public sealed class CheckoutTests
                 var options = Options.GetValueOrDefault(g.VendorId) ?? [];
                 return new ShippingShopQuote(g.VendorId, g.VendorName, g.Subtotal, options, options.Count > 0);
             }).ToList();
-            return Task.FromResult(CatalogResult.Success(new ShippingQuote("USD", "US", null, shops, shops.All(s => s.CanShip), null)));
+            return Task.FromResult(CatalogResult.Success(new ShippingQuote("USD", shops, shops.All(s => s.CanShip), null)));
         }
-
-        public Task<IReadOnlyList<ShippingRate>> GetRatesAsync(int vendorId, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<CatalogResult<ShippingRate>> CreateRateAsync(int vendorId, SaveShippingRateCommand command, int actorCustomerId, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<CatalogResult<ShippingRate>> UpdateRateAsync(int vendorId, int id, SaveShippingRateCommand command, int actorCustomerId, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<CatalogResult<bool>> DeleteRateAsync(int vendorId, int id, int actorCustomerId, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
     private sealed class Fixture
@@ -804,6 +799,21 @@ public sealed class CheckoutTests
         Assert.Equal(0, f.Stock.ActiveHolds);
         Assert.DoesNotContain("checkout.placed", f.Audit.Events);
         if (!expectReturns) Assert.Empty(f.OrderStore.Orders);
+    }
+
+    [Fact]
+    public async Task FreeShippingAShopOffersIsRecordedOnItsShopOrderAsTheShopsCost()
+    {
+        var f = new Fixture();
+        // GHN quoted 5, the shop's threshold made it free for the customer: the shop takes the 5 on.
+        f.Shipping.Options[Shop] = [new ShippingOption(GhnRules.RateId, GhnRules.MethodName, 0m, true, null, null, 5m)];
+
+        var result = await Place(f, Request(shipping: [new ShippingChoice(Shop, GhnRules.RateId), new ShippingChoice(OtherShop, 3)]));
+
+        Assert.True(result.Succeeded, string.Join(";", result.Errors.SelectMany(e => e.Value)) + result.ErrorCode);
+        var mugs = result.Value!.Order.ShopOrders.Single(s => s.VendorId == Shop);
+        Assert.Equal((0m, 5m, GhnRules.RateId), (mugs.ShippingFee, mugs.ShopShippingCost, mugs.ShippingRateId));
+        Assert.Equal(0m, result.Value.Order.ShopOrders.Single(s => s.VendorId == OtherShop).ShopShippingCost);
     }
 
     // ---- Discount codes ----

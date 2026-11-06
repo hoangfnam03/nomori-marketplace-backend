@@ -102,7 +102,8 @@ public sealed class TrackingService(
         }, TrackingLimits.MaxEventsPerShopOrder, cancellationToken);
         if (added is null) return CatalogResult.Error<TrackingView>(TrackingErrors.EventLimit);
 
-        await auditLog.WriteAsync("shipping.tracking_event", actorCustomerId, entityType: "ShopOrder", entityId: shopOrderId,
+        // 0 is the system (a carrier's callback): no customer is written as the actor.
+        await auditLog.WriteAsync("shipping.tracking_event", actorCustomerId > 0 ? actorCustomerId : null, entityType: "ShopOrder", entityId: shopOrderId,
             details: new { shopOrderId, status }, cancellationToken: cancellationToken);
         return CatalogResult.Success(await ViewAsync(shopOrder, cancellationToken));
     }

@@ -147,10 +147,10 @@ public sealed partial class CurrencyService(
     private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }
 
-/// <summary>Reads the primary currency for services that validate prices. Falls back to USD only if the table has no primary (a broken install).</summary>
+/// <summary>Reads the primary currency for services that validate prices. Falls back to the dong (the marketplace sells in Vietnam) only if the table has no primary (a broken install).</summary>
 public sealed class PrimaryCurrencyProvider(ICurrencyStore store) : IPrimaryCurrencyProvider
 {
     public async Task<Currency> GetPrimaryAsync(CancellationToken cancellationToken) =>
         await store.GetPrimaryAsync(cancellationToken)
-        ?? new Currency { Code = "USD", Name = "US Dollar", Symbol = "$", DecimalPlaces = 2, IsPrimary = true };
+        ?? new Currency { Code = "VND", Name = "Việt Nam Đồng", Symbol = "₫", DecimalPlaces = 0, IsPrimary = true };
 }

@@ -249,8 +249,32 @@ public sealed class SettlementTests
     }
 
     private static SettlementOrderRow Order(
-        int id = 1, int vendor = ShopA, decimal subtotal = 100m, decimal shipping = 5m, decimal discount = 0m, string? funding = null, decimal tax = 0m, decimal rate = 10m) =>
-        new(id, $"NM-{id}-1", vendor, subtotal, shipping, discount, funding, tax, rate, "USD");
+        int id = 1, int vendor = ShopA, decimal subtotal = 100m, decimal shipping = 5m, decimal discount = 0m, string? funding = null, decimal tax = 0m, decimal rate = 10m,
+        bool ghn = false, decimal shopShipping = 0m, decimal weightAdjustment = 0m) =>
+        new(id, $"NM-{id}-1", vendor, subtotal, shipping, discount, funding, tax, rate, "USD", ghn, shopShipping, weightAdjustment);
+
+    [Fact]
+    public void WithGhnTheShopIsNotOwedTheShippingAndPaysForTheFreeShippingItOffered()
+    {
+        // Items 100 at 10%: 90 for the shop. The customer's shipping of a GHN order stays with the platform, which pays GHN.
+        var paid = SettlementRules.Sale(Order(shipping: 5m, ghn: true), Now, 2);
+        Assert.Equal((100m, 10m, 90m), (paid.Gross, paid.Commission, paid.Amount));
+        Assert.Equal(5m, SettlementRules.PlatformShipping(Order(shipping: 5m, ghn: true)));
+
+        // Free shipping: the customer paid none and the shop takes on GHN's 1.40.
+        var free = SettlementRules.Sale(Order(shipping: 0m, ghn: true, shopShipping: 1.40m), Now, 2);
+        Assert.Equal(88.60m, free.Amount);
+        Assert.Equal(1.40m, SettlementRules.PlatformShipping(Order(shipping: 0m, ghn: true, shopShipping: 1.40m)));
+
+        // GHN weighed the parcel heavier than the shop declared: the rise in fee comes off the shop's line and stays with the platform.
+        var heavier = SettlementRules.Sale(Order(shipping: 5m, ghn: true, weightAdjustment: 0.60m), Now, 2);
+        Assert.Equal(89.40m, heavier.Amount);
+        Assert.Equal(5.60m, SettlementRules.PlatformShipping(Order(shipping: 5m, ghn: true, weightAdjustment: 0.60m)));
+
+        // An order a shop shipped itself (before GHN) still pays the shipping to the shop.
+        Assert.Equal(95m, SettlementRules.Sale(Order(shipping: 5m), Now, 2).Amount);
+        Assert.Equal(0m, SettlementRules.PlatformShipping(Order(shipping: 5m)));
+    }
 
     // ---- Rules ----
 

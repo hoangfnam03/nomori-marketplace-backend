@@ -43,7 +43,7 @@ public sealed class ProductVariantsTests
         public async Task<int> DraftAsync(int vendorId = Shop, decimal price = 10)
         {
             var result = await CreateProducts().CreateForVendorAsync(vendorId,
-                new SaveVendorProductCommand("Shirt", null, null, price, 0, 3, [1], []), Seller, CancellationToken.None);
+                new SaveVendorProductCommand("Shirt", null, null, price, 0, 3, [1], [], WeightGrams: 500), Seller, CancellationToken.None);
             return result.Value!.Id;
         }
     }

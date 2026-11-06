@@ -31,7 +31,7 @@ public sealed class ProductPictureTests
 
         public static async Task<int> DraftAsync(ProductService service) =>
             (await service.CreateForVendorAsync(Shop,
-                new SaveVendorProductCommand("Mug", null, null, 10, 0, 3, [1], []), Seller, CancellationToken.None)).Value!.Id;
+                new SaveVendorProductCommand("Mug", null, null, 10, 0, 3, [1], [], WeightGrams: 500), Seller, CancellationToken.None)).Value!.Id;
 
         /// <summary>An image uploaded for the product purpose by a shop.</summary>
         public int Picture(int vendorId = Shop, MediaPurpose purpose = MediaPurpose.Product)

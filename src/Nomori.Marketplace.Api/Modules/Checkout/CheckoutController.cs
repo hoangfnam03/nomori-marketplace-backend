@@ -69,9 +69,11 @@ public sealed record PlaceOrderBody(
         CouponCode, CartItemIds);
 }
 
-public sealed record CheckoutShippingOptionResponse(int RateId, string Name, decimal Fee, bool IsFree, int? MinDays, int? MaxDays)
+public sealed record CheckoutShippingOptionResponse(
+    int RateId, string Name, decimal Fee, bool IsFree, int? MinDays, int? MaxDays, DateTime? EstimatedFromUtc, DateTime? EstimatedToUtc)
 {
-    public static CheckoutShippingOptionResponse From(ShippingOption o) => new(o.RateId, o.Name, o.Fee, o.IsFree, o.MinDays, o.MaxDays);
+    public static CheckoutShippingOptionResponse From(ShippingOption o) =>
+        new(o.RateId, o.Name, o.Fee, o.IsFree, o.MinDays, o.MaxDays, o.EstimatedFromUtc, o.EstimatedToUtc);
 }
 
 public sealed record CheckoutShopResponse(

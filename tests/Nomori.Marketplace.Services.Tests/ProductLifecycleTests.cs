@@ -37,7 +37,7 @@ public sealed class ProductLifecycleTests
         /// <summary>Creates a draft with a category and a valid price.</summary>
         public static async Task<int> DraftAsync(ProductService service, int[]? categories = null) =>
             (await service.CreateForVendorAsync(Shop,
-                new SaveVendorProductCommand("Mug", null, null, 10, 0, 3, categories ?? [1], []), Seller, CancellationToken.None)).Value!.Id;
+                new SaveVendorProductCommand("Mug", null, null, 10, 0, 3, categories ?? [1], [], WeightGrams: 500), Seller, CancellationToken.None)).Value!.Id;
 
         public Product Product(int id) => Products.Products.Single(p => p.Id == id);
     }
@@ -114,11 +114,11 @@ public sealed class ProductLifecycleTests
         var f = new Fixture();
         var service = f.Create();
         var id = await Fixture.DraftAsync(service);
-        SaveVendorProductCommand NoCategory() => new("Mug", null, null, 10, 0, 3, [], []);
+        SaveVendorProductCommand NoCategory() => new("Mug", null, null, 10, 0, 3, [], [], WeightGrams: 500);
 
         Assert.True((await service.UpdateForVendorAsync(Shop, id, NoCategory(), Seller, CancellationToken.None)).Succeeded);
 
-        await service.UpdateForVendorAsync(Shop, id, new SaveVendorProductCommand("Mug", null, null, 10, 0, 3, [1], []), Seller, CancellationToken.None);
+        await service.UpdateForVendorAsync(Shop, id, new SaveVendorProductCommand("Mug", null, null, 10, 0, 3, [1], [], WeightGrams: 500), Seller, CancellationToken.None);
         await service.SetStatusForVendorAsync(Shop, id, ProductStatus.Live, Seller, CancellationToken.None);
         Assert.Contains("categoryIds", (await service.UpdateForVendorAsync(Shop, id, NoCategory(), Seller, CancellationToken.None)).Errors.Keys);
         Assert.Equal([1], f.Products.CategoriesOf(id));
@@ -162,7 +162,7 @@ public sealed class ProductLifecycleTests
         Assert.Equal(CatalogErrors.ProductHiddenByAdmin, (await service.SetStatusForVendorAsync(Shop, id, ProductStatus.Live, Seller, CancellationToken.None)).ErrorCode);
         Assert.Equal(CatalogErrors.ProductHiddenByAdmin, (await service.SetStatusForVendorAsync(Shop, id, ProductStatus.Stopped, Seller, CancellationToken.None)).ErrorCode);
 
-        var edit = await service.UpdateForVendorAsync(Shop, id, new SaveVendorProductCommand("Fixed", null, null, 10, 0, 3, [1], []), Seller, CancellationToken.None);
+        var edit = await service.UpdateForVendorAsync(Shop, id, new SaveVendorProductCommand("Fixed", null, null, 10, 0, 3, [1], [], WeightGrams: 500), Seller, CancellationToken.None);
         Assert.True(edit.Succeeded);
         Assert.Equal(ProductStatus.HiddenByAdmin, f.Product(id).Status);
 

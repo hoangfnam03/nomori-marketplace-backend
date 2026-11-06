@@ -16,7 +16,8 @@ public sealed class SqlOrderStore(IOptions<DatabaseOptions> options) : IOrderSto
     private const string ShopColumns =
         "s.Id, s.OrderId, s.Number, s.VendorId, s.ShopName, s.Status, s.Subtotal, s.ShippingFee, s.Total, s.ShippingMethodName, s.ShippingRateId, " +
         "s.Carrier, s.TrackingNumber, s.CancelReason, s.CreatedOnUtc, s.UpdatedOnUtc, " +
-        "(SELECT COALESCE(SUM(l.Quantity), 0) FROM OrderLine l WHERE l.ShopOrderId = s.Id), s.DiscountAmount, s.DiscountFunding, s.TaxAmount";
+        "(SELECT COALESCE(SUM(l.Quantity), 0) FROM OrderLine l WHERE l.ShopOrderId = s.Id), s.DiscountAmount, s.DiscountFunding, s.TaxAmount, " +
+        "s.ShopShippingCost, s.CarrierFee, s.ParcelWeightGrams, s.ExpectedDeliveryUtc, s.CodAmount, s.CodTransferredOnUtc, s.ShippingAdjustment";
 
     private const string LineColumns =
         "Id, ShopOrderId, ProductId, CombinationId, Name, VariantLabel, Sku, PictureId, Quantity, UnitPrice, LineTotal, TaxRate, TaxAmount";
@@ -38,12 +39,12 @@ public sealed class SqlOrderStore(IOptions<DatabaseOptions> options) : IOrderSto
         {
             await using (var cmd = Command(connection, transaction, """
                 INSERT INTO CustomerOrder (Number, CustomerId, PlacementKey, CurrencyCode, Subtotal, ShippingTotal, DiscountTotal, DiscountCode, TaxTotal, AwaitingPayment, Total, PaymentMethod, CustomerNote,
-                    RecipientName, RecipientPhone, Address1, Address2, City, StateProvince, PostalCode, CountryCode, CreatedOnUtc)
+                    RecipientName, RecipientPhone, Address1, Address2, City, StateProvince, PostalCode, CountryCode, CreatedOnUtc, GhnProvinceId, GhnProvinceName, GhnWardId, GhnWardName, GhnArea)
                 OUTPUT INSERTED.Id
                 -- The real number needs the id; until then a throw-away value keeps the unique index happy.
                 VALUES (REPLACE(CONVERT(nvarchar(36), NEWID()), '-', ''), @CustomerId, @PlacementKey, @CurrencyCode, @Subtotal, @ShippingTotal, @DiscountTotal, @DiscountCode, @TaxTotal, @AwaitingPayment, @Total,
                     @PaymentMethod, @CustomerNote, @RecipientName, @RecipientPhone, @Address1, @Address2, @City, @StateProvince, @PostalCode,
-                    @CountryCode, @CreatedOnUtc)
+                    @CountryCode, @CreatedOnUtc, @GhnProvinceId, @GhnProvinceName, @GhnWardId, @GhnWardName, @GhnArea)
                 """))
             {
                 cmd.Parameters.AddWithValue("@CustomerId", order.CustomerId);
@@ -61,6 +62,11 @@ public sealed class SqlOrderStore(IOptions<DatabaseOptions> options) : IOrderSto
                 cmd.Parameters.AddWithValue("@RecipientName", order.RecipientName);
                 cmd.Parameters.AddWithValue("@RecipientPhone", order.RecipientPhone);
                 cmd.Parameters.AddWithValue("@Address1", order.Address1);
+                cmd.Parameters.AddWithValue("@GhnProvinceId", (object?)order.GhnProvinceId ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("@GhnProvinceName", (object?)order.GhnProvinceName ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("@GhnWardId", (object?)order.GhnWardId ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("@GhnWardName", (object?)order.GhnWardName ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("@GhnArea", (object?)order.GhnArea ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("@Address2", (object?)order.Address2 ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("@City", order.City);
                 cmd.Parameters.AddWithValue("@StateProvince", (object?)order.StateProvince ?? DBNull.Value);
@@ -102,9 +108,9 @@ public sealed class SqlOrderStore(IOptions<DatabaseOptions> options) : IOrderSto
     private static async Task InsertShopOrderAsync(SqlConnection connection, SqlTransaction transaction, ShopOrder shop, int customerId, CancellationToken cancellationToken)
     {
         await using (var cmd = Command(connection, transaction, """
-            INSERT INTO ShopOrder (OrderId, VendorId, Number, ShopName, Status, Subtotal, ShippingFee, DiscountAmount, DiscountFunding, TaxAmount, Total, ShippingMethodName, ShippingRateId, CommissionRate, CreatedOnUtc, UpdatedOnUtc)
+            INSERT INTO ShopOrder (OrderId, VendorId, Number, ShopName, Status, Subtotal, ShippingFee, DiscountAmount, DiscountFunding, TaxAmount, Total, ShippingMethodName, ShippingRateId, ShopShippingCost, CommissionRate, CreatedOnUtc, UpdatedOnUtc)
             OUTPUT INSERTED.Id
-            VALUES (@OrderId, @VendorId, @Number, @ShopName, @Status, @Subtotal, @ShippingFee, @DiscountAmount, @DiscountFunding, @TaxAmount, @Total, @ShippingMethodName, @ShippingRateId,
+            VALUES (@OrderId, @VendorId, @Number, @ShopName, @Status, @Subtotal, @ShippingFee, @DiscountAmount, @DiscountFunding, @TaxAmount, @Total, @ShippingMethodName, @ShippingRateId, @ShopShippingCost,
                 -- F05-S: the commission rate is frozen with the order: the shop's own rate, else the platform default; the platform shop pays none unless it has its own.
                 CASE WHEN EXISTS (SELECT 1 FROM Vendor pv WHERE pv.Id = @VendorId AND pv.IsPlatformShop = 1) AND NOT EXISTS (SELECT 1 FROM VendorCommission WHERE VendorId = @VendorId) THEN 0
                      ELSE COALESCE((SELECT Rate FROM VendorCommission WHERE VendorId = @VendorId), (SELECT DefaultRate FROM CommissionSetting WHERE Id = 1), 0) END,
@@ -115,6 +121,7 @@ public sealed class SqlOrderStore(IOptions<DatabaseOptions> options) : IOrderSto
             cmd.Parameters.AddWithValue("@VendorId", shop.VendorId);
             cmd.Parameters.AddWithValue("@Number", shop.Number);
             cmd.Parameters.AddWithValue("@ShopName", shop.ShopName);
+            cmd.Parameters.AddWithValue("@ShopShippingCost", shop.ShopShippingCost);
             cmd.Parameters.AddWithValue("@Status", (int)shop.Status);
             cmd.Parameters.AddWithValue("@Subtotal", shop.Subtotal);
             cmd.Parameters.AddWithValue("@ShippingFee", shop.ShippingFee);
@@ -540,7 +547,12 @@ public sealed class SqlOrderStore(IOptions<DatabaseOptions> options) : IOrderSto
         Carrier = r.IsDBNull(o + 11) ? null : r.GetString(o + 11), TrackingNumber = r.IsDBNull(o + 12) ? null : r.GetString(o + 12),
         CancelReason = r.IsDBNull(o + 13) ? null : r.GetString(o + 13),
         CreatedOnUtc = DateTime.SpecifyKind(r.GetDateTime(o + 14), DateTimeKind.Utc), UpdatedOnUtc = DateTime.SpecifyKind(r.GetDateTime(o + 15), DateTimeKind.Utc),
-        ItemCount = r.GetInt32(o + 16), DiscountAmount = r.GetDecimal(o + 17), DiscountFunding = r.IsDBNull(o + 18) ? null : r.GetString(o + 18), TaxAmount = r.GetDecimal(o + 19)
+        ItemCount = r.GetInt32(o + 16), DiscountAmount = r.GetDecimal(o + 17), DiscountFunding = r.IsDBNull(o + 18) ? null : r.GetString(o + 18), TaxAmount = r.GetDecimal(o + 19),
+        ShopShippingCost = r.GetDecimal(o + 20), CarrierFee = r.IsDBNull(o + 21) ? null : r.GetDecimal(o + 21),
+        ParcelWeightGrams = r.IsDBNull(o + 22) ? null : r.GetInt32(o + 22),
+        ExpectedDeliveryUtc = r.IsDBNull(o + 23) ? null : DateTime.SpecifyKind(r.GetDateTime(o + 23), DateTimeKind.Utc),
+        CodAmount = r.GetDecimal(o + 24), CodTransferredOnUtc = r.IsDBNull(o + 25) ? null : DateTime.SpecifyKind(r.GetDateTime(o + 25), DateTimeKind.Utc),
+        ShippingAdjustment = r.GetDecimal(o + 26)
     };
 
     private static SqlCommand Command(SqlConnection connection, SqlTransaction transaction, string text)

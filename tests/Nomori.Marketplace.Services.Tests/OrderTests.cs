@@ -168,6 +168,7 @@ public sealed class OrderTests
     [InlineData(ShopOrderStatus.Pending, OrderAction.Confirm, OrderActor.Shop, ShopOrderStatus.Confirmed)]
     [InlineData(ShopOrderStatus.Confirmed, OrderAction.Ship, OrderActor.Shop, ShopOrderStatus.Shipped)]
     [InlineData(ShopOrderStatus.Shipped, OrderAction.Deliver, OrderActor.Shop, ShopOrderStatus.Delivered)]
+    [InlineData(ShopOrderStatus.Shipped, OrderAction.Deliver, OrderActor.System, ShopOrderStatus.Delivered)]
     [InlineData(ShopOrderStatus.Delivered, OrderAction.Complete, OrderActor.Customer, ShopOrderStatus.Completed)]
     [InlineData(ShopOrderStatus.Delivered, OrderAction.Complete, OrderActor.System, ShopOrderStatus.Completed)]
     [InlineData(ShopOrderStatus.Pending, OrderAction.Cancel, OrderActor.Shop, ShopOrderStatus.Cancelled)]

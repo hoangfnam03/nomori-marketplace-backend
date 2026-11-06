@@ -2,6 +2,7 @@ using System.Text.Encodings.Web;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Nomori.Marketplace.Core.Catalog;
+using Nomori.Marketplace.Core.Shipping;
 using Nomori.Marketplace.Core.Directory;
 using Nomori.Marketplace.Core.Email;
 using Nomori.Marketplace.Core.Media;
@@ -25,7 +26,9 @@ public sealed partial class ProductService(
     IEmailSender emailSender,
     IOptions<EmailOptions> emailOptions,
     ILogger<ProductService> logger,
-    IClock clock) : IProductService
+    IClock clock,
+    IGhnStore? ghnStore = null,
+    IOptions<GhnOptions>? ghnOptions = null) : IProductService
 {
     private const int MaxReasonLength = 2000;
     private const int MaxPictures = 10;
@@ -207,6 +210,9 @@ public sealed partial class ProductService(
         var vendor = await vendorStore.GetAsync(vendorId, cancellationToken);
         if (vendor is null) return CatalogResult.Error<Product>(CatalogErrors.NotFound);
         if (!vendor.Active) return CatalogResult.Error<Product>(CatalogErrors.Forbidden);
+        // Everything ships with GHN from the shop's own address: a shop without one could take orders it cannot send.
+        if (ghnOptions?.Value.IsConfigured == true && ghnStore is not null && await ghnStore.GetPickupAsync(vendorId, cancellationToken) is null)
+            return CatalogResult.Error<Product>(GhnErrors.NoPickup);
 
         var (errors, selection) = await ValidateSellerAsync(vendorId, 0, command, cancellationToken);
         if (errors.Count > 0) return CatalogResult.Failure<Product>(errors);
@@ -227,6 +233,10 @@ public sealed partial class ProductService(
             ManufacturerPartNumber = NullIfBlank(command.ManufacturerPartNumber),
             AvailableStartUtc = AsUtc(command.AvailableStartUtc),
             AvailableEndUtc = AsUtc(command.AvailableEndUtc),
+            WeightGrams = command.WeightGrams,
+            LengthCm = command.LengthCm,
+            WidthCm = command.WidthCm,
+            HeightCm = command.HeightCm,
             // Admin-only fields: sellers start from the defaults.
             ShowOnHomepage = false,
             DisplayOrder = 0,
@@ -269,6 +279,10 @@ public sealed partial class ProductService(
         existing.ManufacturerPartNumber = NullIfBlank(command.ManufacturerPartNumber);
         existing.AvailableStartUtc = AsUtc(command.AvailableStartUtc);
         existing.AvailableEndUtc = AsUtc(command.AvailableEndUtc);
+        existing.WeightGrams = command.WeightGrams;
+        existing.LengthCm = command.LengthCm;
+        existing.WidthCm = command.WidthCm;
+        existing.HeightCm = command.HeightCm;
         // Status, ShowOnHomepage and DisplayOrder keep their current values: sellers change status through their own actions.
         existing.UpdatedOnUtc = clock.UtcNow;
         await productStore.UpdateAsync(existing, cancellationToken);
@@ -637,6 +651,13 @@ public sealed partial class ProductService(
             errors["manufacturerPartNumber"] = ["Manufacturer part number cannot exceed 100 characters."];
         if (command.AvailableStartUtc is { } start && command.AvailableEndUtc is { } end && end <= start)
             errors["availableEndUtc"] = ["The end of the sale window must be after its start."];
+
+        // Shipping is priced by weight, so a seller always gives it (like the packed weight on other marketplaces); the size is optional.
+        if (command.WeightGrams is not { } weight || weight < 1 || weight > ProductShippingLimits.MaxWeightGrams)
+            errors["weightGrams"] = [$"Enter the packed weight, 1 to {ProductShippingLimits.MaxWeightGrams} grams."];
+        int?[] sides = [command.LengthCm, command.WidthCm, command.HeightCm];
+        if (sides.Any(s => s is not null) && sides.Any(s => s is null or < 1 or > ProductShippingLimits.MaxSideCm))
+            errors["dimensions"] = [$"Enter the length, width and height (1 to {ProductShippingLimits.MaxSideCm} cm each), or leave all three empty."];
 
         if (command.Price <= 0) errors["price"] = ["Price must be greater than 0."];
         if (command.OldPrice != 0 && command.OldPrice <= command.Price)

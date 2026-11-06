@@ -213,9 +213,9 @@ public sealed class CheckoutService(
         ShippingQuote? quote = null;
         if (address is not null && cart.Groups.Count > 0)
         {
-            var quoted = await shippingService.QuoteAsync(customerId, new ShippingQuoteRequest(address.Id, null, null, choices.CartItemIds), cancellationToken);
+            var quoted = await shippingService.QuoteAsync(customerId, new ShippingQuoteRequest(address.Id, choices.CartItemIds), cancellationToken);
             if (quoted.Succeeded) quote = quoted.Value;
-            else problems.Add(CheckoutProblems.AddressInvalid);
+            else problems.Add(quoted.ErrorCode == ShippingErrors.AreaMissing ? CheckoutProblems.AddressAreaMissing : CheckoutProblems.AddressInvalid);
         }
 
         var shops = new List<CheckoutShopShipping>();
@@ -328,12 +328,13 @@ public sealed class CheckoutService(
         var address = state.Address!;
         var recipient = new NewOrderRecipient(
             $"{address.FirstName} {address.LastName}".Trim(), address.PhoneNumber, address.Address1, address.Address2, address.City,
-            address.StateProvince, address.ZipPostalCode, address.CountryCode);
+            address.StateProvince, address.ZipPostalCode, address.CountryCode, address.GhnProvinceId, address.GhnProvinceName, address.GhnWardId,
+            address.GhnWardName, address.GhnArea);
 
         var shops = state.Shops.Select(shop => new NewShopOrder(
             shop.VendorId, shop.Chosen!.Name, shop.Chosen.RateId, shop.Chosen.Fee,
             lines.Where(l => l.VendorId == shop.VendorId).Select(l => l.Line).ToList(),
-            state.Discount?.Split.GetValueOrDefault(shop.VendorId) ?? 0m)).ToList();
+            state.Discount?.Split.GetValueOrDefault(shop.VendorId) ?? 0m, shop.Chosen.ShopCost)).ToList();
 
         var discount = state.Discount is { } applied ? new NewOrderDiscount(applied.Discount.Code, DiscountRules.ToWire(applied.Discount.Funding)) : null;
         // A redirect payment is not paid yet: the order waits, hidden from the shops, until the gateway says so.

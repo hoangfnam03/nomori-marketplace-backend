@@ -19,6 +19,13 @@ public sealed class CustomerAddress
     public string? ZipPostalCode { get; set; }
     public string PhoneNumber { get; set; } = string.Empty;
     public bool IsDefault { get; set; }
+
+    // The province and ward from GHN's lists, in the two-level units in force since 1 July 2025 (no district). GhnArea is "ward, province".
+    public int? GhnProvinceId { get; set; }
+    public string? GhnProvinceName { get; set; }
+    public int? GhnWardId { get; set; }
+    public string? GhnWardName { get; set; }
+    public string? GhnArea { get; set; }
 }
 
 public sealed record CustomerAttributeDefinition(string SystemName, string Name, string DataType, bool IsRequired, int DisplayOrder);

@@ -60,7 +60,9 @@ public sealed class OrderService(
             CustomerNote = string.IsNullOrEmpty(note) ? null : note, AwaitingPayment = command.AwaitingPayment,
             RecipientName = recipient.Name!.Trim(), RecipientPhone = recipient.Phone!.Trim(), Address1 = recipient.Address1!.Trim(),
             Address2 = Clean(recipient.Address2), City = recipient.City!.Trim(), StateProvince = Clean(recipient.StateProvince),
-            PostalCode = Clean(recipient.PostalCode), CountryCode = recipient.CountryCode!.Trim().ToUpperInvariant(), CreatedOnUtc = now
+            PostalCode = Clean(recipient.PostalCode), CountryCode = recipient.CountryCode!.Trim().ToUpperInvariant(), CreatedOnUtc = now,
+            GhnProvinceId = recipient.GhnProvinceId, GhnProvinceName = Clean(recipient.GhnProvinceName), GhnWardId = recipient.GhnWardId,
+            GhnWardName = Clean(recipient.GhnWardName), GhnArea = Clean(recipient.GhnArea)
         };
 
         // Every total is computed here from prices and quantities; nothing a caller adds up is trusted.
@@ -84,7 +86,7 @@ public sealed class OrderService(
                 VendorId = shop.VendorId, ShopName = vendors[shop.VendorId].Name, Status = ShopOrderStatus.Pending, Subtotal = subtotal,
                 ShippingFee = shop.ShippingFee, DiscountAmount = shop.DiscountAmount, DiscountFunding = shop.DiscountAmount > 0 ? discount!.Funding : null,
                 TaxAmount = lines.Sum(l => l.TaxAmount), Total = subtotal - shop.DiscountAmount + shop.ShippingFee + lines.Sum(l => l.TaxAmount), ShippingMethodName = shop.ShippingMethodName!.Trim(),
-                ShippingRateId = shop.ShippingRateId, CreatedOnUtc = now, UpdatedOnUtc = now, Lines = lines
+                ShippingRateId = shop.ShippingRateId, ShopShippingCost = shop.ShopShippingCost, CreatedOnUtc = now, UpdatedOnUtc = now, Lines = lines
             });
         }
         order.Subtotal = order.ShopOrders.Sum(s => s.Subtotal);
@@ -140,6 +142,14 @@ public sealed class OrderService(
             await CancelAsync(shop, OrderActor.System, null, reason, cancellationToken);
         }
         return CatalogResult.Success((await store.GetOrderAsync(orderId, cancellationToken))!);
+    }
+
+    public async Task<CatalogResult<ShopOrderDetail>> DeliverByCarrierAsync(int shopOrderId, string note, CancellationToken cancellationToken)
+    {
+        var shopOrder = await store.GetShopOrderAsync(shopOrderId, cancellationToken);
+        return shopOrder is null
+            ? CatalogResult.Error<ShopOrderDetail>(CatalogErrors.NotFound)
+            : await MoveAsync(shopOrder, OrderAction.Deliver, OrderActor.System, null, note, null, null, cancellationToken);
     }
 
     // ---- Customers ----
@@ -358,6 +368,8 @@ public sealed class OrderService(
 
     private static void ValidateShop(NewShopOrder shop, int places, Dictionary<string, string[]> errors)
     {
+        if (shop.ShopShippingCost < 0m || !CurrencyRules.HasValidScale(shop.ShopShippingCost, places))
+            errors["shopShippingCost"] = [$"What the shop pays for shipping cannot be negative and has at most {places} decimal places."];
         var method = shop.ShippingMethodName?.Trim() ?? string.Empty;
         if (method.Length is 0 or > 100) errors["shippingMethodName"] = ["Every shop needs a shipping method name (at most 100 characters)."];
         if (shop.ShippingFee is < 0 or > OrderLimits.MaxAmount || !CurrencyRules.HasValidScale(shop.ShippingFee, places))
