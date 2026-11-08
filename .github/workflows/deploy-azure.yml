@@ -166,9 +166,11 @@ jobs:
           ELAPSED=0
           
           while [ $ELAPSED -lt $TIMEOUT ]; do
-            HEALTH=$(curl -s https://${PROXY_FQDN}/health/ready | grep -o '"status":"[^"]*"' | cut -d'"' -f4)
-            
-            if [ "$HEALTH" = "Healthy" ]; then
+            # MapHealthChecks answers with plain text ("Healthy" / "Unhealthy"), not JSON, and HTTP 503 when unhealthy.
+            HTTP_CODE=$(curl -s -o "$RUNNER_TEMP/health.txt" -w '%{http_code}' https://${PROXY_FQDN}/health/ready || echo "000")
+            HEALTH=$(tr -d '\r\n' < "$RUNNER_TEMP/health.txt" 2>/dev/null || true)
+
+            if [ "$HTTP_CODE" = "200" ] && [ "$HEALTH" = "Healthy" ]; then
               echo "✅ API is healthy"
               exit 0
             fi
