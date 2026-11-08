@@ -308,6 +308,14 @@ public sealed class SettlementTests
     }
 
     [Fact]
+    public void TheReturnShippingTheShopBearsComesOffItsRefundLine()
+    {
+        var refund = SettlementRules.Refund(new SettlementRefundRow(7, 48m, Order(discount: 10m, funding: "platform", tax: 6m), ShopReturnShipping: 3m), Now, 2);
+
+        Assert.Equal((-50m, 5m, -48m), (refund.Gross, refund.Commission, refund.Amount));
+    }
+
+    [Fact]
     public void ARefundTakesBackTheMatchingShareOfTheRevenueAndNeverTheShipping()
     {
         // The customer paid 100 - 10 discount + 6 tax = 96 for the items and gets 48 back: half.

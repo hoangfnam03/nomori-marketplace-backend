@@ -9,7 +9,7 @@ namespace Nomori.Marketplace.Data.Discounts;
 public sealed class SqlDiscountStore(IOptions<DatabaseOptions> options) : IDiscountStore
 {
     private const string Columns =
-        "Id, VendorId, Name, Code, Type, Value, MaxDiscountAmount, StartsOnUtc, EndsOnUtc, MinSubtotal, MaxUses, MaxUsesPerCustomer, UsedCount, Enabled, CreatedOnUtc, UpdatedOnUtc";
+        "Id, VendorId, Name, Code, Type, Value, MaxDiscountAmount, StartsOnUtc, EndsOnUtc, MinSubtotal, MaxUses, MaxUsesPerCustomer, UsedCount, Enabled, CreatedOnUtc, UpdatedOnUtc, Kind";
 
     // 2601 and 2627: a unique index says the row already exists.
     private static bool IsDuplicate(SqlException ex) => ex.Number is 2601 or 2627;
@@ -44,9 +44,9 @@ public sealed class SqlDiscountStore(IOptions<DatabaseOptions> options) : IDisco
         await using var connection = await OpenAsync(cancellationToken);
         await using var cmd = connection.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO Discount (VendorId, Name, Code, Type, Value, MaxDiscountAmount, StartsOnUtc, EndsOnUtc, MinSubtotal, MaxUses, MaxUsesPerCustomer, UsedCount, Enabled, CreatedOnUtc, UpdatedOnUtc)
+            INSERT INTO Discount (VendorId, Name, Code, Type, Kind, Value, MaxDiscountAmount, StartsOnUtc, EndsOnUtc, MinSubtotal, MaxUses, MaxUsesPerCustomer, UsedCount, Enabled, CreatedOnUtc, UpdatedOnUtc)
             OUTPUT INSERTED.Id
-            VALUES (@VendorId, @Name, @Code, @Type, @Value, @MaxDiscountAmount, @StartsOnUtc, @EndsOnUtc, @MinSubtotal, @MaxUses, @MaxUsesPerCustomer, 0, @Enabled, @Now, @Now)
+            VALUES (@VendorId, @Name, @Code, @Type, @Kind, @Value, @MaxDiscountAmount, @StartsOnUtc, @EndsOnUtc, @MinSubtotal, @MaxUses, @MaxUsesPerCustomer, 0, @Enabled, @Now, @Now)
             """;
         cmd.Parameters.AddWithValue("@VendorId", (object?)discount.VendorId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@Now", discount.CreatedOnUtc);
@@ -67,7 +67,7 @@ public sealed class SqlDiscountStore(IOptions<DatabaseOptions> options) : IDisco
         await using var cmd = connection.CreateCommand();
         // The owner and the use count are not written here: the first never changes, the second belongs to redeeming.
         cmd.CommandText = """
-            UPDATE Discount SET Name = @Name, Code = @Code, Type = @Type, Value = @Value, MaxDiscountAmount = @MaxDiscountAmount,
+            UPDATE Discount SET Name = @Name, Code = @Code, Type = @Type, Kind = @Kind, Value = @Value, MaxDiscountAmount = @MaxDiscountAmount,
                 StartsOnUtc = @StartsOnUtc, EndsOnUtc = @EndsOnUtc, MinSubtotal = @MinSubtotal, MaxUses = @MaxUses,
                 MaxUsesPerCustomer = @MaxUsesPerCustomer, Enabled = @Enabled, UpdatedOnUtc = @Now
             WHERE Id = @Id
@@ -194,13 +194,14 @@ public sealed class SqlDiscountStore(IOptions<DatabaseOptions> options) : IDisco
         {
             cmd.Transaction = transaction;
             cmd.CommandText = """
-                INSERT INTO DiscountUsage (DiscountId, OrderId, CustomerId, Amount, CreatedOnUtc) VALUES (@DiscountId, @OrderId, @CustomerId, @Amount, @Now);
+                INSERT INTO DiscountUsage (DiscountId, OrderId, CustomerId, Amount, Kind, CreatedOnUtc) VALUES (@DiscountId, @OrderId, @CustomerId, @Amount, @Kind, @Now);
                 UPDATE Discount SET UsedCount = UsedCount + 1 WHERE Id = @DiscountId;
                 """;
             cmd.Parameters.AddWithValue("@DiscountId", request.DiscountId);
             cmd.Parameters.AddWithValue("@OrderId", request.OrderId);
             cmd.Parameters.AddWithValue("@CustomerId", request.CustomerId);
             cmd.Parameters.AddWithValue("@Amount", request.Amount);
+            cmd.Parameters.AddWithValue("@Kind", (int)request.Kind);
             cmd.Parameters.AddWithValue("@Now", request.NowUtc);
             try
             {
@@ -208,7 +209,7 @@ public sealed class SqlDiscountStore(IOptions<DatabaseOptions> options) : IDisco
             }
             catch (SqlException ex) when (IsDuplicate(ex))
             {
-                // This order already used a code: it is not used twice.
+                // This order already used a code of this kind: it is not used twice.
                 await transaction.RollbackAsync(cancellationToken);
                 return RedeemOutcome.Unavailable;
             }
@@ -223,26 +224,28 @@ public sealed class SqlDiscountStore(IOptions<DatabaseOptions> options) : IDisco
         await using var connection = await OpenAsync(cancellationToken);
         await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken);
 
-        int? discountId = null;
+        // An order holds up to one use of each kind; every one of them goes back.
+        var discountIds = new List<int>();
         await using (var cmd = connection.CreateCommand())
         {
             cmd.Transaction = transaction;
             cmd.CommandText = "DELETE FROM DiscountUsage OUTPUT DELETED.DiscountId WHERE OrderId = @OrderId";
             cmd.Parameters.AddWithValue("@OrderId", orderId);
-            var result = await cmd.ExecuteScalarAsync(cancellationToken);
-            if (result is int id) discountId = id;
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken)) discountIds.Add(reader.GetInt32(0));
         }
-        if (discountId is null)
+        if (discountIds.Count == 0)
         {
             await transaction.RollbackAsync(cancellationToken);
             return false;
         }
 
-        await using (var cmd = connection.CreateCommand())
+        foreach (var discountId in discountIds)
         {
+            await using var cmd = connection.CreateCommand();
             cmd.Transaction = transaction;
             cmd.CommandText = "UPDATE Discount SET UsedCount = UsedCount - 1 WHERE Id = @Id AND UsedCount > 0";
-            cmd.Parameters.AddWithValue("@Id", discountId.Value);
+            cmd.Parameters.AddWithValue("@Id", discountId);
             await cmd.ExecuteNonQueryAsync(cancellationToken);
         }
         await transaction.CommitAsync(cancellationToken);
@@ -260,6 +263,7 @@ public sealed class SqlDiscountStore(IOptions<DatabaseOptions> options) : IDisco
         cmd.Parameters.AddWithValue("@Name", d.Name);
         cmd.Parameters.AddWithValue("@Code", d.Code);
         cmd.Parameters.AddWithValue("@Type", (int)d.Type);
+        cmd.Parameters.AddWithValue("@Kind", (int)d.Kind);
         cmd.Parameters.AddWithValue("@Value", d.Value);
         cmd.Parameters.AddWithValue("@MaxDiscountAmount", (object?)d.MaxDiscountAmount ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@StartsOnUtc", (object?)d.StartsOnUtc ?? DBNull.Value);
@@ -297,7 +301,8 @@ public sealed class SqlDiscountStore(IOptions<DatabaseOptions> options) : IDisco
         UsedCount = r.GetInt32(12),
         Enabled = r.GetBoolean(13),
         CreatedOnUtc = DateTime.SpecifyKind(r.GetDateTime(14), DateTimeKind.Utc),
-        UpdatedOnUtc = DateTime.SpecifyKind(r.GetDateTime(15), DateTimeKind.Utc)
+        UpdatedOnUtc = DateTime.SpecifyKind(r.GetDateTime(15), DateTimeKind.Utc),
+        Kind = (DiscountKind)r.GetInt32(16)
     };
 
     private async Task<SqlConnection> OpenAsync(CancellationToken cancellationToken)

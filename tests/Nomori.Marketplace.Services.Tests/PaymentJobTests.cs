@@ -37,6 +37,14 @@ public sealed class PaymentJobTests
             return Task.FromResult<IReadOnlyList<int>>(ExpiredOrders.Take(take).ToList());
         }
 
+        public List<int> DeliveredShopOrders { get; } = [];
+
+        public Task<IReadOnlyList<int>> DeliveredShopOrderIdsAsync(DateTime deliveredBeforeUtc, int take, CancellationToken cancellationToken)
+        {
+            Calls["delivered"] = (deliveredBeforeUtc, take);
+            return Task.FromResult<IReadOnlyList<int>>(DeliveredShopOrders.Take(take).ToList());
+        }
+
         public Task<IReadOnlyList<int>> PaymentIdsForOrderAsync(int orderId, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<int>>(PaymentsByOrder.GetValueOrDefault(orderId) ?? []);
 
@@ -86,6 +94,18 @@ public sealed class PaymentJobTests
         }
 
         public Task<CatalogResult<Order>> CreateAsync(NewOrderCommand command, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        /// <summary>Shop order id to the error code its completion answers with; missing means it completes.</summary>
+        public Dictionary<int, string> CompleteErrors { get; } = new();
+        public List<(int ShopOrderId, string Note)> Completed { get; } = [];
+
+        public Task<CatalogResult<ShopOrderDetail>> CompleteAsSystemAsync(int shopOrderId, string note, CancellationToken cancellationToken)
+        {
+            if (Throwing.Contains(shopOrderId)) throw new InvalidOperationException("boom");
+            if (CompleteErrors.TryGetValue(shopOrderId, out var code)) return Task.FromResult(CatalogResult.Error<ShopOrderDetail>(code));
+            Completed.Add((shopOrderId, note));
+            return Task.FromResult(CatalogResult.Success<ShopOrderDetail>(null!));
+        }
         public Task<Order?> FindByPlacementKeyAsync(string placementKey, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<CatalogResult<bool>> MarkPaidAsync(int orderId, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<PagedResult<Order>> GetMyOrdersAsync(int customerId, int page, int pageSize, CancellationToken cancellationToken) => throw new NotSupportedException();
@@ -129,6 +149,8 @@ public sealed class PaymentJobTests
         public Task<CouponCheck> CheckCouponAsync(string? code, int customerId, IReadOnlyDictionary<int, decimal> shopSubtotals, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<RedeemOutcome> RedeemAsync(AppliedDiscount applied, int customerId, int orderId, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<IReadOnlyList<CouponOffer>> GetOffersAsync(int customerId, IReadOnlyDictionary<int, decimal> shopSubtotals, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<CouponCheck> CheckCouponAsync(string? code, DiscountKind kind, int customerId, IReadOnlyDictionary<int, decimal> shopSubtotals, IReadOnlyDictionary<int, decimal> shopShipping, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<IReadOnlyList<CouponOffer>> GetOffersAsync(int customerId, IReadOnlyDictionary<int, decimal> shopSubtotals, IReadOnlyDictionary<int, decimal> shopShipping, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
     private sealed class FakePayments : IPaymentService
@@ -182,6 +204,9 @@ public sealed class PaymentJobTests
         public ExpireUnpaidOrdersJob Expire() =>
             new(Maintenance, Orders, Discounts, Payments, new FixedNow(), Microsoft.Extensions.Options.Options.Create(Options), NullLogger<ExpireUnpaidOrdersJob>.Instance);
 
+        public CompleteDeliveredOrdersJob CompleteDelivered() =>
+            new(Maintenance, Orders, new FixedNow(), Microsoft.Extensions.Options.Options.Create(Options), NullLogger<CompleteDeliveredOrdersJob>.Instance);
+
         public VoidStalePaymentsJob VoidStale() =>
             new(Maintenance, Payments, new FixedNow(), Microsoft.Extensions.Options.Options.Create(Options), NullLogger<VoidStalePaymentsJob>.Instance);
 
@@ -191,6 +216,38 @@ public sealed class PaymentJobTests
             Payments.Payments[id] = payment;
             return payment;
         }
+    }
+
+    // ---- orders.complete_delivered ----
+
+    [Fact]
+    public async Task DeliveredOrdersOlderThanTheAllowedDaysAreListed()
+    {
+        var fixture = new Fixture();
+
+        await fixture.CompleteDelivered().RunAsync(default);
+        Assert.Equal((Now.AddDays(-7), JobRules.BatchSize), fixture.Maintenance.Calls["delivered"]);
+
+        fixture.Options.AutoCompleteDays = 10;
+        await fixture.CompleteDelivered().RunAsync(default);
+        Assert.Equal(Now.AddDays(-10), fixture.Maintenance.Calls["delivered"].Before);
+    }
+
+    [Fact]
+    public async Task DeliveredOrdersAreCompletedBySystemAndOnesThatMovedMeanwhileAreLeftAlone()
+    {
+        var fixture = new Fixture();
+        fixture.Maintenance.DeliveredShopOrders.AddRange([1, 2, 3, 4]);
+        // 2 was confirmed by the customer, 3 got a return just now, 4 cannot be loaded.
+        fixture.Orders.CompleteErrors[2] = OrderErrors.InvalidTransition;
+        fixture.Orders.CompleteErrors[3] = OrderErrors.ReturnOpen;
+        fixture.Orders.Throwing.Add(4);
+
+        var result = await fixture.CompleteDelivered().RunAsync(default);
+
+        Assert.Equal(1, Assert.Single(fixture.Orders.Completed).ShopOrderId);
+        Assert.Equal((1, 1), (result.Processed, result.Failed));
+        Assert.Equal("Completed 1 of 4 delivered orders.", result.Message);
     }
 
     // ---- orders.expire_unpaid ----
@@ -418,14 +475,14 @@ public sealed class PaymentJobTests
         var f = new Fixture();
         IScheduledJob[] jobs =
         [
-            f.Expire(), f.VoidStale(),
+            f.Expire(), f.VoidStale(), f.CompleteDelivered(),
             new PurgeReservationsJob(f.Maintenance, new FixedNow(), Options.Create(new JobOptions())),
             new PurgeStaleCartsJob(f.Maintenance, new FixedNow(), Options.Create(new JobOptions())),
             new PurgeJobHistoryJob(f.Maintenance, new FixedNow(), Options.Create(new JobOptions()))
         ];
 
         Assert.Equal(
-            ["orders.expire_unpaid", "payments.void_stale", "inventory.purge_reservations", "cart.purge_stale", "jobs.purge_history"],
+            ["orders.expire_unpaid", "payments.void_stale", "orders.complete_delivered", "inventory.purge_reservations", "cart.purge_stale", "jobs.purge_history"],
             jobs.Select(j => j.Name));
         Assert.All(jobs, j => Assert.True(JobRules.IsValidInterval(j.DefaultIntervalMinutes)));
         Assert.All(jobs, j => Assert.False(string.IsNullOrWhiteSpace(j.Description)));

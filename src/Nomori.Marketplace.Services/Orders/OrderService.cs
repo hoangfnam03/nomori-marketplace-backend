@@ -41,6 +41,10 @@ public sealed class OrderService(
         if (shops.Any(x => x.DiscountAmount != 0m)
             && (string.IsNullOrWhiteSpace(discount?.Code) || discount.Code.Trim().Length > 32 || discount.Funding is not ("platform" or "shop")))
             errors["discount"] = ["A discount needs its code and who funds it (platform or shop)."];
+        var shippingDiscount = command.ShippingDiscount;
+        if (shops.Any(x => x.ShippingDiscount != 0m)
+            && (string.IsNullOrWhiteSpace(shippingDiscount?.Code) || shippingDiscount.Code.Trim().Length > 32 || shippingDiscount.Funding is not ("platform" or "shop")))
+            errors["shippingDiscount"] = ["A shipping discount needs its code and who funds it (platform or shop)."];
 
         var vendors = new Dictionary<int, Vendor>();
         foreach (var shop in shops)
@@ -81,10 +85,13 @@ public sealed class OrderService(
             // The discount of a shop order never exceeds what the shop sold.
             if (shop.DiscountAmount < 0 || shop.DiscountAmount > subtotal || !CurrencyRules.HasValidScale(shop.DiscountAmount, currency.DecimalPlaces))
                 return CatalogResult.Failure<Order>("discount", "The discount of a shop cannot be negative or more than its items.");
+            if (shop.ShippingDiscount < 0 || !CurrencyRules.HasValidScale(shop.ShippingDiscount, currency.DecimalPlaces))
+                return CatalogResult.Failure<Order>("shippingDiscount", "The shipping discount of a shop cannot be negative.");
             order.ShopOrders.Add(new ShopOrder
             {
                 VendorId = shop.VendorId, ShopName = vendors[shop.VendorId].Name, Status = ShopOrderStatus.Pending, Subtotal = subtotal,
                 ShippingFee = shop.ShippingFee, DiscountAmount = shop.DiscountAmount, DiscountFunding = shop.DiscountAmount > 0 ? discount!.Funding : null,
+                ShippingDiscount = shop.ShippingDiscount, ShippingDiscountFunding = shop.ShippingDiscount > 0 ? shippingDiscount!.Funding : null,
                 TaxAmount = lines.Sum(l => l.TaxAmount), Total = subtotal - shop.DiscountAmount + shop.ShippingFee + lines.Sum(l => l.TaxAmount), ShippingMethodName = shop.ShippingMethodName!.Trim(),
                 ShippingRateId = shop.ShippingRateId, ShopShippingCost = shop.ShopShippingCost, CreatedOnUtc = now, UpdatedOnUtc = now, Lines = lines
             });
@@ -93,6 +100,8 @@ public sealed class OrderService(
         order.ShippingTotal = order.ShopOrders.Sum(s => s.ShippingFee);
         order.DiscountTotal = order.ShopOrders.Sum(s => s.DiscountAmount);
         order.DiscountCode = order.DiscountTotal > 0 ? discount!.Code!.Trim().ToUpperInvariant() : null;
+        order.ShippingDiscountTotal = order.ShopOrders.Sum(s => s.ShippingDiscount);
+        order.ShippingDiscountCode = order.ShippingDiscountTotal > 0 ? shippingDiscount!.Code!.Trim().ToUpperInvariant() : null;
         order.TaxTotal = order.ShopOrders.Sum(x => x.TaxAmount);
         order.Total = order.Subtotal - order.DiscountTotal + order.ShippingTotal + order.TaxTotal;
 
@@ -150,6 +159,14 @@ public sealed class OrderService(
         return shopOrder is null
             ? CatalogResult.Error<ShopOrderDetail>(CatalogErrors.NotFound)
             : await MoveAsync(shopOrder, OrderAction.Deliver, OrderActor.System, null, note, null, null, cancellationToken);
+    }
+
+    public async Task<CatalogResult<ShopOrderDetail>> CompleteAsSystemAsync(int shopOrderId, string note, CancellationToken cancellationToken)
+    {
+        var shopOrder = await store.GetShopOrderAsync(shopOrderId, cancellationToken);
+        return shopOrder is null
+            ? CatalogResult.Error<ShopOrderDetail>(CatalogErrors.NotFound)
+            : await MoveAsync(shopOrder, OrderAction.Complete, OrderActor.System, null, note, null, null, cancellationToken);
     }
 
     // ---- Customers ----
@@ -294,6 +311,8 @@ public sealed class OrderService(
     {
         var from = shopOrder.Status;
         if (OrderRules.Transition(from, action, actor) is not { } target) return CatalogResult.Error<ShopOrderDetail>(OrderErrors.InvalidTransition);
+        // A shop order with a return in progress is not finished: settlement would pay the shop for goods on their way back.
+        if (action == OrderAction.Complete && shopOrder.HasOpenReturn) return CatalogResult.Error<ShopOrderDetail>(OrderErrors.ReturnOpen);
 
         var changed = await store.TryTransitionAsync(
             new ShopOrderTransition(shopOrder.Id, from, target, actor, actorCustomerId, note, carrier, tracking, cancelReason, clock.UtcNow), cancellationToken);

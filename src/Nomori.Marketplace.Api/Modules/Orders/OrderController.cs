@@ -225,12 +225,14 @@ public sealed record ShopOrderListItemResponse(
         s.Order.CurrencyCode, s.Order.PaymentMethod, s.Order.RecipientName, s.Order.RecipientPhone);
 }
 
+/// <param name="ReturnStatus">Where the line's return stands (requested, approved, received, refunded); null when it was never returned.</param>
 public sealed record OrderLineResponse(
     int Id, int ProductId, int? CombinationId, string Name, string? VariantLabel, string? Sku, int PictureId, int Quantity, decimal UnitPrice, decimal LineTotal,
-    decimal TaxRate, decimal TaxAmount)
+    decimal TaxRate, decimal TaxAmount, string? ReturnStatus = null)
 {
     public static OrderLineResponse From(OrderLine l) =>
-        new(l.Id, l.ProductId, l.CombinationId, l.Name, l.VariantLabel, l.Sku, l.PictureId, l.Quantity, l.UnitPrice, l.LineTotal, l.TaxRate, l.TaxAmount);
+        new(l.Id, l.ProductId, l.CombinationId, l.Name, l.VariantLabel, l.Sku, l.PictureId, l.Quantity, l.UnitPrice, l.LineTotal, l.TaxRate, l.TaxAmount,
+            l.ReturnStatus is { } status ? Core.Returns.ReturnRules.ToWire(status) : null);
 }
 
 public sealed record OrderHistoryResponse(string? FromStatus, string To, string Actor, int? ActorCustomerId, string? Note, DateTime CreatedOnUtc)
@@ -252,7 +254,8 @@ public sealed record ShopOrderDetailResponse(
     decimal Subtotal, decimal ShippingFee, decimal DiscountAmount, string? DiscountFunding, decimal TaxAmount, decimal Total, string ShippingMethodName, string? Carrier, string? TrackingNumber, string? CancelReason,
     string? CustomerNote, RecipientResponse Recipient, DateTime CreatedOnUtc, DateTime UpdatedOnUtc,
     IReadOnlyList<OrderLineResponse> Lines, IReadOnlyList<OrderHistoryResponse> History,
-    DateTime? ExpectedDeliveryUtc = null, ShipmentCostResponse? Shipment = null)
+    DateTime? ExpectedDeliveryUtc = null, ShipmentCostResponse? Shipment = null, decimal ShippingDiscount = 0m, string? ShippingDiscountFunding = null,
+    bool HasOpenReturn = false, decimal RefundedAmount = 0m)
 {
     public static ShopOrderDetailResponse From(ShopOrderDetail detail, bool forAdmin, bool forCustomer = false) =>
         From(detail.ShopOrder, detail.ShopOrder.Order!, detail.History, forAdmin, forCustomer);
@@ -262,7 +265,8 @@ public sealed record ShopOrderDetailResponse(
         s.Id, s.Number, s.OrderId, o.Number, s.VendorId, s.ShopName, OrderRules.ToWire(s.Status), o.CurrencyCode, o.PaymentMethod,
         s.Subtotal, s.ShippingFee, s.DiscountAmount, s.DiscountFunding, s.TaxAmount, s.Total, s.ShippingMethodName, s.Carrier, s.TrackingNumber, s.CancelReason, o.CustomerNote, RecipientResponse.From(o),
         s.CreatedOnUtc, s.UpdatedOnUtc, s.Lines.Select(OrderLineResponse.From).ToList(), history.Select(h => OrderHistoryResponse.Of(h, forAdmin)).ToList(),
-        s.ExpectedDeliveryUtc, forCustomer ? null : ShipmentCostResponse.From(s));
+        s.ExpectedDeliveryUtc, forCustomer ? null : ShipmentCostResponse.From(s), s.ShippingDiscount, s.ShippingDiscountFunding,
+        s.HasOpenReturn, s.RefundedAmount);
 }
 
 /// <summary>What shipping a shop order cost (shops and administrators): GHN's real fee, what the shop pays, the cash GHN collects.</summary>
@@ -275,7 +279,8 @@ public sealed record ShipmentCostResponse(
 
 public sealed record OrderDetailResponse(
     int Id, string Number, int CustomerId, string CurrencyCode, decimal Subtotal, decimal ShippingTotal, decimal DiscountTotal, string? DiscountCode, decimal TaxTotal, decimal Total, string Status, string PaymentMethod,
-    bool AwaitingPayment, string? CustomerNote, RecipientResponse Recipient, DateTime CreatedOnUtc, IReadOnlyList<ShopOrderDetailResponse> ShopOrders)
+    bool AwaitingPayment, string? CustomerNote, RecipientResponse Recipient, DateTime CreatedOnUtc, IReadOnlyList<ShopOrderDetailResponse> ShopOrders,
+    decimal ShippingDiscountTotal = 0m, string? ShippingDiscountCode = null)
 {
     public static OrderDetailResponse From(OrderDetail detail, bool forAdmin, bool forCustomer = false)
     {
@@ -283,6 +288,7 @@ public sealed record OrderDetailResponse(
         return new OrderDetailResponse(
             o.Id, o.Number, forAdmin ? o.CustomerId : 0, o.CurrencyCode, o.Subtotal, o.ShippingTotal, o.DiscountTotal, o.DiscountCode, o.TaxTotal, o.Total,
             OrderRules.ToWire(OrderRules.Overall(o.ShopOrders.Select(s => s.Status))), o.PaymentMethod, o.AwaitingPayment, o.CustomerNote, RecipientResponse.From(o), o.CreatedOnUtc,
-            o.ShopOrders.Select(s => ShopOrderDetailResponse.From(s, o, detail.History.GetValueOrDefault(s.Id) ?? [], forAdmin, forCustomer)).ToList());
+            o.ShopOrders.Select(s => ShopOrderDetailResponse.From(s, o, detail.History.GetValueOrDefault(s.Id) ?? [], forAdmin, forCustomer)).ToList(),
+            o.ShippingDiscountTotal, o.ShippingDiscountCode);
     }
 }

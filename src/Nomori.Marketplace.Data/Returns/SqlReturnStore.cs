@@ -11,7 +11,8 @@ public sealed class SqlReturnStore(IOptions<DatabaseOptions> options) : IReturnS
 {
     private const string Columns =
         "Id, Number, ShopOrderId, OrderId, ShopOrderNumber, VendorId, ShopName, CustomerId, Status, Reason, CustomerNote, ResolutionNote, " +
-        "CurrencyCode, RefundAmount, Restocked, PaymentId, CreatedOnUtc, UpdatedOnUtc";
+        "CurrencyCode, RefundAmount, Restocked, PaymentId, CreatedOnUtc, UpdatedOnUtc, " +
+        "ReturnTrackingNumber, ReturnShippingFee, ReturnShippingPaidBy, ReturnShipmentStatus, ReturnShipmentError";
 
     public async Task<(ReturnRequest? Request, bool QuantityExceeded)> InsertAsync(ReturnRequest request, CancellationToken cancellationToken)
     {
@@ -102,14 +103,21 @@ public sealed class SqlReturnStore(IOptions<DatabaseOptions> options) : IReturnS
         }
     }
 
-    public async Task<IReadOnlyDictionary<int, int>> HeldQuantitiesAsync(int shopOrderId, CancellationToken cancellationToken)
+    public Task<IReadOnlyDictionary<int, int>> HeldQuantitiesAsync(int shopOrderId, CancellationToken cancellationToken) =>
+        QuantitiesAsync(shopOrderId, "r.Status NOT IN (2, 5)", cancellationToken);
+
+    public Task<IReadOnlyDictionary<int, int>> RefundedQuantitiesAsync(int shopOrderId, CancellationToken cancellationToken) =>
+        QuantitiesAsync(shopOrderId, "r.Status = 4", cancellationToken);
+
+    /// <summary>Returned quantity per order line of the shop order, counting the returns whose status matches.</summary>
+    private async Task<IReadOnlyDictionary<int, int>> QuantitiesAsync(int shopOrderId, string statusCondition, CancellationToken cancellationToken)
     {
         await using var connection = await OpenAsync(cancellationToken);
         await using var cmd = connection.CreateCommand();
-        cmd.CommandText = """
+        cmd.CommandText = $"""
             SELECT rl.OrderLineId, SUM(rl.Quantity)
             FROM ReturnRequestLine rl INNER JOIN ReturnRequest r ON r.Id = rl.ReturnRequestId
-            WHERE r.ShopOrderId = @ShopOrderId AND r.Status NOT IN (2, 5)
+            WHERE r.ShopOrderId = @ShopOrderId AND {statusCondition}
             GROUP BY rl.OrderLineId
             """;
         cmd.Parameters.AddWithValue("@ShopOrderId", shopOrderId);
@@ -210,6 +218,49 @@ public sealed class SqlReturnStore(IOptions<DatabaseOptions> options) : IReturnS
         return await cmd.ExecuteNonQueryAsync(cancellationToken) == 1;
     }
 
+    public async Task SetShipmentAsync(int id, ReturnShipment shipment, string payer, DateTime nowUtc, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        // A failed try keeps no number and no fee, only why it failed; a made parcel clears the error.
+        cmd.CommandText = """
+            UPDATE ReturnRequest
+            SET ReturnTrackingNumber = @Tracking, ReturnShippingFee = @Fee, ReturnShippingPaidBy = @Payer,
+                ReturnShipmentError = @Error, ReturnShipmentStatus = NULL, UpdatedOnUtc = @Now
+            WHERE Id = @Id
+            """;
+        cmd.Parameters.AddWithValue("@Id", id);
+        cmd.Parameters.Add(new SqlParameter("@Tracking", SqlDbType.NVarChar, 50) { Value = (object?)shipment.TrackingNumber ?? DBNull.Value });
+        cmd.Parameters.AddWithValue("@Fee", shipment.Succeeded ? shipment.Fee : 0m);
+        cmd.Parameters.Add(new SqlParameter("@Payer", SqlDbType.NVarChar, 10) { Value = shipment.Succeeded ? payer : DBNull.Value });
+        cmd.Parameters.Add(new SqlParameter("@Error", SqlDbType.NVarChar, 300) { Value = shipment.Succeeded ? DBNull.Value : Cut(shipment.Error, 300) });
+        Add(cmd, "@Now", nowUtc);
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<int?> FindByTrackingNumberAsync(string trackingNumber, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT TOP 1 Id FROM ReturnRequest WHERE ReturnTrackingNumber = @Tracking ORDER BY Id DESC";
+        cmd.Parameters.Add(new SqlParameter("@Tracking", SqlDbType.NVarChar, 50) { Value = trackingNumber });
+        return await cmd.ExecuteScalarAsync(cancellationToken) is int id ? id : null;
+    }
+
+    public async Task SetShipmentStatusAsync(int id, string status, DateTime nowUtc, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "UPDATE ReturnRequest SET ReturnShipmentStatus = @Status, UpdatedOnUtc = @Now WHERE Id = @Id";
+        cmd.Parameters.AddWithValue("@Id", id);
+        cmd.Parameters.Add(new SqlParameter("@Status", SqlDbType.NVarChar, 200) { Value = Cut(status, 200) });
+        Add(cmd, "@Now", nowUtc);
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static object Cut(string? text, int length) =>
+        string.IsNullOrEmpty(text) ? DBNull.Value : text.Length <= length ? text : text[..length];
+
     public async Task<IReadOnlyList<int>> PaymentIdsForOrderAsync(int orderId, CancellationToken cancellationToken)
     {
         await using var connection = await OpenAsync(cancellationToken);
@@ -229,7 +280,10 @@ public sealed class SqlReturnStore(IOptions<DatabaseOptions> options) : IReturnS
         VendorId = r.GetInt32(5), ShopName = r.GetString(6), CustomerId = r.GetInt32(7), Status = (ReturnStatus)r.GetInt32(8), Reason = r.GetString(9),
         CustomerNote = r.IsDBNull(10) ? null : r.GetString(10), ResolutionNote = r.IsDBNull(11) ? null : r.GetString(11), CurrencyCode = r.GetString(12),
         RefundAmount = r.GetDecimal(13), Restocked = r.GetBoolean(14), PaymentId = r.IsDBNull(15) ? null : r.GetInt32(15),
-        CreatedOnUtc = Utc(r.GetDateTime(16)), UpdatedOnUtc = Utc(r.GetDateTime(17))
+        CreatedOnUtc = Utc(r.GetDateTime(16)), UpdatedOnUtc = Utc(r.GetDateTime(17)),
+        ReturnTrackingNumber = r.IsDBNull(18) ? null : r.GetString(18), ReturnShippingFee = r.GetDecimal(19),
+        ReturnShippingPaidBy = r.IsDBNull(20) ? null : r.GetString(20), ReturnShipmentStatus = r.IsDBNull(21) ? null : r.GetString(21),
+        ReturnShipmentError = r.IsDBNull(22) ? null : r.GetString(22)
     };
 
     private static DateTime Utc(DateTime value) => DateTime.SpecifyKind(value, DateTimeKind.Utc);

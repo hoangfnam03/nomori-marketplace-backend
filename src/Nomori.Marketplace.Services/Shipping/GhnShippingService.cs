@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using Nomori.Marketplace.Core.Catalog;
 using Nomori.Marketplace.Core.Directory;
 using Nomori.Marketplace.Core.Orders;
+using Nomori.Marketplace.Core.Returns;
 using Nomori.Marketplace.Core.Security;
 using Nomori.Marketplace.Core.Shipping;
 using Nomori.Marketplace.Core.Time;
@@ -14,11 +15,12 @@ public sealed class GhnShippingService(
     IGhnStore store,
     IOrderService orderService,
     ITrackingService trackingService,
+    IReturnStore returns,
     IPrimaryCurrencyProvider primaryCurrency,
     ICurrencyService currencyService,
     IAuditLogService auditLog,
     IClock clock,
-    IOptions<GhnOptions> options) : IGhnShippingService
+    IOptions<GhnOptions> options) : IGhnShippingService, IReturnShipper
 {
     private readonly GhnOptions settings = options.Value;
 
@@ -200,7 +202,8 @@ public sealed class GhnShippingService(
     {
         if (webhook.ShopID != settings.ShopId || string.IsNullOrWhiteSpace(webhook.OrderCode)) return GhnWebhookOutcome.Ignored;
         var target = await store.FindByOrderCodeAsync(webhook.OrderCode.Trim(), cancellationToken);
-        if (target is null) return GhnWebhookOutcome.Ignored;
+        // Not a parcel to a customer: maybe the parcel of a return, on its way back to the shop.
+        if (target is null) return await HandleReturnWebhookAsync(webhook, cancellationToken);
 
         if (string.Equals(webhook.Type, "switch_status", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(webhook.Status))
             await ApplyStatusAsync(target, webhook, cancellationToken);
@@ -211,6 +214,58 @@ public sealed class GhnShippingService(
         // GHN paid over the cash it collected.
         if (Parse(webhook.CODTransferDate) is { } transferred) await store.MarkCodTransferredAsync(target.ShopOrderId, transferred, cancellationToken);
         return GhnWebhookOutcome.Handled;
+    }
+
+    /// <summary>
+    /// A parcel back from a customer: its status is written on the return for the shop and the customer to follow. Its arrival does not
+    /// close the return: the shop looks at the goods and marks them received.
+    /// </summary>
+    private async Task<GhnWebhookOutcome> HandleReturnWebhookAsync(GhnWebhook webhook, CancellationToken cancellationToken)
+    {
+        if (await returns.FindByTrackingNumberAsync(webhook.OrderCode!.Trim(), cancellationToken) is not { } returnId) return GhnWebhookOutcome.Ignored;
+        if (string.Equals(webhook.Type, "switch_status", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(webhook.Status))
+        {
+            var note = GhnRules.NoteOf(webhook.Status.Trim().ToLowerInvariant());
+            await returns.SetShipmentStatusAsync(returnId, string.IsNullOrWhiteSpace(webhook.Reason) ? note : $"{note} ({webhook.Reason.Trim()})",
+                clock.UtcNow, cancellationToken);
+        }
+        return GhnWebhookOutcome.Handled;
+    }
+
+    // ---- Returns: the parcel back from the customer to the shop ----
+
+    public async Task<ReturnShipment?> ShipBackAsync(ReturnRequest request, CancellationToken cancellationToken)
+    {
+        if (!IsConfigured) return null;
+
+        var destination = await store.GetDestinationAsync(request.OrderId, cancellationToken);
+        if (destination?.Place is not { } customerPlace) return new ReturnShipment(null, 0m, "The customer's address has no province and ward for GHN.");
+        if (await store.GetPickupAsync(request.VendorId, cancellationToken) is not { } shop) return new ReturnShipment(null, 0m, "The shop has no GHN pickup address.");
+
+        var sizes = await store.GetProductSizesAsync(request.Lines.Select(l => l.ProductId).ToList(), cancellationToken);
+        var items = new List<GhnItem>();
+        foreach (var line in request.Lines)
+        {
+            var name = line.VariantLabel is null ? line.Name : $"{line.Name} ({line.VariantLabel})";
+            var grams = sizes.GetValueOrDefault(line.ProductId)?.WeightGrams ?? settings.ItemWeightGrams;
+            var unit = line.Quantity > 0 ? line.Amount / line.Quantity : 0m;
+            items.Add(new GhnItem(name, line.Quantity, grams, await ToVndAsync(unit, cancellationToken)));
+        }
+        var parcel = GhnRules.Parcel(request.Lines.Select(l => (l.Quantity, sizes.GetValueOrDefault(l.ProductId))), settings);
+        var insurance = GhnRules.InsuranceOf(await ToVndAsync(request.RefundAmount, cancellationToken), settings);
+        var content = string.Join(", ", items.Select(i => $"{i.Quantity} x {i.Name}"));
+
+        // The other way round from a delivery: GHN picks up at the customer's address and delivers to the shop's. Nothing is collected.
+        var address = string.Join(", ", new[] { destination.Address1, destination.Address2 }.Where(p => !string.IsNullOrWhiteSpace(p)));
+        var customer = new GhnSender(destination.RecipientName, destination.RecipientPhone, address, customerPlace.ProvinceId,
+            destination.ProvinceName ?? string.Empty, customerPlace.WardId, destination.WardName ?? string.Empty);
+        var created = await client.CreateOrderAsync(new GhnCreateOrderRequest(
+            shop.ContactName, shop.Phone, shop.Address, shop.ProvinceId, shop.ProvinceName, shop.WardId, shop.WardName,
+            0L, insurance, $"Hang tra lai {request.Number}", content.Length > 0 ? content[..Math.Min(content.Length, 2000)] : request.Number,
+            parcel, settings.ServiceTypeId, settings.RequiredNote, request.Number, items, customer), cancellationToken);
+        if (!created.Succeeded) return new ReturnShipment(null, 0m, $"GHN: {created.Error}");
+
+        return new ReturnShipment(created.Value!.OrderCode, await ToPrimaryAsync(created.Value.TotalFeeVnd, cancellationToken), null);
     }
 
     private async Task ApplyStatusAsync(GhnShopOrderRef target, GhnWebhook webhook, CancellationToken cancellationToken)

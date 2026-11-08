@@ -160,6 +160,9 @@ public interface ICartService
     Task<CatalogResult<CartView>> RemoveAsync(int customerId, int lineId, CancellationToken cancellationToken);
     Task<CartView> ClearAsync(int customerId, CancellationToken cancellationToken);
 
+    /// <summary>Removes every line of one shop from the cart. Not found when the cart holds nothing from that shop.</summary>
+    Task<CatalogResult<CartView>> RemoveShopAsync(int customerId, int vendorId, CancellationToken cancellationToken);
+
     /// <summary>Saves the current unit prices as the ones the customer has seen.</summary>
     Task<CartView> AcceptPricesAsync(int customerId, CancellationToken cancellationToken);
 }

@@ -16,6 +16,7 @@ public static class ShippingTests
         public Task<CatalogResult<CartView>> AddAsync(int customerId, AddToCartCommand command, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<CatalogResult<CartView>> SetQuantityAsync(int customerId, int lineId, int quantity, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<CatalogResult<CartView>> RemoveAsync(int customerId, int lineId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<CatalogResult<CartView>> RemoveShopAsync(int customerId, int vendorId, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<CartView> ClearAsync(int customerId, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<CartView> AcceptPricesAsync(int customerId, CancellationToken cancellationToken) => throw new NotSupportedException();
     }

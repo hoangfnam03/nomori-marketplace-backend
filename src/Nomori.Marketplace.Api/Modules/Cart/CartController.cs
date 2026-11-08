@@ -50,6 +50,15 @@ public sealed class CartController(ICartService cartService, ICurrentUser curren
         return result.Succeeded ? Ok(result.Value) : this.ToFailure(result);
     }
 
+    /// <summary>Removes every line of one shop.</summary>
+    [HttpDelete("vendors/{vendorId:int}")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> RemoveShop(int vendorId, CancellationToken cancellationToken)
+    {
+        var result = await cartService.RemoveShopAsync(CustomerId, vendorId, cancellationToken);
+        return result.Succeeded ? Ok(result.Value) : this.ToFailure(result);
+    }
+
     [HttpDelete]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> Clear(CancellationToken cancellationToken) =>

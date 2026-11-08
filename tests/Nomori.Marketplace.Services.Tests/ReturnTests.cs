@@ -29,9 +29,52 @@ public sealed class ReturnTests
         public DateTime UtcNow => Now;
     }
 
-    /// <summary>Works like the SQL store: the quantity check and the compare-and-set are the same rules in memory. Returns copies, as a database does.</summary>
-    private sealed class FakeReturnStore : IReturnStore
+    /// <summary>A carrier for returns: none by default (the customer sends the goods), or one that makes or refuses the parcel.</summary>
+    internal sealed class FakeShipper : IReturnShipper
     {
+        public ReturnShipment? Next { get; set; }
+        public bool Throws { get; set; }
+        public List<string> Shipped { get; } = [];
+
+        public Task<ReturnShipment?> ShipBackAsync(ReturnRequest request, CancellationToken cancellationToken)
+        {
+            if (Throws) throw new HttpRequestException("down");
+            if (Next is not null) Shipped.Add(request.Number);
+            return Task.FromResult(Next);
+        }
+    }
+
+    /// <summary>Works like the SQL store: the quantity check and the compare-and-set are the same rules in memory. Returns copies, as a database does.</summary>
+    internal sealed class FakeReturnStore : IReturnStore
+    {
+        /// <summary>Puts a return in as it is, without the checks of a new request (for tests of other services).</summary>
+        public ReturnRequest Seed(ReturnRequest request)
+        {
+            request.Id = rows.Count + 1;
+            rows.Add(Clone(request));
+            return request;
+        }
+
+        public Task SetShipmentAsync(int id, ReturnShipment shipment, string payer, DateTime nowUtc, CancellationToken cancellationToken)
+        {
+            var row = rows.Single(r => r.Id == id);
+            row.ReturnTrackingNumber = shipment.TrackingNumber;
+            row.ReturnShippingFee = shipment.Succeeded ? shipment.Fee : 0m;
+            row.ReturnShippingPaidBy = shipment.Succeeded ? payer : null;
+            row.ReturnShipmentError = shipment.Succeeded ? null : shipment.Error;
+            row.ReturnShipmentStatus = null;
+            return Task.CompletedTask;
+        }
+
+        public Task<int?> FindByTrackingNumberAsync(string trackingNumber, CancellationToken cancellationToken) =>
+            Task.FromResult(rows.LastOrDefault(r => r.ReturnTrackingNumber == trackingNumber)?.Id);
+
+        public Task SetShipmentStatusAsync(int id, string status, DateTime nowUtc, CancellationToken cancellationToken)
+        {
+            rows.Single(r => r.Id == id).ReturnShipmentStatus = status;
+            return Task.CompletedTask;
+        }
+
         private readonly List<ReturnRequest> rows = [];
         public Dictionary<int, List<int>> PaymentIds { get; } = [];
 
@@ -55,6 +98,11 @@ public sealed class ReturnTests
         private Dictionary<int, int> HeldFor(int shopOrderId) =>
             rows.Where(r => r.ShopOrderId == shopOrderId && ReturnRules.HoldsQuantity(r.Status)).SelectMany(r => r.Lines)
                 .GroupBy(l => l.OrderLineId).ToDictionary(g => g.Key, g => g.Sum(l => l.Quantity));
+
+        public Task<IReadOnlyDictionary<int, int>> RefundedQuantitiesAsync(int shopOrderId, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyDictionary<int, int>>(
+                rows.Where(r => r.ShopOrderId == shopOrderId && r.Status == ReturnStatus.Refunded).SelectMany(r => r.Lines)
+                    .GroupBy(l => l.OrderLineId).ToDictionary(g => g.Key, g => g.Sum(l => l.Quantity)));
 
         public Task<IReadOnlyDictionary<int, int>> HeldQuantitiesAsync(int shopOrderId, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyDictionary<int, int>>(HeldFor(shopOrderId));
@@ -93,6 +141,8 @@ public sealed class ReturnTests
             ShopName = r.ShopName, CustomerId = r.CustomerId, Status = r.Status, Reason = r.Reason, CustomerNote = r.CustomerNote,
             ResolutionNote = r.ResolutionNote, CurrencyCode = r.CurrencyCode, RefundAmount = r.RefundAmount, Restocked = r.Restocked,
             PaymentId = r.PaymentId, CreatedOnUtc = r.CreatedOnUtc, UpdatedOnUtc = r.UpdatedOnUtc,
+            ReturnTrackingNumber = r.ReturnTrackingNumber, ReturnShippingFee = r.ReturnShippingFee, ReturnShippingPaidBy = r.ReturnShippingPaidBy,
+            ReturnShipmentStatus = r.ReturnShipmentStatus, ReturnShipmentError = r.ReturnShipmentError,
             Lines = r.Lines.Select(l => new ReturnLine
             {
                 Id = l.Id, ReturnRequestId = l.ReturnRequestId, OrderLineId = l.OrderLineId, Name = l.Name, VariantLabel = l.VariantLabel,
@@ -101,7 +151,7 @@ public sealed class ReturnTests
         };
     }
 
-    private sealed class FakeOrderHolder
+    internal sealed class FakeOrderHolder
     {
         public List<Order> Orders { get; } = [];
     }
@@ -124,7 +174,11 @@ public sealed class ReturnTests
 
         public Task<IReadOnlyList<PaymentMethodView>> GetAvailableMethodsAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<CatalogResult<PaymentTransaction>> CreateAsync(CreatePaymentCommand command, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<IReadOnlyList<PaymentMethodView>> GetMethodsAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
+        /// <summary>The methods the platform knows; a payment whose method is not here counts as offline.</summary>
+        public List<PaymentMethodView> Methods { get; } = [];
+
+        public Task<IReadOnlyList<PaymentMethodView>> GetMethodsAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<PaymentMethodView>>(Methods);
         public Task<CatalogResult<PaymentMethodView>> UpdateMethodAsync(string systemName, bool enabled, int displayOrder, int actorCustomerId, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<PagedResult<PaymentTransaction>> GetPaymentsAsync(PaymentQuery query, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<CatalogResult<PaymentTransaction>> CaptureAsync(int id, int actorCustomerId, CancellationToken cancellationToken) => throw new NotSupportedException();
@@ -157,6 +211,7 @@ public sealed class ReturnTests
         public FakeReturnStore Store { get; } = new();
         public FakeStockService Stock { get; } = new();
         public FakePayments Payments { get; } = new();
+        public FakeShipper Shipper { get; } = new();
         public RecordingQueue Queue { get; } = new();
         public RecordingAuditLog Audit { get; } = new();
         public ReturnOptions Settings { get; set; } = new();
@@ -174,7 +229,7 @@ public sealed class ReturnTests
                         DiscountAmount = 10m, ShippingFee = 5m, Total = 95m,
                         Lines =
                         [
-                            new OrderLine { Id = Line1, ShopOrderId = ShopOrderId, ProductId = 1, Name = "Mug", VariantLabel = "Red", Quantity = 2, UnitPrice = 30m, LineTotal = 60m, TaxAmount = 6m },
+                            new OrderLine { Id = Line1, ShopOrderId = ShopOrderId, ProductId = 1, Name = "Mug", VariantLabel = "Red", Quantity = 1, UnitPrice = 30m, LineTotal = 30m, TaxAmount = 3m },
                             new OrderLine { Id = Line2, ShopOrderId = ShopOrderId, ProductId = 2, Name = "Tea", Quantity = 1, UnitPrice = 40m, LineTotal = 40m }
                         ]
                     }
@@ -189,7 +244,7 @@ public sealed class ReturnTests
         }
 
         public ReturnService Create() => new(
-            Store, Orders, new FakePrimaryCurrency(), Stock, Payments,
+            Store, Orders, new FakePrimaryCurrency(), Stock, Payments, Shipper,
             new FakeCustomerIdentityStore(
                 new Customer { Id = Buyer, Email = "ann@example.com", FirstName = "Ann <b>", Active = true },
                 new Customer { Id = OtherBuyer, Email = "bob@example.com", Active = true }),
@@ -243,7 +298,8 @@ public sealed class ReturnTests
 
     [Theory]
     [InlineData(ShopOrderStatus.Delivered, 2, 14, true)]
-    [InlineData(ShopOrderStatus.Completed, 14, 14, true)]
+    [InlineData(ShopOrderStatus.Delivered, 14, 14, true)]
+    [InlineData(ShopOrderStatus.Completed, 2, 14, false)]
     [InlineData(ShopOrderStatus.Delivered, 15, 14, false)]
     [InlineData(ShopOrderStatus.Shipped, 1, 14, false)]
     [InlineData(ShopOrderStatus.Cancelled, 1, 14, false)]
@@ -356,26 +412,37 @@ public sealed class ReturnTests
     }
 
     [Fact]
-    public async Task ACompletedOrderCanBeReturnedInsideTheWindowButNotAfterIt()
+    public async Task ADeliveredOrderCanBeReturnedInsideTheWindowButNotAfterItNorOnceReceiptIsConfirmed()
     {
-        Assert.True((await new Fixture(ShopOrderStatus.Completed, 10).Create().RequestAsync(Buyer, Command([(Line1, 1)]), CancellationToken.None)).Succeeded);
+        Assert.True((await new Fixture(ShopOrderStatus.Delivered, 10).Create().RequestAsync(Buyer, Command([(Line1, 1)]), CancellationToken.None)).Succeeded);
 
-        var late = await new Fixture(ShopOrderStatus.Completed, 15).Create().RequestAsync(Buyer, Command([(Line1, 1)]), CancellationToken.None);
+        var late = await new Fixture(ShopOrderStatus.Delivered, 15).Create().RequestAsync(Buyer, Command([(Line1, 1)]), CancellationToken.None);
         Assert.Equal(ReturnErrors.NotEligible, late.ErrorCode);
 
-        var longer = new Fixture(ShopOrderStatus.Completed, 15) { Settings = new ReturnOptions { WindowDays = 30 } };
+        var longer = new Fixture(ShopOrderStatus.Delivered, 15) { Settings = new ReturnOptions { WindowDays = 30 } };
         Assert.True((await longer.Create().RequestAsync(Buyer, Command([(Line1, 1)]), CancellationToken.None)).Succeeded);
+
+        var received = await new Fixture(ShopOrderStatus.Completed, 1).Create().RequestAsync(Buyer, Command([(Line1, 1)]), CancellationToken.None);
+        Assert.Equal(ReturnErrors.NotEligible, received.ErrorCode);
     }
 
     [Fact]
-    public async Task NoLineIsReturnedMoreOftenThanItWasBoughtAndARejectedReturnFreesItsQuantity()
+    public async Task AnItemIsReturnedWholeNeverPartOfItsUnits()
+    {
+        var f = new Fixture();
+        f.Orders.Orders[0].ShopOrders[0].Lines[0].Quantity = 3;
+
+        Assert.Contains("lines", (await f.Create().RequestAsync(Buyer, Command([(Line1, 1)]), CancellationToken.None)).Errors.Keys);
+        Assert.Contains("lines", (await f.Create().RequestAsync(Buyer, Command([(Line1, 4)]), CancellationToken.None)).Errors.Keys);
+        Assert.True((await f.Create().RequestAsync(Buyer, Command([(Line1, 3)]), CancellationToken.None)).Succeeded);
+    }
+
+    [Fact]
+    public async Task AnItemIsReturnedOnceAndARejectedReturnFreesIt()
     {
         var f = new Fixture();
 
-        Assert.Equal(ReturnErrors.QuantityExceeded, (await f.Create().RequestAsync(Buyer, Command([(Line1, 3)]), CancellationToken.None)).ErrorCode);
-
         var first = await f.RequestAsync((Line1, 1));
-        await f.RequestAsync((Line1, 1));
         Assert.Equal(ReturnErrors.QuantityExceeded, (await f.Create().RequestAsync(Buyer, Command([(Line1, 1)]), CancellationToken.None)).ErrorCode);
 
         await f.Create().RejectAsync(Fixture.ShopCaller(), first.Id, "Not eligible", CancellationToken.None);
@@ -441,7 +508,7 @@ public sealed class ReturnTests
     {
         var f = new Fixture();
         await f.RequestAsync((Line1, 1));
-        var second = await f.RequestAsync((Line1, 1));
+        var second = await f.RequestAsync((Line2, 1));
         await f.Create().ApproveAsync(Fixture.ShopCaller(), second.Id, null, CancellationToken.None);
 
         var approved = await f.Create().GetAsync(Fixture.AdminCaller(), ReturnStatus.Approved, 1, 20, CancellationToken.None);
@@ -640,5 +707,195 @@ public sealed class ReturnTests
         Assert.Equal(ReturnStatus.Refunded, refunded.Value!.Status);
         Assert.Empty(f.Payments.Refunds);
         Assert.Null(f.Store.Raw(received.Id).PaymentId);
+    }
+
+    // ---- The shop order after its returns ----
+
+    private static async Task RefundAsync(Fixture f, ReturnRequest request)
+    {
+        await f.Create().ApproveAsync(Fixture.ShopCaller(), request.Id, null, CancellationToken.None);
+        await f.Create().ReceiveAsync(Fixture.ShopCaller(), request.Id, false, CancellationToken.None);
+        Assert.True((await f.Create().RefundAsync(Fixture.AdminCaller(), request.Id, true, CancellationToken.None)).Succeeded);
+    }
+
+    [Fact]
+    public async Task APartialReturnLeavesTheShopOrderAsItIsAndTheLastRefundMakesItReturned()
+    {
+        var f = new Fixture();
+        var shopOrder = f.Orders.Orders[0].ShopOrders[0];
+
+        await RefundAsync(f, await f.RequestAsync((Line1, 1)));
+        Assert.Equal(ShopOrderStatus.Delivered, shopOrder.Status);
+
+        await RefundAsync(f, await f.RequestAsync((Line2, 1)));
+        Assert.Equal(ShopOrderStatus.Returned, shopOrder.Status);
+        var change = f.Orders.History[^1];
+        Assert.Equal((ShopOrderStatus.Returned, OrderActor.System), (change.ToStatus, change.Actor));
+    }
+
+    [Fact]
+    public async Task ReturningEverythingAtOnceEndsReturned()
+    {
+        var f = new Fixture();
+
+        await RefundAsync(f, await f.RequestAsync((Line1, 1), (Line2, 1)));
+
+        Assert.Equal(ShopOrderStatus.Returned, f.Orders.Orders[0].ShopOrders[0].Status);
+    }
+
+    [Fact]
+    public void AShopOrderIsReturnedWholeOnlyWhenEveryUnitWasRefunded()
+    {
+        var lines = new[] { new OrderLine { Id = 1, Quantity = 2 }, new OrderLine { Id = 2, Quantity = 1 } };
+
+        Assert.False(ReturnRules.IsReturnedWhole(lines, new Dictionary<int, int> { [1] = 2 }));
+        Assert.True(ReturnRules.IsReturnedWhole(lines, new Dictionary<int, int> { [1] = 2, [2] = 1 }));
+    }
+
+    // ---- Automatic refund when the shop receives the goods ----
+
+    private static Fixture PaidWith(string method, PaymentProviderKind kind)
+    {
+        var f = new Fixture();
+        f.Payments.Payments[7].Method = method;
+        f.Payments.Methods.Add(new PaymentMethodView(method, method, kind, true, 0, true));
+        return f;
+    }
+
+    private static async Task<CatalogResult<ReturnRequest>> ApproveAndReceiveAsync(Fixture f, ReturnRequest request)
+    {
+        await f.Create().ApproveAsync(Fixture.ShopCaller(), request.Id, null, CancellationToken.None);
+        return await f.Create().ReceiveAsync(Fixture.ShopCaller(), request.Id, false, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task APaymentOnlineIsRefundedAsSoonAsTheShopReceivesTheGoods()
+    {
+        var f = PaidWith("gateway", PaymentProviderKind.Gateway);
+        var request = await f.RequestAsync((Line1, 1));
+
+        var received = await ApproveAndReceiveAsync(f, request);
+
+        Assert.Equal(ReturnStatus.Refunded, received.Value!.Status);
+        Assert.Equal((7, request.RefundAmount, Seller), Assert.Single(f.Payments.Refunds));
+        Assert.Contains("return.refunded", f.Audit.Events);
+    }
+
+    [Fact]
+    public async Task CashOnDeliveryWaitsForAnAdministratorToSendTheMoney()
+    {
+        var f = PaidWith("cod", PaymentProviderKind.Offline);
+
+        var received = await ApproveAndReceiveAsync(f, await f.RequestAsync((Line1, 1)));
+
+        Assert.Equal(ReturnStatus.Received, received.Value!.Status);
+        Assert.Empty(f.Payments.Refunds);
+    }
+
+    [Fact]
+    public async Task AGatewayThatRefusesLeavesTheReturnReceivedForAnAdministrator()
+    {
+        var f = PaidWith("gateway", PaymentProviderKind.Gateway);
+        f.Payments.Refuse = true;
+
+        var received = await ApproveAndReceiveAsync(f, await f.RequestAsync((Line1, 1)));
+
+        Assert.True(received.Succeeded);
+        Assert.Equal(ReturnStatus.Received, received.Value!.Status);
+        Assert.Empty(f.Payments.Refunds);
+    }
+
+    [Fact]
+    public async Task AnAutomaticRefundOfTheLastItemMakesTheShopOrderReturned()
+    {
+        var f = PaidWith("gateway", PaymentProviderKind.Gateway);
+
+        await ApproveAndReceiveAsync(f, await f.RequestAsync((Line1, 1), (Line2, 1)));
+
+        Assert.Equal(ShopOrderStatus.Returned, f.Orders.Orders[0].ShopOrders[0].Status);
+    }
+
+    // ---- The parcel back (GHN) ----
+
+    private static RequestReturnCommand Because(string reason, params (int Line, int Qty)[] lines) =>
+        new(ShopOrderId, reason, null, lines.Select(l => new ReturnLineRequest(l.Line, l.Qty)).ToList());
+
+    [Fact]
+    public async Task ApprovingMakesTheParcelBackAndTheCustomerPaysItWhenTheyNoLongerNeedTheGoods()
+    {
+        var f = PaidWith("gateway", PaymentProviderKind.Gateway);
+        f.Shipper.Next = new ReturnShipment("LBACK1", 5m, null);
+        var request = (await f.Create().RequestAsync(Buyer, Because(ReturnReasons.ChangedMind, (Line1, 1)), CancellationToken.None)).Value!;
+
+        var approved = (await f.Create().ApproveAsync(Fixture.ShopCaller(), request.Id, null, CancellationToken.None)).Value!;
+
+        Assert.Equal(("LBACK1", 5m, ReturnPayers.Customer), (approved.ReturnTrackingNumber, approved.ReturnShippingFee, approved.ReturnShippingPaidBy));
+        Assert.Equal(request.RefundAmount - 5m, ReturnRules.PayOut(approved));
+        Assert.Contains("LBACK1", Assert.Single(f.Queue.Queued).Message.HtmlBody);
+
+        var refunded = (await f.Create().ReceiveAsync(Fixture.ShopCaller(), request.Id, false, CancellationToken.None)).Value!;
+        Assert.Equal(ReturnStatus.Refunded, refunded.Status);
+        Assert.Equal(request.RefundAmount - 5m, Assert.Single(f.Payments.Refunds).Amount);
+    }
+
+    [Fact]
+    public async Task TheShopPaysTheParcelBackWhenTheGoodsWereAtFault()
+    {
+        var f = new Fixture();
+        f.Shipper.Next = new ReturnShipment("LBACK1", 5m, null);
+        var request = await f.RequestAsync((Line1, 1));
+
+        var approved = (await f.Create().ApproveAsync(Fixture.ShopCaller(), request.Id, null, CancellationToken.None)).Value!;
+
+        Assert.Equal(ReturnPayers.Shop, approved.ReturnShippingPaidBy);
+        Assert.Equal(request.RefundAmount, ReturnRules.PayOut(approved));
+        Assert.Equal(5m, ReturnRules.ShopShipping(approved));
+    }
+
+    [Fact]
+    public async Task AParcelThatCannotBeMadeLeavesTheReturnApprovedAndCanBeMadeAgainOnce()
+    {
+        var f = new Fixture();
+        f.Shipper.Next = new ReturnShipment(null, 0m, "GHN: bad address");
+        var request = await f.RequestAsync((Line1, 1));
+
+        var approved = (await f.Create().ApproveAsync(Fixture.ShopCaller(), request.Id, null, CancellationToken.None)).Value!;
+        Assert.Equal((ReturnStatus.Approved, "GHN: bad address", (string?)null), (approved.Status, approved.ReturnShipmentError, approved.ReturnTrackingNumber));
+
+        var failedAgain = await f.Create().ShipBackAsync(Fixture.ShopCaller(), request.Id, CancellationToken.None);
+        Assert.Contains("shipment", failedAgain.Errors.Keys);
+
+        f.Shipper.Next = new ReturnShipment("LBACK2", 4m, null);
+        var made = (await f.Create().ShipBackAsync(Fixture.ShopCaller(), request.Id, CancellationToken.None)).Value!;
+        Assert.Equal(("LBACK2", (string?)null), (made.ReturnTrackingNumber, made.ReturnShipmentError));
+
+        Assert.Equal(ReturnErrors.ShipmentNotNeeded, (await f.Create().ShipBackAsync(Fixture.ShopCaller(), request.Id, CancellationToken.None)).ErrorCode);
+    }
+
+    [Fact]
+    public async Task WithoutACarrierTheCustomerSendsTheGoodsAndACarrierThatFailsDoesNotUndoTheApproval()
+    {
+        var f = new Fixture();
+        var request = await f.RequestAsync((Line1, 1));
+        var approved = (await f.Create().ApproveAsync(Fixture.ShopCaller(), request.Id, null, CancellationToken.None)).Value!;
+        Assert.Null(approved.ReturnTrackingNumber);
+        Assert.Equal(ReturnErrors.NoCarrier, (await f.Create().ShipBackAsync(Fixture.ShopCaller(), request.Id, CancellationToken.None)).ErrorCode);
+
+        var other = new Fixture();
+        other.Shipper.Throws = true;
+        var second = await other.RequestAsync((Line2, 1));
+        var stillApproved = await other.Create().ApproveAsync(Fixture.ShopCaller(), second.Id, null, CancellationToken.None);
+        Assert.Equal(ReturnStatus.Approved, stillApproved.Value!.Status);
+        Assert.NotNull(stillApproved.Value.ReturnShipmentError);
+    }
+
+    [Fact]
+    public void TheReturnShippingNeverMakesThePayOutNegative()
+    {
+        var request = new ReturnRequest { RefundAmount = 3m, ReturnShippingFee = 5m, ReturnShippingPaidBy = ReturnPayers.Customer };
+        Assert.Equal(0m, ReturnRules.PayOut(request));
+        Assert.Equal(ReturnPayers.Customer, ReturnRules.ShippingPayer(ReturnReasons.ChangedMind));
+        Assert.All(new[] { ReturnReasons.Damaged, ReturnReasons.WrongItem, ReturnReasons.NotAsDescribed, ReturnReasons.Other },
+            reason => Assert.Equal(ReturnPayers.Shop, ReturnRules.ShippingPayer(reason)));
     }
 }

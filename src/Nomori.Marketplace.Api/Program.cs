@@ -232,7 +232,10 @@ builder.Services.AddScoped<IShippingService, ShippingService>();
 // GHN (prototype): off unless Shipping:Ghn:Enabled, a token and a shop id are set (the secrets as environment variables).
 builder.Services.AddOptions<GhnOptions>().Bind(builder.Configuration.GetSection(GhnOptions.SectionName));
 builder.Services.AddHttpClient<IGhnClient, GhnClient>(client => client.Timeout = TimeSpan.FromSeconds(15));
-builder.Services.AddScoped<IGhnShippingService, GhnShippingService>();
+builder.Services.AddScoped<GhnShippingService>();
+builder.Services.AddScoped<IGhnShippingService>(services => services.GetRequiredService<GhnShippingService>());
+// F21: GHN also brings returned goods back from the customer to the shop.
+builder.Services.AddScoped<IReturnShipper>(services => services.GetRequiredService<GhnShippingService>());
 builder.Services.AddOptions<PaymentOptions>().Bind(builder.Configuration.GetSection(PaymentOptions.SectionName));
 builder.Services.AddSingleton<IPaymentProvider, CashOnDeliveryProvider>();
 // The test gateway only exists where a secret is configured, so production cannot offer it by accident.
@@ -265,6 +268,7 @@ builder.Services.AddOptions<JobOptions>()
         "Jobs: every time limit must be at least 1.")
     .ValidateOnStart();
 builder.Services.AddScoped<IScheduledJob, ExpireUnpaidOrdersJob>();
+builder.Services.AddScoped<IScheduledJob, CompleteDeliveredOrdersJob>();
 builder.Services.AddScoped<IScheduledJob, VoidStalePaymentsJob>();
 builder.Services.AddScoped<IScheduledJob, PurgeReservationsJob>();
 builder.Services.AddScoped<IScheduledJob, PurgeStaleCartsJob>();

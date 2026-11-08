@@ -144,7 +144,8 @@ public sealed record SettlementOrderRow(
     decimal TaxAmount, decimal Rate, string CurrencyCode, bool PlatformShips = false, decimal ShopShippingCost = 0m, decimal ShippingAdjustment = 0m);
 
 /// <summary>A refunded return and the order it belongs to.</summary>
-public sealed record SettlementRefundRow(int ReturnRequestId, decimal RefundAmount, SettlementOrderRow Order);
+/// <param name="ShopReturnShipping">The return shipping the shop bears (the goods were at fault).</param>
+public sealed record SettlementRefundRow(int ReturnRequestId, decimal RefundAmount, SettlementOrderRow Order, decimal ShopReturnShipping = 0m);
 
 public sealed record EntryQuery(int VendorId, EntryKind? Kind, DateTime? FromUtc, DateTime? ToUtc, string? Search, int Page, int PageSize);
 
@@ -229,7 +230,7 @@ public static class SettlementRules
 
     /// <summary>
     /// The refund line of a return: the shop gives back the share of its revenue that matches the share of the items the customer got back.
-    /// Shipping is not refunded. The commission on that share is returned to the shop.
+    /// Shipping is not refunded. The commission on that share is returned to the shop. The return shipping the shop bears comes off too.
     /// </summary>
     public static SettlementEntry Refund(SettlementRefundRow refund, DateTime nowUtc, int places)
     {
@@ -243,7 +244,7 @@ public static class SettlementRules
         return new SettlementEntry
         {
             VendorId = order.VendorId, Kind = EntryKind.Refund, ShopOrderId = order.ShopOrderId, ReturnRequestId = refund.ReturnRequestId,
-            ShopOrderNumber = order.Number, Gross = -gross, Commission = returnedCommission, Amount = -(gross - returnedCommission),
+            ShopOrderNumber = order.Number, Gross = -gross, Commission = returnedCommission, Amount = -(gross - returnedCommission) - refund.ShopReturnShipping,
             CurrencyCode = order.CurrencyCode, CreatedOnUtc = nowUtc
         };
     }

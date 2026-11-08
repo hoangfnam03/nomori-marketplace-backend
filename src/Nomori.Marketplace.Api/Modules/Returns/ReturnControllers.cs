@@ -15,15 +15,20 @@ public sealed record ReturnLineResponse(int Id, int OrderLineId, string Name, st
     public static ReturnLineResponse From(ReturnLine line) => new(line.Id, line.OrderLineId, line.Name, line.VariantLabel, line.Quantity, line.Amount);
 }
 
+/// <param name="PayOut">What the customer gets back: the refund less the return shipping they pay.</param>
+/// <param name="ReturnTrackingNumber">The GHN parcel that brings the goods back; null when the customer sends them by themselves.</param>
+/// <param name="ReturnShippingPaidBy"><c>customer</c> (taken off the refund) or <c>shop</c>.</param>
 public sealed record ReturnResponse(
     int Id, string Number, int ShopOrderId, int OrderId, string ShopOrderNumber, int VendorId, string ShopName, string Status, string Reason,
     string? CustomerNote, string? ResolutionNote, string CurrencyCode, decimal RefundAmount, bool Restocked, DateTime CreatedOnUtc, DateTime UpdatedOnUtc,
-    IReadOnlyList<ReturnLineResponse> Lines)
+    IReadOnlyList<ReturnLineResponse> Lines, decimal PayOut, string? ReturnTrackingNumber, decimal ReturnShippingFee, string? ReturnShippingPaidBy,
+    string? ReturnShipmentStatus, string? ReturnShipmentError)
 {
     public static ReturnResponse From(ReturnRequest r) => new(
         r.Id, r.Number, r.ShopOrderId, r.OrderId, r.ShopOrderNumber, r.VendorId, r.ShopName, ReturnRules.ToWire(r.Status), r.Reason,
         r.CustomerNote, r.ResolutionNote, r.CurrencyCode, r.RefundAmount, r.Restocked, r.CreatedOnUtc, r.UpdatedOnUtc,
-        r.Lines.Select(ReturnLineResponse.From).ToList());
+        r.Lines.Select(ReturnLineResponse.From).ToList(), ReturnRules.PayOut(r), r.ReturnTrackingNumber, r.ReturnShippingFee, r.ReturnShippingPaidBy,
+        r.ReturnShipmentStatus, r.ReturnShipmentError);
 }
 
 public sealed record ReturnPageResponse(IReadOnlyList<ReturnResponse> Items, int TotalCount, int Page, int PageSize, int TotalPages)
@@ -127,6 +132,12 @@ public sealed class VendorReturnsController(IReturnService returns, IVendorAcces
     public async Task<IActionResult> Receive(int vendorId, int id, ReceiveReturnBody body, CancellationToken cancellationToken) =>
         await CallerAsync(vendorId, cancellationToken) is { } caller ? this.Respond(await returns.ReceiveAsync(caller, id, body.Restock, cancellationToken)) : NotFound();
 
+    /// <summary>Makes the GHN parcel back again when it could not be made at the approval.</summary>
+    [HttpPost("{id:int}/ship-back")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> ShipBack(int vendorId, int id, CancellationToken cancellationToken) =>
+        await CallerAsync(vendorId, cancellationToken) is { } caller ? this.Respond(await returns.ShipBackAsync(caller, id, cancellationToken)) : NotFound();
+
     private async Task<ReturnCaller?> CallerAsync(int vendorId, CancellationToken cancellationToken)
     {
         var caller = await accessContext.GetCallerAsync(cancellationToken);
@@ -171,6 +182,11 @@ public sealed class AdminReturnsController(IReturnService returns, ICurrentUser 
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> Receive(int id, ReceiveReturnBody body, CancellationToken cancellationToken) =>
         this.Respond(await returns.ReceiveAsync(Caller, id, body.Restock, cancellationToken));
+
+    [HttpPost("{id:int}/ship-back")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> ShipBack(int id, CancellationToken cancellationToken) =>
+        this.Respond(await returns.ShipBackAsync(Caller, id, cancellationToken));
 
     [HttpPost("{id:int}/refund")]
     [ValidateAntiForgeryToken]

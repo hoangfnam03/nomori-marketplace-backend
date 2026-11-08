@@ -96,21 +96,22 @@ public sealed class AdminDiscountsController(IDiscountService discountService, I
     }
 }
 
+/// <param name="Kind"><c>product</c> (takes off the items, the default) or <c>shipping</c> (takes off the shipping).</param>
 public sealed record SaveDiscountRequest(
     string? Name, string? Code, string? Type, decimal Value, decimal? MaxDiscountAmount, DateTime? StartsOnUtc, DateTime? EndsOnUtc,
-    decimal? MinSubtotal, int? MaxUses, int? MaxUsesPerCustomer, bool Enabled = true)
+    decimal? MinSubtotal, int? MaxUses, int? MaxUsesPerCustomer, bool Enabled = true, string? Kind = null)
 {
     public SaveDiscountCommand ToCommand() => new(
-        Name, Code, Type, Value, MaxDiscountAmount, AsUtc(StartsOnUtc), AsUtc(EndsOnUtc), MinSubtotal, MaxUses, MaxUsesPerCustomer, Enabled);
+        Name, Code, Type, Value, MaxDiscountAmount, AsUtc(StartsOnUtc), AsUtc(EndsOnUtc), MinSubtotal, MaxUses, MaxUsesPerCustomer, Enabled, Kind);
 
     private static DateTime? AsUtc(DateTime? value) => value is null ? null : DateTime.SpecifyKind(value.Value, DateTimeKind.Utc);
 }
 
 public sealed record DiscountResponse(
     int Id, string Name, string Code, string Type, decimal Value, decimal? MaxDiscountAmount, DateTime? StartsOnUtc, DateTime? EndsOnUtc,
-    decimal? MinSubtotal, int? MaxUses, int? MaxUsesPerCustomer, int UsedCount, bool Enabled, string Funding, DateTime CreatedOnUtc)
+    decimal? MinSubtotal, int? MaxUses, int? MaxUsesPerCustomer, int UsedCount, bool Enabled, string Funding, DateTime CreatedOnUtc, string Kind)
 {
     public static DiscountResponse From(Discount d) => new(
         d.Id, d.Name, d.Code, DiscountRules.ToWire(d.Type), d.Value, d.MaxDiscountAmount, d.StartsOnUtc, d.EndsOnUtc, d.MinSubtotal, d.MaxUses,
-        d.MaxUsesPerCustomer, d.UsedCount, d.Enabled, DiscountRules.ToWire(d.Funding), d.CreatedOnUtc);
+        d.MaxUsesPerCustomer, d.UsedCount, d.Enabled, DiscountRules.ToWire(d.Funding), d.CreatedOnUtc, DiscountRules.ToWire(d.Kind));
 }

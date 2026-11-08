@@ -20,6 +20,9 @@ public static class OrderErrors
 {
     public const string InvalidTransition = "order.invalid_transition";
     public const string PlacementConflict = "order.placement_conflict";
+
+    /// <summary>A return of the shop order is still in progress: it cannot be completed until the return is settled.</summary>
+    public const string ReturnOpen = "order.return_open";
 }
 
 /// <summary>The stored value is part of the database contract: add at the end, never renumber.</summary>
@@ -30,7 +33,10 @@ public enum ShopOrderStatus
     Shipped = 2,
     Delivered = 3,
     Completed = 4,
-    Cancelled = 5
+    Cancelled = 5,
+
+    /// <summary>Every item came back and was refunded. Final, like cancelled, but the goods were sold and returned.</summary>
+    Returned = 6
 }
 
 public enum OrderActor
@@ -47,7 +53,8 @@ public enum OrderAction
     Ship = 1,
     Deliver = 2,
     Complete = 3,
-    Cancel = 4
+    Cancel = 4,
+    Return = 5
 }
 
 /// <summary>The status of a whole order, derived from its shop orders. It is never stored.</summary>
@@ -55,7 +62,8 @@ public enum OverallOrderStatus
 {
     Processing = 0,
     Completed = 1,
-    Cancelled = 2
+    Cancelled = 2,
+    Returned = 3
 }
 
 public sealed class Order
@@ -66,12 +74,19 @@ public sealed class Order
     public string PlacementKey { get; set; } = string.Empty;
     public string CurrencyCode { get; set; } = string.Empty;
     public decimal Subtotal { get; set; }
+
+    /// <summary>What the customer pays for shipping, over all shop orders: after the shipping code.</summary>
     public decimal ShippingTotal { get; set; }
 
-    /// <summary>What the discount code took off the items, over all shop orders. Shipping is never discounted.</summary>
+    /// <summary>What the item code took off the items, over all shop orders.</summary>
     public decimal DiscountTotal { get; set; }
 
     public string? DiscountCode { get; set; }
+
+    /// <summary>What the shipping code took off the shipping, over all shop orders. <see cref="ShippingTotal"/> is already net of it.</summary>
+    public decimal ShippingDiscountTotal { get; set; }
+
+    public string? ShippingDiscountCode { get; set; }
 
     /// <summary>The tax charged on the items, over all shop orders. The platform collects it.</summary>
     public decimal TaxTotal { get; set; }
@@ -119,7 +134,18 @@ public sealed class ShopOrder
     public string ShopName { get; set; } = string.Empty;
     public ShopOrderStatus Status { get; set; }
     public decimal Subtotal { get; set; }
+
+    /// <summary>What the customer pays for this shop order's shipping, after the shipping code (<see cref="ShippingDiscount"/>).</summary>
     public decimal ShippingFee { get; set; }
+
+    /// <summary>The part of the order's shipping code that falls on this shop order; the fee before it is ShippingFee + ShippingDiscount.</summary>
+    public decimal ShippingDiscount { get; set; }
+
+    /// <summary>
+    /// Who bears <see cref="ShippingDiscount"/>: <c>platform</c> or <c>shop</c>; null without a shipping code. What a shop funds is already in
+    /// <see cref="ShopShippingCost"/>, so settlement needs nothing more.
+    /// </summary>
+    public string? ShippingDiscountFunding { get; set; }
 
     /// <summary>The part of the order's discount that falls on this shop order.</summary>
     public decimal DiscountAmount { get; set; }
@@ -160,6 +186,12 @@ public sealed class ShopOrder
 
     public List<OrderLine> Lines { get; set; } = [];
 
+    /// <summary>A return of this shop order is waiting for a decision, the goods or the refund; filled by reads. It cannot be completed meanwhile.</summary>
+    public bool HasOpenReturn { get; set; }
+
+    /// <summary>What was refunded to the customer through returns of this shop order; filled by reads.</summary>
+    public decimal RefundedAmount { get; set; }
+
     /// <summary>The order header (recipient, currency, payment method); filled by shop order reads.</summary>
     public Order? Order { get; set; }
 }
@@ -182,6 +214,9 @@ public sealed class OrderLine
     public decimal TaxRate { get; set; }
 
     public decimal TaxAmount { get; set; }
+
+    /// <summary>Where the line's return stands (the latest that was not rejected or withdrawn); null when it was never returned. Filled by reads.</summary>
+    public Returns.ReturnStatus? ReturnStatus { get; set; }
 }
 
 public sealed record OrderHistoryEntry(
@@ -197,9 +232,10 @@ public sealed record NewOrderLine(
     int ProductId, int? CombinationId, string? Name, string? VariantLabel, string? Sku, int PictureId, int Quantity, decimal UnitPrice,
     decimal TaxRate = 0m, decimal TaxAmount = 0m);
 
+/// <param name="ShippingFee">What the customer pays for shipping, after <paramref name="ShippingDiscount"/>.</param>
 public sealed record NewShopOrder(
     int VendorId, string? ShippingMethodName, int? ShippingRateId, decimal ShippingFee, IReadOnlyList<NewOrderLine>? Lines, decimal DiscountAmount = 0m,
-    decimal ShopShippingCost = 0m);
+    decimal ShopShippingCost = 0m, decimal ShippingDiscount = 0m);
 
 /// <summary>The code behind the discount amounts of the shop orders, and who funds it (<c>platform</c> or <c>shop</c>).</summary>
 public sealed record NewOrderDiscount(string? Code, string? Funding);
@@ -207,7 +243,7 @@ public sealed record NewOrderDiscount(string? Code, string? Funding);
 /// <summary>What checkout decided. Totals are not part of it: the service computes them.</summary>
 public sealed record NewOrderCommand(
     int CustomerId, string? PlacementKey, string? PaymentMethod, string? CustomerNote, NewOrderRecipient? Recipient,
-    IReadOnlyList<NewShopOrder>? Shops, NewOrderDiscount? Discount = null, bool AwaitingPayment = false);
+    IReadOnlyList<NewShopOrder>? Shops, NewOrderDiscount? Discount = null, bool AwaitingPayment = false, NewOrderDiscount? ShippingDiscount = null);
 
 public sealed record ShipCommand(string? Carrier, string? TrackingNumber);
 
@@ -227,7 +263,7 @@ public sealed record ShopOrderDetail(ShopOrder ShopOrder, IReadOnlyList<OrderHis
 
 public static class OrderRules
 {
-    public static bool IsFinal(ShopOrderStatus status) => status is ShopOrderStatus.Completed or ShopOrderStatus.Cancelled;
+    public static bool IsFinal(ShopOrderStatus status) => status is ShopOrderStatus.Completed or ShopOrderStatus.Cancelled or ShopOrderStatus.Returned;
 
     /// <summary>
     /// The status an action leads to, or null when this actor may not do it from this status.
@@ -241,6 +277,8 @@ public static class OrderRules
         // The shop, or the system when the carrier reports the delivery (GHN webhook).
         (OrderAction.Deliver, ShopOrderStatus.Shipped, OrderActor.Shop or OrderActor.System) => ShopOrderStatus.Delivered,
         (OrderAction.Complete, ShopOrderStatus.Delivered, OrderActor.Customer or OrderActor.System) => ShopOrderStatus.Completed,
+        // Only the system, when the last item of the shop order is refunded (F21).
+        (OrderAction.Return, ShopOrderStatus.Delivered or ShopOrderStatus.Completed, OrderActor.System) => ShopOrderStatus.Returned,
 
         (OrderAction.Cancel, ShopOrderStatus.Pending or ShopOrderStatus.Confirmed, OrderActor.Shop) => ShopOrderStatus.Cancelled,
         (OrderAction.Cancel, ShopOrderStatus.Pending, OrderActor.Customer or OrderActor.System) => ShopOrderStatus.Cancelled,
@@ -259,7 +297,9 @@ public static class OrderRules
     {
         var list = statuses.ToList();
         if (list.Any(s => !IsFinal(s))) return OverallOrderStatus.Processing;
-        return list.Any(s => s == ShopOrderStatus.Completed) ? OverallOrderStatus.Completed : OverallOrderStatus.Cancelled;
+        if (list.Any(s => s == ShopOrderStatus.Completed)) return OverallOrderStatus.Completed;
+        // Nothing kept: returned when something was returned, otherwise cancelled.
+        return list.Any(s => s == ShopOrderStatus.Returned) ? OverallOrderStatus.Returned : OverallOrderStatus.Cancelled;
     }
 
     public static decimal LineTotal(decimal unitPrice, int quantity, int decimalPlaces) =>
@@ -279,6 +319,7 @@ public static class OrderRules
         ShopOrderStatus.Shipped => "shipped",
         ShopOrderStatus.Delivered => "delivered",
         ShopOrderStatus.Completed => "completed",
+        ShopOrderStatus.Returned => "returned",
         _ => "cancelled"
     };
 
@@ -316,6 +357,7 @@ public static class OrderRules
     {
         OverallOrderStatus.Processing => "processing",
         OverallOrderStatus.Completed => "completed",
+        OverallOrderStatus.Returned => "returned",
         _ => "cancelled"
     };
 }
@@ -377,6 +419,9 @@ public interface IOrderService
 
     /// <summary>The carrier reports the parcel delivered: the system moves the shipped shop order to delivered.</summary>
     Task<CatalogResult<ShopOrderDetail>> DeliverByCarrierAsync(int shopOrderId, string note, CancellationToken cancellationToken);
+
+    /// <summary>The customer never confirmed receipt: the system completes the delivered shop order. Refused while a return is open.</summary>
+    Task<CatalogResult<ShopOrderDetail>> CompleteAsSystemAsync(int shopOrderId, string note, CancellationToken cancellationToken);
 
     // ---- Customers ----
 
