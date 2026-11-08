@@ -20,7 +20,7 @@ public sealed class DiscountTests
         private int nextId = 1;
 
         public List<Discount> Discounts { get; } = [];
-        public List<(int DiscountId, int? OrderId, int CustomerId, decimal Amount)> Usages { get; } = [];
+        public List<(int DiscountId, int? OrderId, int CustomerId, decimal Amount, DiscountKind Kind)> Usages { get; } = [];
 
         /// <summary>Runs just before a redeem is checked, so a test can play another buyer who got there first.</summary>
         public Action? BeforeRedeem { get; set; }
@@ -70,20 +70,22 @@ public sealed class DiscountTests
             if (discount.MaxUses is { } total && discount.UsedCount >= total) return Task.FromResult(RedeemOutcome.LimitReached);
             if (discount.MaxUsesPerCustomer is { } each && Usages.Count(u => u.DiscountId == discount.Id && u.CustomerId == request.CustomerId) >= each)
                 return Task.FromResult(RedeemOutcome.CustomerLimitReached);
-            if (Usages.Any(u => u.OrderId == request.OrderId)) return Task.FromResult(RedeemOutcome.Unavailable);
+            if (Usages.Any(u => u.OrderId == request.OrderId && u.Kind == request.Kind)) return Task.FromResult(RedeemOutcome.Unavailable);
 
-            Usages.Add((discount.Id, request.OrderId, request.CustomerId, request.Amount));
+            Usages.Add((discount.Id, request.OrderId, request.CustomerId, request.Amount, request.Kind));
             discount.UsedCount++;
             return Task.FromResult(RedeemOutcome.Redeemed);
         }
 
         public Task<bool> ReleaseAsync(int orderId, CancellationToken cancellationToken)
         {
-            var usage = Usages.FirstOrDefault(u => u.OrderId == orderId);
-            if (usage.DiscountId == 0) return Task.FromResult(false);
-            Usages.Remove(usage);
-            Discounts.Single(d => d.Id == usage.DiscountId).UsedCount--;
-            return Task.FromResult(true);
+            var usages = Usages.Where(u => u.OrderId == orderId).ToList();
+            foreach (var usage in usages)
+            {
+                Usages.Remove(usage);
+                Discounts.Single(d => d.Id == usage.DiscountId).UsedCount--;
+            }
+            return Task.FromResult(usages.Count > 0);
         }
     }
 
@@ -435,7 +437,7 @@ public sealed class DiscountTests
         var used = await f.MakeAsync(null, "USED");
         used.UsedCount = 1;
         var released = await f.MakeAsync(null, "RELEASED");
-        f.Store.Usages.Add((released.Id, 1, Buyer, 1m));
+        f.Store.Usages.Add((released.Id, 1, Buyer, 1m, DiscountKind.Product));
 
         Assert.True((await f.Create().DeleteAsync(null, unused.Id, Admin, CancellationToken.None)).Succeeded);
         Assert.Equal(DiscountErrors.InUse, (await f.Create().DeleteAsync(null, used.Id, Admin, CancellationToken.None)).ErrorCode);
@@ -474,7 +476,7 @@ public sealed class DiscountTests
     {
         var f = new Fixture();
         var discount = await f.MakeAsync(perCustomer: 1);
-        f.Store.Usages.Add((discount.Id, 1, Buyer, 1m));
+        f.Store.Usages.Add((discount.Id, 1, Buyer, 1m, DiscountKind.Product));
 
         Assert.Equal(DiscountReasons.CustomerLimitReached, (await f.Create().CheckCouponAsync("WELCOME10", Buyer, Cart((Shop, 20)), CancellationToken.None)).Reason);
         Assert.NotNull((await f.Create().CheckCouponAsync("WELCOME10", Buyer + 1, Cart((Shop, 20)), CancellationToken.None)).Applied);
@@ -535,7 +537,7 @@ public sealed class DiscountTests
         await f.MakeAsync(code: "ONCE", perCustomer: 1);
         await f.MakeAsync(code: "OFF", enabled: false);
         var once = f.Store.Discounts.Single(d => d.Code == "ONCE");
-        f.Store.Usages.Add((once.Id, 1, Buyer, 1m));
+        f.Store.Usages.Add((once.Id, 1, Buyer, 1m, DiscountKind.Product));
 
         var offers = await f.Create().GetOffersAsync(Buyer, Cart((Shop, 40m)), CancellationToken.None);
 
@@ -609,5 +611,48 @@ public sealed class DiscountTests
         Assert.Empty(f.Store.Usages);
         Assert.Single(f.Audit.Events, e => e == "discount.released");
         Assert.Equal(RedeemOutcome.Redeemed, await f.Create().RedeemAsync(applied, Buyer + 1, 8, CancellationToken.None));
+    }
+
+    // ---- Kinds ----
+
+    [Fact]
+    public async Task ACodeIsForItemsUnlessItSaysShippingAndAnUnknownKindIsAFieldError()
+    {
+        var f = new Fixture();
+
+        var items = await f.Create().CreateAsync(null, Command(), Admin, CancellationToken.None);
+        var shipping = await f.Create().CreateAsync(null, Command(code: "FREESHIP") with { Kind = "shipping" }, Admin, CancellationToken.None);
+        var unknown = await f.Create().CreateAsync(null, Command(code: "ODD") with { Kind = "tax" }, Admin, CancellationToken.None);
+
+        Assert.Equal((DiscountKind.Product, DiscountKind.Shipping), (items.Value!.Kind, shipping.Value!.Kind));
+        Assert.Contains("kind", unknown.Errors.Keys);
+    }
+
+    [Fact]
+    public void AShippingCodeKeepsItsMinimumOnTheItemsButTakesOffTheShipping()
+    {
+        var code = Rule(DiscountType.Fixed, 30);
+        code.Kind = DiscountKind.Shipping;
+        code.MinSubtotal = 50;
+        var shipping = Cart((Shop, 20), (OtherShop, 10));
+
+        var below = DiscountRules.Evaluate(code, 0, Now, Cart((Shop, 30), (OtherShop, 10)), 2, shipping);
+        var above = DiscountRules.Evaluate(code, 0, Now, Cart((Shop, 40), (OtherShop, 20)), 2, shipping);
+
+        Assert.Equal(DiscountReasons.MinSubtotal, below.Reason);
+        Assert.Equal((30m, 20m, 10m), (above.Applied!.Amount, above.Applied.Split[Shop], above.Applied.Split[OtherShop]));
+        // No shipping chosen yet: nothing to take off.
+        Assert.Equal(DiscountReasons.NothingToDiscount, DiscountRules.Evaluate(code, 0, Now, Cart((Shop, 60)), 2).Reason);
+    }
+
+    [Fact]
+    public async Task ACodeOfTheOtherKindIsRefusedAtCheckout()
+    {
+        var f = new Fixture();
+        await f.MakeAsync();
+
+        var check = await f.Create().CheckCouponAsync("WELCOME10", DiscountKind.Shipping, Buyer, Cart((Shop, 40)), Cart((Shop, 5)), CancellationToken.None);
+
+        Assert.Equal(DiscountReasons.WrongKind, check.Reason);
     }
 }

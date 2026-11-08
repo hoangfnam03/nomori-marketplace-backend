@@ -41,7 +41,16 @@ public sealed class GhnTests
 
         public Task<GhnResult<IReadOnlyList<GhnProvince>>> GetProvincesAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<GhnResult<IReadOnlyList<GhnWard>>> GetWardsAsync(int provinceId, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<GhnResult<GhnCreatedOrder>> CreateOrderAsync(GhnCreateOrderRequest request, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public List<GhnCreateOrderRequest> Created { get; } = [];
+        public string? CreateError { get; set; }
+
+        public Task<GhnResult<GhnCreatedOrder>> CreateOrderAsync(GhnCreateOrderRequest request, CancellationToken cancellationToken)
+        {
+            if (CreateError is not null) return Task.FromResult(GhnResult.Fail<GhnCreatedOrder>(CreateError));
+            Created.Add(request);
+            return Task.FromResult(GhnResult.Ok(new GhnCreatedOrder("LBACK1", 50_000, null)));
+        }
+
         public Task<GhnResult<GhnOrderDetail>> GetOrderAsync(string orderCode, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<GhnResult<string>> GetLabelUrlAsync(string orderCode, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
@@ -113,7 +122,7 @@ public sealed class GhnTests
         new() { Enabled = enabled, Token = "t", ShopId = 1, ItemWeightGrams = 500, VndPerPrimaryUnit = 25_000m, InsureParcels = insure };
 
     private static GhnShippingService Service(FakeGhnClient client, GhnOptions settings, FakeCurrencyStore? currencies = null, FakeGhnStore? store = null) =>
-        new(client, store ?? new FakeGhnStore(), null!, null!, new FakePrimaryCurrency(),
+        new(client, store ?? new FakeGhnStore(), null!, null!, new ReturnTests.FakeReturnStore(), new FakePrimaryCurrency(),
             new CurrencyService(currencies ?? new FakeCurrencyStore(), new RecordingAuditLog(), new TestClock()), new RecordingAuditLog(), new TestClock(),
             Options.Create(settings));
 
@@ -371,9 +380,10 @@ public sealed class GhnTests
         public PaymentJobTests.FakeOrders Orders { get; } = new();
         public FakeGhnStore Store { get; } = new();
         public FakeGhnClient Client { get; } = new();
+        public ReturnTests.FakeReturnStore Returns { get; } = new();
 
         public GhnShippingService Create(string secret = "s3cret") =>
-            new(Client, Store, Orders, Tracking, new FakePrimaryCurrency(),
+            new(Client, Store, Orders, Tracking, Returns, new FakePrimaryCurrency(),
                 new CurrencyService(new FakeCurrencyStore(), new RecordingAuditLog(), new TestClock()), new RecordingAuditLog(), new TestClock(),
                 Options.Create(new GhnOptions { Enabled = true, Token = "t", ShopId = 229760, WebhookSecret = secret, VndPerPrimaryUnit = 25_000m, InsureParcels = false }));
     }
@@ -578,5 +588,56 @@ public sealed class GhnTests
         var saved = await Save(500, 30, 20, 10);
         Assert.Equal((500, 30, 20, 10), (saved.Value!.WeightGrams, saved.Value.LengthCm, saved.Value.WidthCm, saved.Value.HeightCm));
         Assert.True((await Save(800)).Succeeded);
+    }
+
+    // ---- Returns: the parcel back ----
+
+    private static Core.Returns.ReturnRequest ReturnOf(int vendorId, string reason = "damaged") => new()
+    {
+        Id = 1, Number = "RT261108-0001", OrderId = 9, VendorId = vendorId, Reason = reason, RefundAmount = 20m, CurrencyCode = "USD",
+        Lines = [new Core.Returns.ReturnLine { ProductId = 1, Name = "Mug", VariantLabel = "Red", Quantity = 2, Amount = 20m }]
+    };
+
+    [Fact]
+    public async Task TheParcelBackIsPickedUpAtTheCustomerAndDeliveredToTheShopWithNothingToCollect()
+    {
+        var client = new FakeGhnClient();
+
+        var shipment = await Service(client, Configured()).ShipBackAsync(ReturnOf(PickupShop), CancellationToken.None);
+
+        Assert.Equal(("LBACK1", 2m), (shipment!.TrackingNumber, shipment.Fee));
+        var request = Assert.Single(client.Created);
+        Assert.Equal(("Khach", "0903428409", Saigon.WardId), (request.From.Name, request.From.Phone, request.From.WardId));
+        Assert.Equal(("Meo", "0901234567", Hanoi.WardId), (request.ToName, request.ToPhone, request.ToWardId));
+        Assert.Equal((0L, "RT261108-0001"), (request.CodAmountVnd, request.ClientOrderCode));
+        Assert.Equal(("Mug (Red)", 2), (Assert.Single(request.Items).Name, request.Items[0].Quantity));
+    }
+
+    [Fact]
+    public async Task NoParcelBackWithoutGhnAndAnErrorWhenItCannotBeMade()
+    {
+        var client = new FakeGhnClient();
+        Assert.Null(await Service(client, Configured(enabled: false)).ShipBackAsync(ReturnOf(PickupShop), CancellationToken.None));
+
+        var noPickup = await Service(client, Configured()).ShipBackAsync(ReturnOf(999), CancellationToken.None);
+        Assert.False(noPickup!.Succeeded);
+
+        client.CreateError = "Bad address";
+        var refused = await Service(client, Configured()).ShipBackAsync(ReturnOf(PickupShop), CancellationToken.None);
+        Assert.Equal("GHN: Bad address", refused!.Error);
+    }
+
+    [Fact]
+    public async Task AWebhookForAParcelBackWritesItsStatusOnTheReturn()
+    {
+        var f = new WebhookFixture();
+        var request = f.Returns.Seed(new Core.Returns.ReturnRequest { ShopOrderId = 1, Number = "RT1" });
+        await f.Returns.SetShipmentAsync(request.Id, new Core.Returns.ReturnShipment("LBACK1", 2m, null), "shop", DateTime.UtcNow, CancellationToken.None);
+
+        var outcome = await f.Create().HandleWebhookAsync(Hook("picked", code: "LBACK1"), CancellationToken.None);
+
+        Assert.Equal(GhnWebhookOutcome.Handled, outcome);
+        Assert.Equal(GhnRules.NoteOf("picked"), (await f.Returns.GetAsync(request.Id, CancellationToken.None))!.ReturnShipmentStatus);
+        Assert.Empty(f.Orders.DeliveredByCarrier);
     }
 }

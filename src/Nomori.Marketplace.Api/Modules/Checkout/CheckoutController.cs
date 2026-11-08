@@ -51,22 +51,24 @@ public sealed class CheckoutController(ICheckoutService checkoutService, ICurren
 
 public sealed record ShippingChoiceBody(int VendorId, int RateId);
 
+/// <param name="CouponCode">The item code; <paramref name="ShippingCouponCode"/> is the shipping code. Either, both or neither.</param>
 /// <param name="CartItemIds">The cart lines to buy now; leave out to buy the whole cart.</param>
 public sealed record CheckoutChoicesRequest(
-    int? AddressId, ShippingChoiceBody[]? ShippingChoices, string? PaymentMethod, string? CouponCode = null, int[]? CartItemIds = null)
+    int? AddressId, ShippingChoiceBody[]? ShippingChoices, string? PaymentMethod, string? CouponCode = null, int[]? CartItemIds = null,
+    string? ShippingCouponCode = null)
 {
     public CheckoutChoices ToChoices() =>
-        new(AddressId, ShippingChoices?.Select(c => new ShippingChoice(c.VendorId, c.RateId)).ToList(), PaymentMethod, CouponCode, CartItemIds);
+        new(AddressId, ShippingChoices?.Select(c => new ShippingChoice(c.VendorId, c.RateId)).ToList(), PaymentMethod, CouponCode, CartItemIds, ShippingCouponCode);
 }
 
 /// <param name="CartItemIds">The cart lines to buy now; leave out to buy the whole cart. Lines left out stay in the cart.</param>
 public sealed record PlaceOrderBody(
     int? AddressId, ShippingChoiceBody[]? ShippingChoices, string? PaymentMethod, string? IdempotencyKey, bool AcceptedTerms, string? Note,
-    string? CouponCode = null, int[]? CartItemIds = null)
+    string? CouponCode = null, int[]? CartItemIds = null, string? ShippingCouponCode = null)
 {
     public PlaceOrderRequest ToRequest() => new(
         AddressId, ShippingChoices?.Select(c => new ShippingChoice(c.VendorId, c.RateId)).ToList(), PaymentMethod, IdempotencyKey, AcceptedTerms, Note,
-        CouponCode, CartItemIds);
+        CouponCode, CartItemIds, ShippingCouponCode);
 }
 
 public sealed record CheckoutShippingOptionResponse(
@@ -81,25 +83,33 @@ public sealed record CheckoutShopResponse(
 
 public sealed record CheckoutPaymentMethodResponse(string SystemName, string DisplayName, bool IsOffline, bool Redirects);
 
-public sealed record CheckoutDiscountResponse(string Code, string Name, string Funding, decimal Amount, IReadOnlyDictionary<int, decimal> Split);
+public sealed record CheckoutDiscountResponse(string Code, string Name, string Funding, decimal Amount, IReadOnlyDictionary<int, decimal> Split)
+{
+    public static CheckoutDiscountResponse? From(CheckoutDiscount? d) =>
+        d is null ? null : new(d.Code, d.Name, Core.Discounts.DiscountRules.ToWire(d.Funding), d.Amount, d.Split);
+}
 
 public sealed record CheckoutTaxResponse(decimal Total, IReadOnlyDictionary<int, decimal> PerShop);
 
-/// <summary>A code to pick at checkout. <c>Amount</c> is what it takes off now; when it is null, <c>Reason</c> says why it cannot be used.</summary>
+/// <summary>
+/// A code to pick at checkout. <c>Kind</c> is <c>product</c> (takes off the items) or <c>shipping</c> (takes off the shipping). <c>Amount</c> is
+/// what it takes off now; when it is null, <c>Reason</c> says why it cannot be used.
+/// </summary>
 public sealed record CheckoutCouponResponse(
     string Code, string Name, string Funding, int? VendorId, string Type, decimal Value, decimal? MaxDiscountAmount, decimal? MinSubtotal,
-    DateTime? StartsOnUtc, DateTime? EndsOnUtc, decimal? Amount, string? Reason, decimal? Shortfall)
+    DateTime? StartsOnUtc, DateTime? EndsOnUtc, decimal? Amount, string? Reason, decimal? Shortfall, string Kind)
 {
     public static CheckoutCouponResponse From(Core.Discounts.CouponOffer o) => new(
         o.Discount.Code, o.Discount.Name, Core.Discounts.DiscountRules.ToWire(o.Discount.Funding), o.Discount.VendorId,
         Core.Discounts.DiscountRules.ToWire(o.Discount.Type), o.Discount.Value, o.Discount.MaxDiscountAmount, o.Discount.MinSubtotal,
-        o.Discount.StartsOnUtc, o.Discount.EndsOnUtc, o.Amount, o.Reason, o.Shortfall);
+        o.Discount.StartsOnUtc, o.Discount.EndsOnUtc, o.Amount, o.Reason, o.Shortfall, Core.Discounts.DiscountRules.ToWire(o.Discount.Kind));
 }
 
 public sealed record CheckoutPreviewResponse(
     Core.Cart.CartView Cart, int? AddressId, IReadOnlyList<CheckoutShopResponse> Shops, IReadOnlyList<CheckoutPaymentMethodResponse> PaymentMethods,
     string? PaymentMethod, decimal Subtotal, decimal? ShippingTotal, decimal? Total, IReadOnlyList<string> Problems, bool CanPlace,
-    CheckoutDiscountResponse? Discount, string? CouponReason, CheckoutTaxResponse? Tax, IReadOnlyList<CheckoutCouponResponse> Coupons)
+    CheckoutDiscountResponse? Discount, string? CouponReason, CheckoutTaxResponse? Tax, IReadOnlyList<CheckoutCouponResponse> Coupons,
+    CheckoutDiscountResponse? ShippingDiscount, string? ShippingCouponReason)
 {
     public static CheckoutPreviewResponse From(CheckoutPreview p) => new(
         p.Cart, p.AddressId,
@@ -107,9 +117,8 @@ public sealed record CheckoutPreviewResponse(
             s.VendorId, s.VendorName, s.Subtotal, s.Options.Select(CheckoutShippingOptionResponse.From).ToList(), s.Chosen?.RateId, s.Chosen?.Fee)).ToList(),
         p.PaymentMethods.Select(m => new CheckoutPaymentMethodResponse(m.SystemName, m.DisplayName, m.Kind == PaymentProviderKind.Offline, m.Kind == PaymentProviderKind.Hosted)).ToList(),
         p.PaymentMethod, p.Subtotal, p.ShippingTotal, p.Total, p.Problems, p.CanPlace,
-        p.Discount is null ? null : new CheckoutDiscountResponse(p.Discount.Code, p.Discount.Name, Core.Discounts.DiscountRules.ToWire(p.Discount.Funding), p.Discount.Amount, p.Discount.Split),
-        p.CouponReason, p.Tax is null ? null : new CheckoutTaxResponse(p.Tax.Total, p.Tax.PerShop),
-        (p.Coupons ?? []).Select(CheckoutCouponResponse.From).ToList());
+        CheckoutDiscountResponse.From(p.Discount), p.CouponReason, p.Tax is null ? null : new CheckoutTaxResponse(p.Tax.Total, p.Tax.PerShop),
+        (p.Coupons ?? []).Select(CheckoutCouponResponse.From).ToList(), CheckoutDiscountResponse.From(p.ShippingDiscount), p.ShippingCouponReason);
 }
 
 public sealed record OrderPaymentInfoResponse(bool AwaitingPayment, string? PaymentStatus, string? RedirectUrl);
@@ -118,7 +127,8 @@ public sealed record PlacedShopOrderResponse(int Id, string Number, int VendorId
 
 public sealed record PlacedOrderResponse(
     int OrderId, string Number, string CurrencyCode, decimal Subtotal, decimal ShippingTotal, decimal DiscountTotal, decimal TaxTotal, decimal Total, string PaymentMethod,
-    string? PaymentStatus, bool Replayed, IReadOnlyList<PlacedShopOrderResponse> ShopOrders, bool AwaitingPayment, string? PaymentRedirectUrl)
+    string? PaymentStatus, bool Replayed, IReadOnlyList<PlacedShopOrderResponse> ShopOrders, bool AwaitingPayment, string? PaymentRedirectUrl,
+    decimal ShippingDiscountTotal)
 {
     public static PlacedOrderResponse From(PlacedOrder placed)
     {
@@ -127,6 +137,6 @@ public sealed record PlacedOrderResponse(
             o.Id, o.Number, o.CurrencyCode, o.Subtotal, o.ShippingTotal, o.DiscountTotal, o.TaxTotal, o.Total, o.PaymentMethod,
             placed.Payment is null ? null : PaymentRules.ToWire(placed.Payment.Status), placed.Replayed,
             o.ShopOrders.Select(s => new PlacedShopOrderResponse(s.Id, s.Number, s.VendorId, s.ShopName, s.Total)).ToList(),
-            o.AwaitingPayment, placed.Payment?.RedirectUrl);
+            o.AwaitingPayment, placed.Payment?.RedirectUrl, o.ShippingDiscountTotal);
     }
 }

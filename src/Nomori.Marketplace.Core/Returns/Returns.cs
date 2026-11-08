@@ -25,6 +25,12 @@ public static class ReturnErrors
 
     /// <summary>No paid payment of the order can take this refund back. Refund by hand and say so (<c>manual</c>).</summary>
     public const string NoRefundablePayment = "return.no_refundable_payment";
+
+    /// <summary>The return has a shipment already, or is not approved: there is nothing to ship back.</summary>
+    public const string ShipmentNotNeeded = "return.shipment_not_needed";
+
+    /// <summary>No carrier is set up, so the customer sends the goods back by themselves.</summary>
+    public const string NoCarrier = "return.no_carrier";
 }
 
 /// <summary>The stored value is part of the database contract: add at the end, never renumber.</summary>
@@ -92,6 +98,21 @@ public sealed class ReturnRequest
     /// <summary>The payment the refund went through; null before the refund and for a refund made by hand.</summary>
     public int? PaymentId { get; set; }
 
+    // The carrier's parcel from the customer back to the shop, made when the return is approved (GHN). Without a carrier the customer sends it.
+    public string? ReturnTrackingNumber { get; set; }
+
+    /// <summary>What the carrier charges to bring the goods back, in the primary currency.</summary>
+    public decimal ReturnShippingFee { get; set; }
+
+    /// <summary>Who bears <see cref="ReturnShippingFee"/>: <c>customer</c> (taken off the refund) or <c>shop</c> (taken off its settlement).</summary>
+    public string? ReturnShippingPaidBy { get; set; }
+
+    /// <summary>Where the parcel back is, in words (the carrier's latest status).</summary>
+    public string? ReturnShipmentStatus { get; set; }
+
+    /// <summary>Why the parcel back could not be made; null when it was made or not tried.</summary>
+    public string? ReturnShipmentError { get; set; }
+
     public DateTime CreatedOnUtc { get; set; }
     public DateTime UpdatedOnUtc { get; set; }
     public List<ReturnLine> Lines { get; set; } = [];
@@ -126,8 +147,39 @@ public sealed record ReturnQuery(int? CustomerId, int? VendorId, ReturnStatus? S
 public sealed record ReturnTransition(
     int Id, ReturnStatus From, ReturnStatus To, string? ResolutionNote, bool? Restocked, int? PaymentId, DateTime NowUtc);
 
+/// <summary>The parcel back as the carrier made it, or why it could not.</summary>
+public sealed record ReturnShipment(string? TrackingNumber, decimal Fee, string? Error)
+{
+    public bool Succeeded => TrackingNumber is not null;
+}
+
+/// <summary>Makes the carrier's parcel from the customer back to the shop. Null when no carrier is set up.</summary>
+public interface IReturnShipper
+{
+    Task<ReturnShipment?> ShipBackAsync(ReturnRequest request, CancellationToken cancellationToken);
+}
+
+public static class ReturnPayers
+{
+    public const string Customer = "customer";
+    public const string Shop = "shop";
+}
+
 public static class ReturnRules
 {
+    /// <summary>
+    /// Who pays to bring the goods back: the customer when they no longer need them, the shop when the goods were at fault (damaged, wrong,
+    /// not as described, or another reason the shop accepted).
+    /// </summary>
+    public static string ShippingPayer(string reason) => reason == ReturnReasons.ChangedMind ? ReturnPayers.Customer : ReturnPayers.Shop;
+
+    /// <summary>What the customer actually gets back: the refund, less the return shipping when they pay it. Never negative.</summary>
+    public static decimal PayOut(ReturnRequest request) =>
+        Math.Max(0m, request.RefundAmount - (request.ReturnShippingPaidBy == ReturnPayers.Customer ? request.ReturnShippingFee : 0m));
+
+    /// <summary>The return shipping the shop bears, taken off its settlement with the refund.</summary>
+    public static decimal ShopShipping(ReturnRequest request) => request.ReturnShippingPaidBy == ReturnPayers.Shop ? request.ReturnShippingFee : 0m;
+
     /// <summary>The status an action leads to, or null when this actor may not do it from this status.</summary>
     public static ReturnStatus? Transition(ReturnStatus from, ReturnAction action, OrderActor actor) => (action, from, actor) switch
     {
@@ -140,12 +192,19 @@ public static class ReturnRules
         _ => null
     };
 
+    /// <summary>Every unit of every line was refunded: the shop order is returned whole.</summary>
+    public static bool IsReturnedWhole(IEnumerable<OrderLine> lines, IReadOnlyDictionary<int, int> refundedQuantities) =>
+        lines.All(l => refundedQuantities.GetValueOrDefault(l.Id) >= l.Quantity);
+
     /// <summary>A rejected or withdrawn return frees its quantities; every other status keeps them.</summary>
     public static bool HoldsQuantity(ReturnStatus status) => status is not (ReturnStatus.Rejected or ReturnStatus.Withdrawn);
 
-    /// <summary>Delivered or completed, and not longer ago than the window since the shop marked it delivered.</summary>
+    /// <summary>
+    /// Delivered, and not longer ago than the window since the shop marked it delivered. Once the customer confirmed receipt (completed) the
+    /// goods are accepted and can no longer be returned.
+    /// </summary>
     public static bool IsEligible(ShopOrderStatus status, DateTime? deliveredOnUtc, DateTime nowUtc, int windowDays) =>
-        status is ShopOrderStatus.Delivered or ShopOrderStatus.Completed
+        status is ShopOrderStatus.Delivered
         && deliveredOnUtc is { } delivered && nowUtc <= delivered.AddDays(Math.Max(1, windowDays));
 
     /// <summary>
@@ -199,6 +258,9 @@ public interface IReturnStore
     /// <summary>Quantity held by returns that are not rejected or withdrawn, per order line of the shop order.</summary>
     Task<IReadOnlyDictionary<int, int>> HeldQuantitiesAsync(int shopOrderId, CancellationToken cancellationToken);
 
+    /// <summary>Quantity of refunded returns, per order line of the shop order.</summary>
+    Task<IReadOnlyDictionary<int, int>> RefundedQuantitiesAsync(int shopOrderId, CancellationToken cancellationToken);
+
     Task<ReturnRequest?> GetAsync(int id, CancellationToken cancellationToken);
 
     /// <summary>Requests without lines, newest first.</summary>
@@ -206,6 +268,14 @@ public interface IReturnStore
 
     /// <summary>Compare-and-set of the status. False means the request was no longer in the expected status.</summary>
     Task<bool> TryTransitionAsync(ReturnTransition transition, CancellationToken cancellationToken);
+
+    /// <summary>Writes what came of making the parcel back (its number and fee, or the error).</summary>
+    Task SetShipmentAsync(int id, ReturnShipment shipment, string payer, DateTime nowUtc, CancellationToken cancellationToken);
+
+    /// <summary>The return whose parcel back has this carrier number; null when there is none.</summary>
+    Task<int?> FindByTrackingNumberAsync(string trackingNumber, CancellationToken cancellationToken);
+
+    Task SetShipmentStatusAsync(int id, string status, DateTime nowUtc, CancellationToken cancellationToken);
 
     /// <summary>Paid or partly refunded payments of the order, newest first.</summary>
     Task<IReadOnlyList<int>> PaymentIdsForOrderAsync(int orderId, CancellationToken cancellationToken);
@@ -233,6 +303,9 @@ public interface IReturnService
 
     /// <summary>The goods came back. <paramref name="restock"/> puts the units back on sale; leave it off for goods that cannot be sold again.</summary>
     Task<CatalogResult<ReturnRequest>> ReceiveAsync(ReturnCaller caller, int id, bool restock, CancellationToken cancellationToken);
+
+    /// <summary>Makes the carrier's parcel back again, for an approved return whose parcel could not be made.</summary>
+    Task<CatalogResult<ReturnRequest>> ShipBackAsync(ReturnCaller caller, int id, CancellationToken cancellationToken);
 
     // ---- Administrators ----
 

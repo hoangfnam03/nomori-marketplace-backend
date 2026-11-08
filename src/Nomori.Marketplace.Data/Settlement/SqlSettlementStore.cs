@@ -167,17 +167,20 @@ public sealed class SqlSettlementStore(IOptions<DatabaseOptions> options) : ISet
         await using var connection = await OpenAsync(cancellationToken);
         await using var cmd = connection.CreateCommand();
         cmd.CommandText = $"""
-            SELECT TOP (@Take) r.Id, r.RefundAmount, {OrderColumns}
+            SELECT TOP (@Take) r.Id, r.RefundAmount, CASE WHEN r.ReturnShippingPaidBy = 'shop' THEN r.ReturnShippingFee ELSE 0 END, {OrderColumns}
             FROM ReturnRequest r
             INNER JOIN ShopOrder s ON s.Id = r.ShopOrderId
             INNER JOIN CustomerOrder o ON o.Id = s.OrderId
             WHERE r.Status = 4 AND NOT EXISTS (SELECT 1 FROM SettlementEntry e WHERE e.ReturnRequestId = r.Id AND e.Kind = 1)
+              -- Only once the shop was credited with the sale: a shop order returned whole before completion was never paid to the shop.
+              AND EXISTS (SELECT 1 FROM SettlementEntry sale WHERE sale.ShopOrderId = s.Id AND sale.Kind = 0)
             ORDER BY r.Id
             """;
         cmd.Parameters.AddWithValue("@Take", take);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
         var rows = new List<SettlementRefundRow>();
-        while (await reader.ReadAsync(cancellationToken)) rows.Add(new SettlementRefundRow(reader.GetInt32(0), reader.GetDecimal(1), ReadOrder(reader, 2)));
+        while (await reader.ReadAsync(cancellationToken))
+            rows.Add(new SettlementRefundRow(reader.GetInt32(0), reader.GetDecimal(1), ReadOrder(reader, 3), reader.GetDecimal(2)));
         return rows;
     }
 

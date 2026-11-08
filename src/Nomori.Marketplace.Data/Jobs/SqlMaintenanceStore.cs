@@ -22,6 +22,18 @@ public sealed class SqlMaintenanceStore(IOptions<DatabaseOptions> options) : IMa
             ORDER BY o.CreatedOnUtc, o.Id
             """, take, createdBeforeUtc, cancellationToken);
 
+    public Task<IReadOnlyList<int>> DeliveredShopOrderIdsAsync(DateTime deliveredBeforeUtc, int take, CancellationToken cancellationToken) =>
+        IdsAsync("""
+            SELECT TOP (@Take) s.Id
+            FROM ShopOrder s
+            CROSS APPLY (SELECT MAX(h.CreatedOnUtc) AS DeliveredOnUtc FROM ShopOrderHistory h WHERE h.ShopOrderId = s.Id AND h.ToStatus = 3) d
+            WHERE s.Status = 3
+              AND d.DeliveredOnUtc < @Before
+              -- A return still requested, approved or received keeps the order open until it is settled.
+              AND NOT EXISTS (SELECT 1 FROM ReturnRequest r WHERE r.ShopOrderId = s.Id AND r.Status IN (0, 1, 3))
+            ORDER BY d.DeliveredOnUtc, s.Id
+            """, take, deliveredBeforeUtc, cancellationToken);
+
     public async Task<IReadOnlyList<int>> PaymentIdsForOrderAsync(int orderId, CancellationToken cancellationToken)
     {
         await using var connection = await OpenAsync(cancellationToken);

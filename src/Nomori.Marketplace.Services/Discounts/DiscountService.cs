@@ -32,7 +32,8 @@ public sealed class DiscountService(
         if (discount.Id == 0) return CatalogResult.Error<Discount>(DiscountErrors.CodeExists);
 
         await auditLog.WriteAsync("discount.created", actorCustomerId, entityType: "Discount", entityId: discount.Id,
-            details: new { discountId = discount.Id, vendorId, discount.Code, type = DiscountRules.ToWire(discount.Type) }, cancellationToken: cancellationToken);
+            details: new { discountId = discount.Id, vendorId, discount.Code, type = DiscountRules.ToWire(discount.Type), kind = DiscountRules.ToWire(discount.Kind) },
+            cancellationToken: cancellationToken);
         return CatalogResult.Success(discount);
     }
 
@@ -68,20 +69,30 @@ public sealed class DiscountService(
 
     // ---- Checkout ----
 
-    public async Task<CouponCheck> CheckCouponAsync(string? code, int customerId, IReadOnlyDictionary<int, decimal> shopSubtotals, CancellationToken cancellationToken)
+    public Task<CouponCheck> CheckCouponAsync(string? code, int customerId, IReadOnlyDictionary<int, decimal> shopSubtotals, CancellationToken cancellationToken) =>
+        CheckCouponAsync(code, DiscountKind.Product, customerId, shopSubtotals, new Dictionary<int, decimal>(), cancellationToken);
+
+    public async Task<CouponCheck> CheckCouponAsync(
+        string? code, DiscountKind kind, int customerId, IReadOnlyDictionary<int, decimal> shopSubtotals, IReadOnlyDictionary<int, decimal> shopShipping,
+        CancellationToken cancellationToken)
     {
         var normalized = DiscountRules.NormalizeCode(code);
         if (!DiscountRules.IsValidCode(normalized)) return new CouponCheck(null, DiscountReasons.NotFound);
 
         var discount = await store.GetByCodeAsync(normalized, cancellationToken);
         if (discount is null) return new CouponCheck(null, DiscountReasons.NotFound);
+        if (discount.Kind != kind) return new CouponCheck(null, DiscountReasons.WrongKind);
 
         var uses = discount.MaxUsesPerCustomer is null ? 0 : await store.CountCustomerUsesAsync(discount.Id, customerId, cancellationToken);
         var currency = await primaryCurrency.GetPrimaryAsync(cancellationToken);
-        return DiscountRules.Evaluate(discount, uses, clock.UtcNow, shopSubtotals, currency.DecimalPlaces);
+        return DiscountRules.Evaluate(discount, uses, clock.UtcNow, shopSubtotals, currency.DecimalPlaces, shopShipping);
     }
 
-    public async Task<IReadOnlyList<CouponOffer>> GetOffersAsync(int customerId, IReadOnlyDictionary<int, decimal> shopSubtotals, CancellationToken cancellationToken)
+    public Task<IReadOnlyList<CouponOffer>> GetOffersAsync(int customerId, IReadOnlyDictionary<int, decimal> shopSubtotals, CancellationToken cancellationToken) =>
+        GetOffersAsync(customerId, shopSubtotals, new Dictionary<int, decimal>(), cancellationToken);
+
+    public async Task<IReadOnlyList<CouponOffer>> GetOffersAsync(
+        int customerId, IReadOnlyDictionary<int, decimal> shopSubtotals, IReadOnlyDictionary<int, decimal> shopShipping, CancellationToken cancellationToken)
     {
         if (shopSubtotals.Count == 0) return [];
 
@@ -92,12 +103,13 @@ public sealed class DiscountService(
         var limited = discounts.Where(d => d.MaxUsesPerCustomer is not null).Select(d => d.Id).ToList();
         var uses = limited.Count == 0 ? new Dictionary<int, int>() : await store.CountCustomerUsesAsync(limited, customerId, cancellationToken);
         var places = (await primaryCurrency.GetPrimaryAsync(cancellationToken)).DecimalPlaces;
-        return DiscountRules.Rank(discounts.Select(d => DiscountRules.Offer(d, uses.GetValueOrDefault(d.Id), now, shopSubtotals, places)));
+        return DiscountRules.Rank(discounts.Select(d => DiscountRules.Offer(d, uses.GetValueOrDefault(d.Id), now, shopSubtotals, places, shopShipping)));
     }
 
     public async Task<RedeemOutcome> RedeemAsync(AppliedDiscount applied, int customerId, int orderId, CancellationToken cancellationToken)
     {
-        var outcome = await store.TryRedeemAsync(new RedeemRequest(applied.Discount.Id, customerId, orderId, applied.Amount, clock.UtcNow), cancellationToken);
+        var outcome = await store.TryRedeemAsync(
+            new RedeemRequest(applied.Discount.Id, customerId, orderId, applied.Amount, clock.UtcNow, applied.Discount.Kind), cancellationToken);
         if (outcome == RedeemOutcome.Redeemed)
             await auditLog.WriteAsync("discount.redeemed", customerId, entityType: "Discount", entityId: applied.Discount.Id,
                 details: new { discountId = applied.Discount.Id, orderId, applied.Amount }, cancellationToken: cancellationToken);
@@ -130,6 +142,8 @@ public sealed class DiscountService(
         var code = DiscountRules.NormalizeCode(command.Code);
         if (!DiscountRules.IsValidCode(code))
             errors["code"] = [$"The code needs {DiscountLimits.MinCodeLength} to {DiscountLimits.MaxCodeLength} letters, digits, '-' or '_'."];
+
+        if (!DiscountRules.TryParseKind(command.Kind, out _)) errors["kind"] = ["Choose product or shipping."];
 
         if (!DiscountRules.TryParseType(command.Type, out var type))
         {
@@ -172,6 +186,7 @@ public sealed class DiscountService(
         discount.Name = command.Name!.Trim();
         discount.Code = DiscountRules.NormalizeCode(command.Code);
         discount.Type = type;
+        discount.Kind = DiscountRules.TryParseKind(command.Kind, out var kind) ? kind : DiscountKind.Product;
         discount.Value = command.Value;
         discount.MaxDiscountAmount = type == DiscountType.Percentage ? command.MaxDiscountAmount : null;
         discount.StartsOnUtc = command.StartsOnUtc;

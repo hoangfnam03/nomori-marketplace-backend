@@ -456,6 +456,37 @@ public sealed class CartTests
     }
 
     [Fact]
+    public async Task RemoveShopDeletesOnlyThatShopsLines()
+    {
+        var f = new Fixture();
+        var a = await f.LiveAsync("A");
+        var a2 = await f.LiveAsync("A2");
+        var b = await f.LiveAsync("B", 5, vendorId: OtherShop);
+        await Add(f, a);
+        await Add(f, a2);
+        await Add(f, b);
+        await Add(f, a, 1, OtherBuyer);
+
+        var result = await f.Create().RemoveShopAsync(Buyer, Shop, CancellationToken.None);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal([OtherShop], result.Value!.Groups.Select(g => g.VendorId));
+        Assert.Equal(1, await f.Create().CountAsync(OtherBuyer, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task RemoveShopIsNotFoundWhenTheCartHasNothingFromIt()
+    {
+        var f = new Fixture();
+        await Add(f, await f.LiveAsync());
+
+        var result = await f.Create().RemoveShopAsync(Buyer, OtherShop, CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Single(f.Carts.Lines);
+    }
+
+    [Fact]
     public async Task ClearEmptiesOnlyTheCallersCart()
     {
         var f = new Fixture();

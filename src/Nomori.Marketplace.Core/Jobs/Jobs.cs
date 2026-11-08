@@ -22,6 +22,9 @@ public sealed class JobOptions
     /// <summary>A payment of a cancelled order is voided only after this long, so a gateway session left open can still report.</summary>
     public int StalePaymentGraceHours { get; set; } = 24;
 
+    /// <summary>A delivered shop order the customer has not confirmed is completed this many days after delivery (unless a return is open).</summary>
+    public int AutoCompleteDays { get; set; } = 7;
+
     public int ReservationRetentionDays { get; set; } = 30;
     public int CartRetentionDays { get; set; } = 90;
     public int RunRetentionDays { get; set; } = 30;
@@ -169,6 +172,11 @@ public interface IMaintenanceStore
 
     /// <summary>Pending or authorized payments of orders whose shop orders are all cancelled, last changed before the cut-off. Oldest first.</summary>
     Task<IReadOnlyList<int>> StalePaymentIdsAsync(DateTime changedBeforeUtc, int take, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Delivered shop orders marked delivered before the cut-off, with no return waiting for a decision, the goods or the refund. Oldest first.
+    /// </summary>
+    Task<IReadOnlyList<int>> DeliveredShopOrderIdsAsync(DateTime deliveredBeforeUtc, int take, CancellationToken cancellationToken);
 
     /// <summary>Closes active stock holds that expired. Returns how many.</summary>
     Task<int> CloseExpiredReservationsAsync(DateTime nowUtc, CancellationToken cancellationToken);

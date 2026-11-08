@@ -29,7 +29,7 @@ public sealed class CheckoutService(
     private sealed record State(
         CartView Cart, CustomerAddress? Address, IReadOnlyList<CheckoutShopShipping> Shops, IReadOnlyList<PaymentMethodView> Methods,
         PaymentMethodView? Method, IReadOnlyList<string> Problems, decimal? ShippingTotal, AppliedDiscount? Discount, string? CouponReason,
-        TaxCalculation? Tax);
+        TaxCalculation? Tax, AppliedDiscount? ShippingDiscount, string? ShippingCouponReason);
 
     /// <summary>A line as it will be sold: what to take from stock and what to write on the order.</summary>
     private sealed record SaleLine(int VendorId, NewOrderLine Line, bool Tracked, decimal LineTotal);
@@ -39,21 +39,30 @@ public sealed class CheckoutService(
     public async Task<CheckoutPreview> PreviewAsync(int customerId, CheckoutChoices choices, CancellationToken cancellationToken)
     {
         var state = await BuildAsync(customerId, choices, cancellationToken);
-        // Items minus the discount, plus shipping, plus tax; the discount never touches shipping and tax is charged on what is paid for the items.
+        // Items minus the item code, plus shipping minus the shipping code, plus tax. Tax is charged on what is paid for the items.
         var discounted = state.Cart.Subtotal - (state.Discount?.Amount ?? 0m);
-        var total = state.ShippingTotal is { } shipping ? discounted + shipping + (state.Tax?.Total ?? 0m) : (decimal?)null;
-        var discount = state.Discount is { } applied
-            ? new CheckoutDiscount(applied.Discount.Code, applied.Discount.Name, applied.Discount.Funding, applied.Amount, applied.Split)
-            : null;
-        // The codes to pick from, for the lines being bought. Only the preview lists them; placing checks the chosen code again.
+        var total = state.ShippingTotal is { } shipping
+            ? discounted + shipping - (state.ShippingDiscount?.Amount ?? 0m) + (state.Tax?.Total ?? 0m)
+            : (decimal?)null;
+        // The codes to pick from, for the lines being bought. Only the preview lists them; placing checks the chosen codes again.
         var coupons = state.Cart.Groups.Count == 0
             ? []
-            : await discountService.GetOffersAsync(customerId, state.Cart.Groups.ToDictionary(g => g.VendorId, g => g.Subtotal), cancellationToken);
+            : await discountService.GetOffersAsync(customerId, Subtotals(state.Cart), ShippingFees(state.Shops), cancellationToken);
         return new CheckoutPreview(
             state.Cart, state.Address?.Id, state.Shops, state.Methods, state.Method?.SystemName, state.Cart.Subtotal, state.ShippingTotal, total,
-            state.Problems, state.Problems.Count == 0, discount, state.CouponReason,
-            state.Tax is { } tax ? new CheckoutTax(tax.Total, tax.ShopTax) : null, coupons);
+            state.Problems, state.Problems.Count == 0, ToView(state.Discount), state.CouponReason,
+            state.Tax is { } tax ? new CheckoutTax(tax.Total, tax.ShopTax) : null, coupons, ToView(state.ShippingDiscount), state.ShippingCouponReason);
     }
+
+    private static CheckoutDiscount? ToView(AppliedDiscount? applied) => applied is null
+        ? null
+        : new CheckoutDiscount(applied.Discount.Code, applied.Discount.Name, applied.Discount.Funding, applied.Amount, applied.Split);
+
+    private static Dictionary<int, decimal> Subtotals(CartView cart) => cart.Groups.ToDictionary(g => g.VendorId, g => g.Subtotal);
+
+    /// <summary>The shipping each shop charges for the option the customer chose; a shop with nothing chosen yet is left out.</summary>
+    private static Dictionary<int, decimal> ShippingFees(IReadOnlyList<CheckoutShopShipping> shops) =>
+        shops.Where(s => s.Chosen is not null).ToDictionary(s => s.VendorId, s => s.Chosen!.Fee);
 
     // ---- Place ----
 
@@ -73,7 +82,8 @@ public sealed class CheckoutService(
             return await ReplayAsync(earlier, request.PaymentMethod, cancellationToken);
 
         var state = await BuildAsync(customerId,
-            new CheckoutChoices(request.AddressId, request.ShippingChoices, request.PaymentMethod, request.CouponCode, request.CartItemIds), cancellationToken);
+            new CheckoutChoices(request.AddressId, request.ShippingChoices, request.PaymentMethod, request.CouponCode, request.CartItemIds, request.ShippingCouponCode),
+            cancellationToken);
 
         // Problems with the cart come first (409): the customer has to go back to the cart. Then what the customer chose (400).
         if (state.Problems.Contains(CheckoutProblems.CartEmpty) || state.Problems.Contains(CheckoutProblems.CartIssues)
@@ -83,8 +93,12 @@ public sealed class CheckoutService(
 
         foreach (var problem in state.Problems.Where(p => !CheckoutRules.IsCartProblem(p)))
         {
-            errors[CheckoutRules.FieldOf(problem)] =
-                [problem == CheckoutProblems.CouponInvalid ? DiscountRules.MessageOf(state.CouponReason) : CheckoutRules.MessageOf(problem)];
+            errors[CheckoutRules.FieldOf(problem)] = [problem switch
+            {
+                CheckoutProblems.CouponInvalid => DiscountRules.MessageOf(state.CouponReason),
+                CheckoutProblems.ShippingCouponInvalid => DiscountRules.MessageOf(state.ShippingCouponReason),
+                _ => CheckoutRules.MessageOf(problem)
+            }];
         }
         if (!request.AcceptedTerms) errors["acceptedTerms"] = ["You have to accept the terms to place the order."];
         if (errors.Count > 0) return CatalogResult.Failure<PlacedOrder>(errors);
@@ -130,11 +144,14 @@ public sealed class CheckoutService(
         }
         var order = created.Value!;
 
-        // 2b. Use the code. The limits are checked again inside one transaction: someone may have taken the last use meanwhile.
-        if (state.Discount is { } discount
-            && await discountService.RedeemAsync(discount, customerId, order.Id, cancellationToken) != RedeemOutcome.Redeemed)
+        // 2b. Use the codes. The limits are checked again inside one transaction: someone may have taken the last use meanwhile.
+        foreach (var applied in new[] { state.Discount, state.ShippingDiscount })
         {
+            if (applied is null || await discountService.RedeemAsync(applied, customerId, order.Id, cancellationToken) == RedeemOutcome.Redeemed) continue;
+
             await orderService.CancelAsSystemAsync(order.Id, "Coupon no longer available", cancellationToken);
+            // The item code may have been used already when the shipping code fails; the cancelled order gives it back.
+            await discountService.ReleaseAsync(order.Id, cancellationToken);
             return CatalogResult.Error<PlacedOrder>(CheckoutErrors.CouponUnavailable);
         }
 
@@ -249,9 +266,23 @@ public sealed class CheckoutService(
         string? couponReason = null;
         if (!string.IsNullOrWhiteSpace(choices.CouponCode) && cart.Groups.Count > 0)
         {
-            var check = await discountService.CheckCouponAsync(choices.CouponCode, customerId, cart.Groups.ToDictionary(g => g.VendorId, g => g.Subtotal), cancellationToken);
+            var check = await discountService.CheckCouponAsync(
+                choices.CouponCode, DiscountKind.Product, customerId, Subtotals(cart), new Dictionary<int, decimal>(), cancellationToken);
             (discount, couponReason) = (check.Applied, check.Reason);
             if (discount is null) problems.Add(CheckoutProblems.CouponInvalid);
+        }
+
+        decimal? shippingTotal = quote is not null && shops.Count > 0 && shops.All(s => s.Chosen is not null) ? shops.Sum(s => s.Chosen!.Fee) : null;
+
+        // The shipping code takes off the shipping chosen for each shop, so it waits until every shop has one (that is a problem of its own).
+        AppliedDiscount? shippingDiscount = null;
+        string? shippingCouponReason = null;
+        if (!string.IsNullOrWhiteSpace(choices.ShippingCouponCode) && cart.Groups.Count > 0 && shippingTotal is not null)
+        {
+            var check = await discountService.CheckCouponAsync(
+                choices.ShippingCouponCode, DiscountKind.Shipping, customerId, Subtotals(cart), ShippingFees(shops), cancellationToken);
+            (shippingDiscount, shippingCouponReason) = (check.Applied, check.Reason);
+            if (shippingDiscount is null) problems.Add(CheckoutProblems.ShippingCouponInvalid);
         }
 
         // Tax follows the delivery address and is charged on what is paid for each line, after its share of the discount.
@@ -262,8 +293,8 @@ public sealed class CheckoutService(
             tax = await taxService.CalculateAsync(address.CountryCode, address.StateProvinceId, taxable, discount?.Split ?? new Dictionary<int, decimal>(), cancellationToken);
         }
 
-        decimal? shippingTotal = quote is not null && shops.Count > 0 && shops.All(s => s.Chosen is not null) ? shops.Sum(s => s.Chosen!.Fee) : null;
-        return new State(cart, address, shops, methods, method, problems.Distinct().ToList(), shippingTotal, discount, couponReason, tax);
+        return new State(cart, address, shops, methods, method, problems.Distinct().ToList(), shippingTotal, discount, couponReason, tax,
+            shippingDiscount, shippingCouponReason);
     }
 
     /// <summary>Prices every line again and checks that it can be sold. Null lines mean the cart changed under us.</summary>
@@ -331,14 +362,22 @@ public sealed class CheckoutService(
             address.StateProvince, address.ZipPostalCode, address.CountryCode, address.GhnProvinceId, address.GhnProvinceName, address.GhnWardId,
             address.GhnWardName, address.GhnArea);
 
-        var shops = state.Shops.Select(shop => new NewShopOrder(
-            shop.VendorId, shop.Chosen!.Name, shop.Chosen.RateId, shop.Chosen.Fee,
-            lines.Where(l => l.VendorId == shop.VendorId).Select(l => l.Line).ToList(),
-            state.Discount?.Split.GetValueOrDefault(shop.VendorId) ?? 0m, shop.Chosen.ShopCost)).ToList();
+        // The customer pays the shipping less the shipping code. A shop that funds the code pays that part, like the free shipping it offers.
+        var shopFundsShipping = state.ShippingDiscount?.Discount.Funding == DiscountFunding.Shop;
+        var shops = state.Shops.Select(shop =>
+        {
+            var shippingOff = state.ShippingDiscount?.Split.GetValueOrDefault(shop.VendorId) ?? 0m;
+            return new NewShopOrder(
+                shop.VendorId, shop.Chosen!.Name, shop.Chosen.RateId, shop.Chosen.Fee - shippingOff,
+                lines.Where(l => l.VendorId == shop.VendorId).Select(l => l.Line).ToList(),
+                state.Discount?.Split.GetValueOrDefault(shop.VendorId) ?? 0m, shop.Chosen.ShopCost + (shopFundsShipping ? shippingOff : 0m), shippingOff);
+        }).ToList();
 
-        var discount = state.Discount is { } applied ? new NewOrderDiscount(applied.Discount.Code, DiscountRules.ToWire(applied.Discount.Funding)) : null;
         // A redirect payment is not paid yet: the order waits, hidden from the shops, until the gateway says so.
-        return new NewOrderCommand(customerId, placementKey, state.Method!.SystemName, string.IsNullOrEmpty(note) ? null : note, recipient, shops, discount,
-            state.Method.Kind == PaymentProviderKind.Hosted);
+        return new NewOrderCommand(customerId, placementKey, state.Method!.SystemName, string.IsNullOrEmpty(note) ? null : note, recipient, shops,
+            ToOrderDiscount(state.Discount), state.Method.Kind == PaymentProviderKind.Hosted, ToOrderDiscount(state.ShippingDiscount));
     }
+
+    private static NewOrderDiscount? ToOrderDiscount(AppliedDiscount? applied) =>
+        applied is null ? null : new NewOrderDiscount(applied.Discount.Code, DiscountRules.ToWire(applied.Discount.Funding));
 }

@@ -35,6 +35,9 @@ public static class DiscountReasons
     public const string LimitReached = "limit_reached";
     public const string CustomerLimitReached = "customer_limit_reached";
     public const string NothingToDiscount = "nothing_to_discount";
+
+    /// <summary>A shipping code typed where an item code goes, or the other way round.</summary>
+    public const string WrongKind = "wrong_kind";
 }
 
 /// <summary>The stored value is part of the database contract: add at the end, never renumber.</summary>
@@ -42,6 +45,16 @@ public enum DiscountType
 {
     Percentage = 0,
     Fixed = 1
+}
+
+/// <summary>
+/// What a discount takes off: the items, or the shipping. An order can use one code of each kind. The stored value is part of the database
+/// contract: add at the end, never renumber.
+/// </summary>
+public enum DiscountKind
+{
+    Product = 0,
+    Shipping = 1
 }
 
 /// <summary>Who bears the cost. A platform discount covers the whole cart, a shop discount only that shop's lines.</summary>
@@ -64,6 +77,9 @@ public sealed class Discount
     public string Code { get; set; } = string.Empty;
 
     public DiscountType Type { get; set; }
+
+    /// <summary>Whether it takes off the items or the shipping. The minimum subtotal always looks at the items.</summary>
+    public DiscountKind Kind { get; set; }
 
     /// <summary>A percentage (0 to 100) or an amount in the primary currency, by <see cref="Type"/>.</summary>
     public decimal Value { get; set; }
@@ -89,7 +105,7 @@ public sealed class Discount
 
 public sealed record SaveDiscountCommand(
     string? Name, string? Code, string? Type, decimal Value, decimal? MaxDiscountAmount, DateTime? StartsOnUtc, DateTime? EndsOnUtc,
-    decimal? MinSubtotal, int? MaxUses, int? MaxUsesPerCustomer, bool Enabled);
+    decimal? MinSubtotal, int? MaxUses, int? MaxUsesPerCustomer, bool Enabled, string? Kind = null);
 
 /// <summary>What a code does to a cart: the amount, and how it is split across the shops of the cart.</summary>
 public sealed record AppliedDiscount(Discount Discount, decimal Amount, IReadOnlyDictionary<int, decimal> Split);
@@ -111,7 +127,7 @@ public enum RedeemOutcome
     CustomerLimitReached = 3
 }
 
-public sealed record RedeemRequest(int DiscountId, int CustomerId, int OrderId, decimal Amount, DateTime NowUtc);
+public sealed record RedeemRequest(int DiscountId, int CustomerId, int OrderId, decimal Amount, DateTime NowUtc, DiscountKind Kind = DiscountKind.Product);
 
 public static class DiscountRules
 {
@@ -135,11 +151,26 @@ public static class DiscountRules
 
     public static string ToWire(DiscountFunding funding) => funding == DiscountFunding.Platform ? "platform" : "shop";
 
+    public static string ToWire(DiscountKind kind) => kind == DiscountKind.Shipping ? "shipping" : "product";
+
+    /// <summary>"product" or "shipping"; nothing at all means "product", the kind every code had before shipping codes.</summary>
+    public static bool TryParseKind(string? value, out DiscountKind kind)
+    {
+        kind = DiscountKind.Product;
+        if (string.IsNullOrWhiteSpace(value) || string.Equals(value, "product", StringComparison.OrdinalIgnoreCase)) return true;
+        if (!string.Equals(value, "shipping", StringComparison.OrdinalIgnoreCase)) return false;
+        kind = DiscountKind.Shipping;
+        return true;
+    }
+
     /// <summary>
     /// What a code gives for the subtotals of the shops in the cart (vendor id to subtotal). The reasons are checked in a fixed order.
-    /// A shop discount only looks at its own shop; a platform discount at the whole cart.
+    /// A shop discount only looks at its own shop; a platform discount at the whole cart. A shipping code takes off the shipping of the shops
+    /// (<paramref name="shopShipping"/>, vendor id to fee) instead of the items; its minimum still looks at the items.
     /// </summary>
-    public static CouponCheck Evaluate(Discount discount, int customerUses, DateTime nowUtc, IReadOnlyDictionary<int, decimal> shopSubtotals, int decimalPlaces)
+    public static CouponCheck Evaluate(
+        Discount discount, int customerUses, DateTime nowUtc, IReadOnlyDictionary<int, decimal> shopSubtotals, int decimalPlaces,
+        IReadOnlyDictionary<int, decimal>? shopShipping = null)
     {
         // A shop discount whose shop is not in the cart does not exist for this customer.
         if (discount.VendorId is { } vendorId && !shopSubtotals.ContainsKey(vendorId)) return Refuse(DiscountReasons.NotFound);
@@ -153,12 +184,16 @@ public static class DiscountRules
         if (discount.MaxUses is { } maxUses && discount.UsedCount >= maxUses) return Refuse(DiscountReasons.LimitReached);
         if (discount.MaxUsesPerCustomer is { } perCustomer && customerUses >= perCustomer) return Refuse(DiscountReasons.CustomerLimitReached);
 
-        var amount = AmountFor(discount, eligible, decimalPlaces);
+        // What the code takes off: the items, or the shipping of the same shops (a shop with no shipping chosen yet has none to take off).
+        var basis = discount.Kind == DiscountKind.Shipping
+            ? shopSubtotals.Keys.ToDictionary(id => id, id => shopShipping?.GetValueOrDefault(id) ?? 0m)
+            : shopSubtotals;
+        var amount = AmountFor(discount, discount.VendorId is { } own ? basis[own] : basis.Values.Sum(), decimalPlaces);
         if (amount <= 0m) return Refuse(DiscountReasons.NothingToDiscount);
 
         var split = discount.VendorId is { } owner
             ? new Dictionary<int, decimal> { [owner] = amount }
-            : Split(amount, shopSubtotals, decimalPlaces);
+            : Split(amount, basis, decimalPlaces);
         return new CouponCheck(new AppliedDiscount(discount, amount, split), null);
     }
 
@@ -174,9 +209,11 @@ public static class DiscountRules
         && (discount.VendorId is not { } vendorId || vendorIds.Contains(vendorId));
 
     /// <summary>The offer of one code for the subtotals of the shops in the cart, with the same checks as typing the code.</summary>
-    public static CouponOffer Offer(Discount discount, int customerUses, DateTime nowUtc, IReadOnlyDictionary<int, decimal> shopSubtotals, int decimalPlaces)
+    public static CouponOffer Offer(
+        Discount discount, int customerUses, DateTime nowUtc, IReadOnlyDictionary<int, decimal> shopSubtotals, int decimalPlaces,
+        IReadOnlyDictionary<int, decimal>? shopShipping = null)
     {
-        var check = Evaluate(discount, customerUses, nowUtc, shopSubtotals, decimalPlaces);
+        var check = Evaluate(discount, customerUses, nowUtc, shopSubtotals, decimalPlaces, shopShipping);
         if (check.Applied is { } applied) return new CouponOffer(discount, applied.Amount, null, null);
 
         decimal? shortfall = null;
@@ -196,7 +233,7 @@ public static class DiscountRules
             .ThenBy(o => o.Discount.Code, StringComparer.Ordinal)
             .ToList();
 
-    /// <summary>The amount for an eligible subtotal: a percentage (capped) or a fixed amount, never above the subtotal.</summary>
+    /// <summary>The amount for what the code applies to (items or shipping): a percentage (capped) or a fixed amount, never above it.</summary>
     public static decimal AmountFor(Discount discount, decimal eligibleSubtotal, int decimalPlaces)
     {
         var amount = discount.Type == DiscountType.Percentage
@@ -233,6 +270,7 @@ public static class DiscountRules
         DiscountReasons.LimitReached => "This code has been used up.",
         DiscountReasons.CustomerLimitReached => "You have already used this code the allowed number of times.",
         DiscountReasons.NothingToDiscount => "This code gives no discount on your cart.",
+        DiscountReasons.WrongKind => "This code is for the other kind of discount (items or shipping).",
         _ => "This code does not exist or does not apply to your cart."
     };
 }
@@ -266,10 +304,13 @@ public interface IDiscountStore
     /// <summary>How many times the customer used each of these discounts (discount id to uses; unused ones are left out).</summary>
     Task<IReadOnlyDictionary<int, int>> CountCustomerUsesAsync(IReadOnlyCollection<int> discountIds, int customerId, CancellationToken cancellationToken);
 
-    /// <summary>Locks the discount, checks the usage limits, records the use and counts it, all in one transaction.</summary>
+    /// <summary>
+    /// Locks the discount, checks the usage limits, records the use and counts it, all in one transaction. An order keeps at most one use of
+    /// each kind.
+    /// </summary>
     Task<RedeemOutcome> TryRedeemAsync(RedeemRequest request, CancellationToken cancellationToken);
 
-    /// <summary>Gives back the use of an order. False when the order used no code.</summary>
+    /// <summary>Gives back every use of an order (one per kind). False when the order used no code.</summary>
     Task<bool> ReleaseAsync(int orderId, CancellationToken cancellationToken);
 }
 
@@ -284,11 +325,23 @@ public interface IDiscountService
 
     // ---- Checkout ----
 
-    /// <summary>What a code gives for the subtotals of the shops in the cart (vendor id to subtotal), or why it gives nothing. Changes nothing.</summary>
+    /// <summary>What an item code gives for the subtotals of the shops in the cart (vendor id to subtotal), or why it gives nothing. Changes nothing.</summary>
     Task<CouponCheck> CheckCouponAsync(string? code, int customerId, IReadOnlyDictionary<int, decimal> shopSubtotals, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// What a code of this kind gives for the cart: the subtotals and the chosen shipping of its shops (vendor id to amount). A code of the
+    /// other kind is refused with <see cref="DiscountReasons.WrongKind"/>. Changes nothing.
+    /// </summary>
+    Task<CouponCheck> CheckCouponAsync(
+        string? code, DiscountKind kind, int customerId, IReadOnlyDictionary<int, decimal> shopSubtotals, IReadOnlyDictionary<int, decimal> shopShipping,
+        CancellationToken cancellationToken);
 
     /// <summary>The codes the customer can pick for these subtotals, each with its amount or the reason it cannot be used, ranked. Changes nothing.</summary>
     Task<IReadOnlyList<CouponOffer>> GetOffersAsync(int customerId, IReadOnlyDictionary<int, decimal> shopSubtotals, CancellationToken cancellationToken);
+
+    /// <summary>The codes of both kinds the customer can pick; shipping codes are worked out on <paramref name="shopShipping"/>. Changes nothing.</summary>
+    Task<IReadOnlyList<CouponOffer>> GetOffersAsync(
+        int customerId, IReadOnlyDictionary<int, decimal> shopSubtotals, IReadOnlyDictionary<int, decimal> shopShipping, CancellationToken cancellationToken);
 
     /// <summary>Records the use of the discount for an order, within its limits.</summary>
     Task<RedeemOutcome> RedeemAsync(AppliedDiscount applied, int customerId, int orderId, CancellationToken cancellationToken);

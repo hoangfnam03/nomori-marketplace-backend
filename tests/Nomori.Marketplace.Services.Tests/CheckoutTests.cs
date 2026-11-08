@@ -53,6 +53,7 @@ public sealed class CheckoutTests
         public Task<CatalogResult<CartView>> AddAsync(int customerId, AddToCartCommand command, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<CatalogResult<CartView>> SetQuantityAsync(int customerId, int lineId, int quantity, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<CatalogResult<CartView>> RemoveAsync(int customerId, int lineId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<CatalogResult<CartView>> RemoveShopAsync(int customerId, int vendorId, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<CartView> AcceptPricesAsync(int customerId, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
@@ -1298,5 +1299,124 @@ public sealed class CheckoutTests
         Assert.Equal((CallbackOutcome.Applied, CallbackOutcome.Replay), (first, second));
         Assert.Single(f.Audit.Events, e => e == "order.payment_received");
         Assert.DoesNotContain("payment.refunded", f.Audit.Events);
+    }
+
+    // ---- Shipping codes ----
+
+    private static Discount ShippingCode(Fixture f, string code = "FREESHIP", string type = "percentage", decimal value = 100, int? vendorId = null)
+    {
+        var discount = f.Code(code, type, value, vendorId);
+        discount.Kind = DiscountKind.Shipping;
+        return discount;
+    }
+
+    [Fact]
+    public async Task AShippingCodeTakesOffTheShippingNotTheItems()
+    {
+        var f = new Fixture();
+        ShippingCode(f, "SHIP4", "fixed", 4);
+
+        var preview = await f.Create().PreviewAsync(Buyer, Choices() with { ShippingCouponCode = "ship4" }, CancellationToken.None);
+
+        Assert.True(preview.CanPlace);
+        Assert.Null(preview.Discount);
+        // Split by the shipping of each shop (5 and 3), not by what they sell.
+        Assert.Equal((4m, 2.5m, 1.5m), (preview.ShippingDiscount!.Amount, preview.ShippingDiscount.Split[Shop], preview.ShippingDiscount.Split[OtherShop]));
+        Assert.Equal((40m, 8m, 44m), (preview.Subtotal, preview.ShippingTotal, preview.Total));
+    }
+
+    [Fact]
+    public async Task AnItemCodeAndAShippingCodeGoTogetherAndBothAreUsed()
+    {
+        var f = new Fixture();
+        var items = f.Code();
+        var shipping = ShippingCode(f);
+
+        var result = await Place(f, Request(code: "WELCOME10") with { ShippingCouponCode = "FREESHIP" });
+
+        Assert.True(result.Succeeded);
+        var order = result.Value!.Order;
+        Assert.Equal(("WELCOME10", 4m, "FREESHIP", 8m), (order.DiscountCode, order.DiscountTotal, order.ShippingDiscountCode, order.ShippingDiscountTotal));
+        Assert.Equal((0m, 36m), (order.ShippingTotal, order.Total));
+        Assert.Equal((0m, 5m, "platform", 0m), (order.ShopOrders[0].ShippingFee, order.ShopOrders[0].ShippingDiscount, order.ShopOrders[0].ShippingDiscountFunding, order.ShopOrders[0].ShopShippingCost));
+        Assert.Equal((0m, 3m), (order.ShopOrders[1].ShippingFee, order.ShopOrders[1].ShippingDiscount));
+        Assert.Equal(36m, Assert.Single(f.PaymentStore.Payments).Amount);
+        Assert.Equal((1, 1, 2), (items.UsedCount, shipping.UsedCount, f.Discounts.Usages.Count));
+    }
+
+    [Fact]
+    public async Task AShopShippingCodeIsCappedAtItsShippingAndPaidByTheShop()
+    {
+        var f = new Fixture();
+        ShippingCode(f, "MUGSHIP", "fixed", 10, vendorId: Shop);
+
+        var order = (await Place(f, Request() with { ShippingCouponCode = "MUGSHIP" })).Value!.Order;
+
+        var mugs = order.ShopOrders.Single(s => s.VendorId == Shop);
+        Assert.Equal((0m, 5m, "shop", 5m), (mugs.ShippingFee, mugs.ShippingDiscount, mugs.ShippingDiscountFunding, mugs.ShopShippingCost));
+        var tea = order.ShopOrders.Single(s => s.VendorId == OtherShop);
+        Assert.Equal((3m, 0m, (string?)null), (tea.ShippingFee, tea.ShippingDiscount, tea.ShippingDiscountFunding));
+        Assert.Equal(43m, order.Total);
+    }
+
+    [Fact]
+    public async Task ACodeInTheWrongBoxIsRefusedWithItsReason()
+    {
+        var f = new Fixture();
+        f.Code();
+        ShippingCode(f);
+
+        var result = await Place(f, Request(code: "FREESHIP") with { ShippingCouponCode = "WELCOME10" });
+
+        Assert.Equal(DiscountRules.MessageOf(DiscountReasons.WrongKind), result.Errors["couponCode"][0]);
+        Assert.Equal(DiscountRules.MessageOf(DiscountReasons.WrongKind), result.Errors["shippingCouponCode"][0]);
+        AssertNothingHappened(f);
+    }
+
+    [Fact]
+    public async Task AFreeShippingOptionLeavesAShippingCodeNothingToTakeOff()
+    {
+        var f = new Fixture();
+        ShippingCode(f, vendorId: Shop);
+        f.Shipping.Options[Shop] = [new ShippingOption(GhnRules.RateId, GhnRules.MethodName, 0m, true, null, null, 5m)];
+
+        var preview = await f.Create().PreviewAsync(
+            Buyer, Choices(Address, "cod", new ShippingChoice(Shop, GhnRules.RateId), new ShippingChoice(OtherShop, 3)) with { ShippingCouponCode = "FREESHIP" },
+            CancellationToken.None);
+
+        Assert.Contains(CheckoutProblems.ShippingCouponInvalid, preview.Problems);
+        Assert.Equal(DiscountReasons.NothingToDiscount, preview.ShippingCouponReason);
+    }
+
+    [Fact]
+    public async Task WhenTheShippingCodeRunsOutTheItemCodeIsGivenBackToo()
+    {
+        var f = new Fixture();
+        var items = f.Code();
+        var shipping = ShippingCode(f);
+        shipping.MaxUses = 1;
+        // Someone else takes the last shipping use between the check and the redeem.
+        f.Discounts.BeforeRedeem = () => { if (items.UsedCount == 1) shipping.UsedCount = 1; };
+
+        var result = await Place(f, Request(code: "WELCOME10") with { ShippingCouponCode = "FREESHIP" });
+
+        Assert.Equal(CheckoutErrors.CouponUnavailable, result.ErrorCode);
+        Assert.All(Assert.Single(f.OrderStore.Orders).ShopOrders, s => Assert.Equal(ShopOrderStatus.Cancelled, s.Status));
+        Assert.Equal(0, items.UsedCount);
+        Assert.Empty(f.Discounts.Usages);
+    }
+
+    [Fact]
+    public async Task ThePreviewOffersShippingCodesWorkedOutOnTheChosenShipping()
+    {
+        var f = new Fixture();
+        f.Code();
+        ShippingCode(f);
+
+        var preview = await f.Create().PreviewAsync(Buyer, Choices(), CancellationToken.None);
+
+        var offers = preview.Coupons!.ToDictionary(o => o.Discount.Code);
+        Assert.Equal((4m, DiscountKind.Product), (offers["WELCOME10"].Amount, offers["WELCOME10"].Discount.Kind));
+        Assert.Equal((8m, DiscountKind.Shipping), (offers["FREESHIP"].Amount, offers["FREESHIP"].Discount.Kind));
     }
 }

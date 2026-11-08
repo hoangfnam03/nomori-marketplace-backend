@@ -209,6 +209,10 @@ public sealed class OrderTests
         Assert.Equal(OverallOrderStatus.Processing, OrderRules.Overall([ShopOrderStatus.Cancelled, ShopOrderStatus.Pending]));
         Assert.Equal(OverallOrderStatus.Completed, OrderRules.Overall([ShopOrderStatus.Completed, ShopOrderStatus.Cancelled]));
         Assert.Equal(OverallOrderStatus.Cancelled, OrderRules.Overall([ShopOrderStatus.Cancelled, ShopOrderStatus.Cancelled]));
+        // Returned is final; the order is returned only when nothing was kept.
+        Assert.Equal(OverallOrderStatus.Returned, OrderRules.Overall([ShopOrderStatus.Returned, ShopOrderStatus.Cancelled]));
+        Assert.Equal(OverallOrderStatus.Completed, OrderRules.Overall([ShopOrderStatus.Returned, ShopOrderStatus.Completed]));
+        Assert.Equal(OverallOrderStatus.Processing, OrderRules.Overall([ShopOrderStatus.Returned, ShopOrderStatus.Delivered]));
     }
 
     [Fact]
@@ -734,6 +738,33 @@ public sealed class OrderTests
         var received = await f.Create().ConfirmReceiptAsync(Buyer, shop.Id, CancellationToken.None);
 
         Assert.Equal(ShopOrderStatus.Completed, received.Value!.ShopOrder.Status);
+    }
+
+    [Fact]
+    public async Task ReceiptWaitsUntilAReturnInProgressIsSettled()
+    {
+        var f = new Fixture();
+        var order = await f.PlaceAsync();
+        var shop = order.ShopOrders[0];
+        Move(order, Shop, ShopOrderStatus.Shipped);
+        Move(order, Shop, ShopOrderStatus.Delivered);
+        f.Store.Orders.Single(o => o.Id == order.Id).ShopOrders.Single(s => s.Id == shop.Id).HasOpenReturn = true;
+
+        Assert.Equal(OrderErrors.ReturnOpen, (await f.Create().ConfirmReceiptAsync(Buyer, shop.Id, CancellationToken.None)).ErrorCode);
+
+        f.Store.Orders.Single(o => o.Id == order.Id).ShopOrders.Single(s => s.Id == shop.Id).HasOpenReturn = false;
+        Assert.True((await f.Create().ConfirmReceiptAsync(Buyer, shop.Id, CancellationToken.None)).Succeeded);
+    }
+
+    [Theory]
+    [InlineData(ShopOrderStatus.Delivered)]
+    [InlineData(ShopOrderStatus.Completed)]
+    public void OnlyTheSystemReturnsADeliveredOrCompletedShopOrder(ShopOrderStatus from)
+    {
+        Assert.Equal(ShopOrderStatus.Returned, OrderRules.Transition(from, OrderAction.Return, OrderActor.System));
+        Assert.Null(OrderRules.Transition(from, OrderAction.Return, OrderActor.Shop));
+        Assert.Null(OrderRules.Transition(from, OrderAction.Return, OrderActor.Admin));
+        Assert.Null(OrderRules.Transition(ShopOrderStatus.Shipped, OrderAction.Return, OrderActor.System));
     }
 
     [Fact]

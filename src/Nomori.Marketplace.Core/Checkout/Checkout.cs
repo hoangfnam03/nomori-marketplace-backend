@@ -48,6 +48,7 @@ public static class CheckoutProblems
     public const string PaymentRequired = "payment_required";
     public const string PaymentInvalid = "payment_invalid";
     public const string CouponInvalid = "coupon_invalid";
+    public const string ShippingCouponInvalid = "shipping_coupon_invalid";
 
     /// <summary>A chosen line is no longer in the cart (bought from another tab, or removed): the customer chooses again.</summary>
     public const string SelectionChanged = "selection_changed";
@@ -56,14 +57,16 @@ public static class CheckoutProblems
 /// <summary>The customer's choice of one shipping option for one shop of the cart.</summary>
 public sealed record ShippingChoice(int VendorId, int RateId);
 
+/// <param name="CouponCode">The item code; <paramref name="ShippingCouponCode"/> is the shipping code. Both are optional and can go together.</param>
 /// <param name="CartItemIds">The cart lines to buy now; null or empty buys the whole cart. Lines left out stay in the cart.</param>
 public sealed record CheckoutChoices(
-    int? AddressId, IReadOnlyList<ShippingChoice>? ShippingChoices, string? PaymentMethod, string? CouponCode = null, IReadOnlyList<int>? CartItemIds = null);
+    int? AddressId, IReadOnlyList<ShippingChoice>? ShippingChoices, string? PaymentMethod, string? CouponCode = null, IReadOnlyList<int>? CartItemIds = null,
+    string? ShippingCouponCode = null);
 
 /// <param name="CartItemIds">The cart lines to buy now; null or empty buys the whole cart. Only these lines leave the cart.</param>
 public sealed record PlaceOrderRequest(
     int? AddressId, IReadOnlyList<ShippingChoice>? ShippingChoices, string? PaymentMethod, string? IdempotencyKey, bool AcceptedTerms, string? Note,
-    string? CouponCode = null, IReadOnlyList<int>? CartItemIds = null);
+    string? CouponCode = null, IReadOnlyList<int>? CartItemIds = null, string? ShippingCouponCode = null);
 
 /// <summary>The shipping side of one shop: what it offers for the address and what the customer chose.</summary>
 public sealed record CheckoutShopShipping(
@@ -76,6 +79,8 @@ public sealed record CheckoutDiscount(
 /// <summary>The tax of the cart for the chosen address: in all, and per shop (vendor id to tax).</summary>
 public sealed record CheckoutTax(decimal Total, IReadOnlyDictionary<int, decimal> PerShop);
 
+/// <param name="ShippingTotal">The chosen shipping before the shipping code; <see cref="Total"/> takes <paramref name="ShippingDiscount"/> off it.</param>
+/// <param name="Coupons">Codes of both kinds; each offer's discount says its kind.</param>
 public sealed record CheckoutPreview(
     CartView Cart,
     int? AddressId,
@@ -90,7 +95,9 @@ public sealed record CheckoutPreview(
     CheckoutDiscount? Discount = null,
     string? CouponReason = null,
     CheckoutTax? Tax = null,
-    IReadOnlyList<CouponOffer>? Coupons = null);
+    IReadOnlyList<CouponOffer>? Coupons = null,
+    CheckoutDiscount? ShippingDiscount = null,
+    string? ShippingCouponReason = null);
 
 public sealed record PlacedOrder(Order Order, PaymentTransaction? Payment, bool Replayed);
 
@@ -137,6 +144,7 @@ public static class CheckoutRules
         CheckoutProblems.AddressRequired or CheckoutProblems.AddressInvalid or CheckoutProblems.AddressAreaMissing => "addressId",
         CheckoutProblems.ShippingUnavailable or CheckoutProblems.ShippingNotChosen or CheckoutProblems.ShippingInvalid => "shippingChoices",
         CheckoutProblems.CouponInvalid => "couponCode",
+        CheckoutProblems.ShippingCouponInvalid => "shippingCouponCode",
         _ => "paymentMethod"
     };
 
@@ -148,7 +156,7 @@ public static class CheckoutRules
         CheckoutProblems.ShippingUnavailable => "A shop in your cart does not ship to this address.",
         CheckoutProblems.ShippingNotChosen => "Choose a shipping option for every shop.",
         CheckoutProblems.ShippingInvalid => "A chosen shipping option is not available for this address.",
-        CheckoutProblems.CouponInvalid => "This code cannot be used.",
+        CheckoutProblems.CouponInvalid or CheckoutProblems.ShippingCouponInvalid => "This code cannot be used.",
         CheckoutProblems.PaymentRequired => "Choose a payment method.",
         _ => "This payment method is not available."
     };

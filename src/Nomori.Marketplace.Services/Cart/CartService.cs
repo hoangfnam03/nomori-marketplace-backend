@@ -100,6 +100,15 @@ public sealed class CartService(
         return CatalogResult.Success(await BuildViewAsync(customerId, cancellationToken));
     }
 
+    public async Task<CatalogResult<CartView>> RemoveShopAsync(int customerId, int vendorId, CancellationToken cancellationToken)
+    {
+        // The shop of a line comes from its product, so the priced view tells which lines belong to it.
+        var group = (await BuildViewAsync(customerId, cancellationToken)).Groups.FirstOrDefault(g => g.VendorId == vendorId);
+        if (group is null) return CatalogResult.Error<CartView>(CatalogErrors.NotFound);
+        foreach (var line in group.Lines) await cartStore.DeleteAsync(customerId, line.Id, cancellationToken);
+        return CatalogResult.Success(await BuildViewAsync(customerId, cancellationToken));
+    }
+
     public async Task<CartView> ClearAsync(int customerId, CancellationToken cancellationToken)
     {
         await cartStore.ClearAsync(customerId, cancellationToken);
