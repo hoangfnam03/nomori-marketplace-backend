@@ -27,6 +27,20 @@ public sealed class AuthorizationController(
         return Ok(logs);
     }
 
+    [HttpGet("customers")]
+    [HasPermission(PermissionCodes.AdminRolesRead)]
+    public async Task<IActionResult> SearchCustomers(
+        [FromQuery] string? q,
+        [FromQuery] int take = 20,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(q))
+            return Ok(Array.Empty<CustomerSearchResponse>());
+
+        var results = await authorizationService.SearchCustomersAsync(q, Math.Clamp(take, 1, 50), cancellationToken);
+        return Ok(results.Select(c => new CustomerSearchResponse(c.Id, c.Email, c.Username, c.FirstName, c.LastName)));
+    }
+
     [HttpGet("customers/{customerId:int}/roles")]
     [HasPermission(PermissionCodes.AdminRolesRead)]
     public async Task<IActionResult> GetCustomerRoles(int customerId, CancellationToken cancellationToken)
@@ -85,6 +99,8 @@ public sealed class AuthorizationController(
 }
 
 public sealed record RoleResponse(int Id, string Name, string SystemName, bool IsSystemRole);
+
+public sealed record CustomerSearchResponse(int Id, string Email, string? Username, string? FirstName, string? LastName);
 
 public sealed record CustomerRolesResponse(int CustomerId, IReadOnlyList<RoleResponse> Roles);
 

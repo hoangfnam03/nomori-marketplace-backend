@@ -52,6 +52,13 @@ public sealed class AuthorizationManagementServiceTests
 
         public Task<bool> CustomerExistsAsync(int customerId, CancellationToken cancellationToken) => Task.FromResult(assignments.ContainsKey(customerId));
 
+        public Task<IReadOnlyList<CustomerSearchResult>> SearchCustomersAsync(string term, int take, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<CustomerSearchResult>>(
+                assignments.Keys.Where(id => id.ToString(System.Globalization.CultureInfo.InvariantCulture).Contains(term.Trim(), StringComparison.Ordinal))
+                    .Take(take)
+                    .Select(id => new CustomerSearchResult(id, $"customer{id}@example.test", null, null, null))
+                    .ToArray());
+
         public Task ReplaceCustomerRolesAsync(int customerId, IReadOnlyCollection<string> roleSystemNames, CancellationToken cancellationToken)
         {
             assignments[customerId] = roleSystemNames;
