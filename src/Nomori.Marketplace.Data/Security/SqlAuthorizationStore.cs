@@ -42,6 +42,41 @@ public sealed class SqlAuthorizationStore(IOptions<DatabaseOptions> databaseOpti
         return await command.ExecuteScalarAsync(cancellationToken) is not null;
     }
 
+    public async Task<IReadOnlyList<CustomerSearchResult>> SearchCustomersAsync(string term, int take, CancellationToken cancellationToken)
+    {
+        // Escape LIKE wildcards so user input is matched literally.
+        var pattern = "%" + term.Trim().Replace("[", "[[]").Replace("%", "[%]").Replace("_", "[_]") + "%";
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT TOP (@Take) Id, Email, Username, FirstName, LastName
+            FROM Customer
+            WHERE Deleted = 0
+              AND (Email LIKE @Pattern
+                   OR Username LIKE @Pattern
+                   OR FirstName LIKE @Pattern
+                   OR LastName LIKE @Pattern
+                   OR CONCAT(FirstName, ' ', LastName) LIKE @Pattern)
+            ORDER BY Email, Id
+            """;
+        command.Parameters.AddWithValue("@Take", take);
+        command.Parameters.AddWithValue("@Pattern", pattern);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var results = new List<CustomerSearchResult>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            results.Add(new CustomerSearchResult(
+                reader.GetInt32(0),
+                reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4)));
+        }
+        return results;
+    }
+
     public async Task ReplaceCustomerRolesAsync(int customerId, IReadOnlyCollection<string> roleSystemNames, CancellationToken cancellationToken)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);

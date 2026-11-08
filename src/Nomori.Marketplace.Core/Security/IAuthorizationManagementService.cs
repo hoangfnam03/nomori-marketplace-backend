@@ -10,6 +10,8 @@ public interface IAuthorizationManagementService
 
     Task<bool> CustomerExistsAsync(int customerId, CancellationToken cancellationToken);
 
+    Task<IReadOnlyList<CustomerSearchResult>> SearchCustomersAsync(string term, int take, CancellationToken cancellationToken);
+
     Task<AuthorizationManagementResult> ReplaceCustomerRolesAsync(
         int actorCustomerId,
         int targetCustomerId,

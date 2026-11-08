@@ -16,6 +16,9 @@ public sealed class AuthorizationManagementService(
     public Task<bool> CustomerExistsAsync(int customerId, CancellationToken cancellationToken) =>
         authorizationStore.CustomerExistsAsync(customerId, cancellationToken);
 
+    public Task<IReadOnlyList<CustomerSearchResult>> SearchCustomersAsync(string term, int take, CancellationToken cancellationToken) =>
+        authorizationStore.SearchCustomersAsync(term, take, cancellationToken);
+
     public async Task<AuthorizationManagementResult> ReplaceCustomerRolesAsync(
         int actorCustomerId,
         int targetCustomerId,
