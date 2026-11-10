@@ -148,7 +148,7 @@ public sealed class CheckoutTests
             SetCart((Shop, [(1, 1, 2)]), (OtherShop, [(2, 2, 1)]));
         }
 
-        public OrderService CreateOrders() => new(OrderStore, Vendors, new FakePrimaryCurrency(), Stock, Audit, new TestClock(), new RecordingOrderNotifier());
+        public OrderService CreateOrders() => new(OrderStore, Vendors, new FakePrimaryCurrency(), Stock, Audit, new TestClock(), new RecordingOrderNotifier(), new RecordingCancellationRefunds());
 
         public DiscountService CreateDiscounts() => new(Discounts, new FakePrimaryCurrency(), Audit, new TestClock());
 

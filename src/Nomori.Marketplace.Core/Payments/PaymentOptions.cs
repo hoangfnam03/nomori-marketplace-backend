@@ -4,22 +4,30 @@ public sealed class PaymentOptions
 {
     public const string SectionName = "Payments";
 
-    /// <summary>The test gateway. It is only registered when it has a secret, so production simply leaves it empty.</summary>
-    public SandboxPaymentOptions Sandbox { get; init; } = new();
+    /// <summary>Stripe Checkout. Registered only with a secret key and a webhook secret; both live in the environment (.env), never in git.</summary>
+    public StripePaymentOptions Stripe { get; init; } = new();
 }
 
-public sealed class SandboxPaymentOptions
+public sealed class StripePaymentOptions
 {
-    public const int MinSecretLength = 16;
+    /// <summary>sk_test_… (test mode) or sk_live_….</summary>
+    public string SecretKey { get; init; } = string.Empty;
 
-    /// <summary>Signs the callbacks of the sandbox. Empty means the sandbox does not exist.</summary>
-    public string Secret { get; init; } = string.Empty;
+    /// <summary>
+    /// whsec_… of the webhook endpoint. Locally, without a webhook, any long random string works: the return signs its own events with it.
+    /// </summary>
+    public string WebhookSecret { get; init; } = string.Empty;
 
-    /// <summary>The address of the Angular app, where the test gateway's payment page lives. Empty means there is no payment page.</summary>
-    public string PageBaseUrl { get; init; } = string.Empty;
+    public string ApiBase { get; init; } = "https://api.stripe.com";
 
-    public bool IsConfigured => Secret.Length >= MinSecretLength;
+    /// <summary>The site's own address, where Stripe sends the customer back (through the API, then to the order).</summary>
+    public string ReturnBaseUrl { get; init; } = string.Empty;
 
-    /// <summary>The test gateway with a payment page needs the secret and an absolute http(s) address.</summary>
-    public bool HostedConfigured => IsConfigured && Uri.TryCreate(PageBaseUrl, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https";
+    /// <summary>How long the Checkout page can be paid (Stripe allows 30 minutes to 24 hours).</summary>
+    public int ExpireMinutes { get; init; } = 30;
+
+    public bool IsConfigured =>
+        SecretKey.StartsWith("sk_", StringComparison.Ordinal) && WebhookSecret.Length >= 16
+        && Uri.TryCreate(ApiBase, UriKind.Absolute, out _) && Uri.TryCreate(ReturnBaseUrl, UriKind.Absolute, out var site) && site.Scheme is "http" or "https";
 }
+

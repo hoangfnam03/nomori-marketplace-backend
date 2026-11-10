@@ -6,6 +6,7 @@ using Nomori.Marketplace.Core.Email;
 using Nomori.Marketplace.Core.Orders;
 using Nomori.Marketplace.Core.Payments;
 using Nomori.Marketplace.Core.Returns;
+using Nomori.Marketplace.Core.Wallets;
 using Nomori.Marketplace.Core.Time;
 using Nomori.Marketplace.Services.Returns;
 
@@ -64,6 +65,16 @@ public sealed class ReturnTests
             row.ReturnShipmentError = shipment.Succeeded ? null : shipment.Error;
             row.ReturnShipmentStatus = null;
             return Task.CompletedTask;
+        }
+
+        public Task<bool> TrySetShippingRefundAsync(
+            int id, int shopOrderId, decimal amount, string? payer, DateTime nowUtc, CancellationToken cancellationToken)
+        {
+            if (amount > 0 && rows.Any(r => r.ShopOrderId == shopOrderId && r.Id != id && r.ShippingRefund > 0)) return Task.FromResult(false);
+            var row = rows.Single(r => r.Id == id);
+            row.ShippingRefund = amount;
+            row.ShippingRefundPaidBy = payer;
+            return Task.FromResult(true);
         }
 
         public Task<int?> FindByTrackingNumberAsync(string trackingNumber, CancellationToken cancellationToken) =>
@@ -143,6 +154,7 @@ public sealed class ReturnTests
             PaymentId = r.PaymentId, CreatedOnUtc = r.CreatedOnUtc, UpdatedOnUtc = r.UpdatedOnUtc,
             ReturnTrackingNumber = r.ReturnTrackingNumber, ReturnShippingFee = r.ReturnShippingFee, ReturnShippingPaidBy = r.ReturnShippingPaidBy,
             ReturnShipmentStatus = r.ReturnShipmentStatus, ReturnShipmentError = r.ReturnShipmentError,
+            ShippingRefund = r.ShippingRefund, ShippingRefundPaidBy = r.ShippingRefundPaidBy,
             Lines = r.Lines.Select(l => new ReturnLine
             {
                 Id = l.Id, ReturnRequestId = l.ReturnRequestId, OrderLineId = l.OrderLineId, Name = l.Name, VariantLabel = l.VariantLabel,
@@ -156,36 +168,25 @@ public sealed class ReturnTests
         public List<Order> Orders { get; } = [];
     }
 
-    private sealed class FakePayments : IPaymentService
+    /// <summary>The customer's wallet: keeps every credit, once per key; can be made to fail like an unreachable database.</summary>
+    private sealed class FakeWallets : IWalletService
     {
-        public Dictionary<int, PaymentTransaction> Payments { get; } = [];
-        public List<(int Id, decimal Amount, int Actor)> Refunds { get; } = [];
-        public bool Refuse { get; set; }
+        public List<(int CustomerId, decimal Amount, string Key)> Credits { get; } = [];
+        public bool Throws { get; set; }
 
-        public Task<PaymentTransaction?> GetPaymentAsync(int id, CancellationToken cancellationToken) => Task.FromResult(Payments.GetValueOrDefault(id));
-
-        public Task<CatalogResult<PaymentTransaction>> RefundAsync(int id, decimal amount, int actorCustomerId, CancellationToken cancellationToken)
+        public Task<WalletPostResult> CreditAsync(
+            int customerId, WalletEntryKind kind, decimal amount, string idempotencyKey, string? referenceType, int? referenceId, string? note,
+            CancellationToken cancellationToken)
         {
-            if (Refuse) return Task.FromResult(CatalogResult.Error<PaymentTransaction>(PaymentErrors.ProviderFailed));
-            Refunds.Add((id, amount, actorCustomerId));
-            Payments[id].RefundedAmount += amount;
-            return Task.FromResult(CatalogResult.Success(Payments[id]));
+            if (Throws) throw new InvalidOperationException("wallet down");
+            if (Credits.Any(c => c.Key == idempotencyKey)) return Task.FromResult(new WalletPostResult(WalletPostOutcome.AlreadyPosted, 0m));
+            Credits.Add((customerId, amount, idempotencyKey));
+            return Task.FromResult(new WalletPostResult(WalletPostOutcome.Posted, Credits.Where(c => c.CustomerId == customerId).Sum(c => c.Amount)));
         }
 
-        public Task<IReadOnlyList<PaymentMethodView>> GetAvailableMethodsAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<CatalogResult<PaymentTransaction>> CreateAsync(CreatePaymentCommand command, CancellationToken cancellationToken) => throw new NotSupportedException();
-        /// <summary>The methods the platform knows; a payment whose method is not here counts as offline.</summary>
-        public List<PaymentMethodView> Methods { get; } = [];
-
-        public Task<IReadOnlyList<PaymentMethodView>> GetMethodsAsync(CancellationToken cancellationToken) =>
-            Task.FromResult<IReadOnlyList<PaymentMethodView>>(Methods);
-        public Task<CatalogResult<PaymentMethodView>> UpdateMethodAsync(string systemName, bool enabled, int displayOrder, int actorCustomerId, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<PagedResult<PaymentTransaction>> GetPaymentsAsync(PaymentQuery query, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<CatalogResult<PaymentTransaction>> CaptureAsync(int id, int actorCustomerId, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<CatalogResult<PaymentTransaction>> VoidAsync(int id, int actorCustomerId, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public string? GetRedirectUrl(PaymentTransaction payment) => throw new NotSupportedException();
-        public Task<PaymentTransaction?> FindByProviderReferenceAsync(string method, string providerReference, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<CallbackOutcome> HandleCallbackAsync(string provider, string body, IReadOnlyDictionary<string, string> headers, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<Wallet> GetMineAsync(int customerId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<PagedResult<WalletEntry>> GetEntriesAsync(int customerId, int page, int pageSize, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<CatalogResult<PaymentTransaction>> StartTopUpAsync(int customerId, WalletTopUpCommand command, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
     private sealed class RecordingQueue : IEmailQueueService
@@ -210,7 +211,7 @@ public sealed class ReturnTests
         public OrderTests.FakeOrderStore Orders { get; } = new();
         public FakeReturnStore Store { get; } = new();
         public FakeStockService Stock { get; } = new();
-        public FakePayments Payments { get; } = new();
+        public FakeWallets Wallets { get; } = new();
         public FakeShipper Shipper { get; } = new();
         public RecordingQueue Queue { get; } = new();
         public RecordingAuditLog Audit { get; } = new();
@@ -240,11 +241,10 @@ public sealed class ReturnTests
             Store.Orders = new FakeOrderHolder();
             Store.Orders.Orders.Add(order);
             Store.PaymentIds[1] = [7];
-            Payments.Payments[7] = new PaymentTransaction { Id = 7, ReferenceType = "order", ReferenceId = 1, Amount = 105m, Status = PaymentStatus.Paid, CurrencyCode = "USD" };
         }
 
         public ReturnService Create() => new(
-            Store, Orders, new FakePrimaryCurrency(), Stock, Payments, Shipper,
+            Store, Orders, new FakePrimaryCurrency(), Stock, Wallets, Shipper,
             new FakeCustomerIdentityStore(
                 new Customer { Id = Buyer, Email = "ann@example.com", FirstName = "Ann <b>", Active = true },
                 new Customer { Id = OtherBuyer, Email = "bob@example.com", Active = true }),
@@ -259,11 +259,15 @@ public sealed class ReturnTests
             return result.Value ?? throw new InvalidOperationException(result.ErrorCode ?? string.Join(",", result.Errors.Keys));
         }
 
+        /// <summary>A return received but not refunded: the wallet is unreachable at the receipt, so it waits for an administrator.</summary>
         public async Task<ReturnRequest> ReceivedAsync()
         {
             var request = await RequestAsync((Line1, 1));
             await Create().ApproveAsync(ShopCaller(), request.Id, null, CancellationToken.None);
-            return (await Create().ReceiveAsync(ShopCaller(), request.Id, false, CancellationToken.None)).Value!;
+            Wallets.Throws = true;
+            var received = (await Create().ReceiveAsync(ShopCaller(), request.Id, false, CancellationToken.None)).Value!;
+            Wallets.Throws = false;
+            return received;
         }
     }
 
@@ -567,7 +571,7 @@ public sealed class ReturnTests
 
         var received = await f.Create().ReceiveAsync(Fixture.ShopCaller(), request.Id, true, CancellationToken.None);
 
-        Assert.Equal((ReturnStatus.Received, true), (received.Value!.Status, received.Value.Restocked));
+        Assert.Equal((ReturnStatus.Refunded, true), (received.Value!.Status, received.Value.Restocked));
         Assert.Equal([(request.Number, 1, (int?)null, 1), (request.Number, 2, (int?)null, 1)], f.Stock.Returns.Select(r => (r.Reference, r.ProductId, r.CombinationId, r.Quantity)));
     }
 
@@ -591,7 +595,7 @@ public sealed class ReturnTests
 
         var received = await f.Create().ReceiveAsync(Fixture.ShopCaller(), request.Id, true, CancellationToken.None);
 
-        Assert.Equal(ReturnStatus.Received, received.Value!.Status);
+        Assert.Equal(ReturnStatus.Refunded, received.Value!.Status);
         Assert.Contains("return.restock_failed", f.Audit.Entries.Select(e => e.Event));
     }
 
@@ -609,7 +613,40 @@ public sealed class ReturnTests
         Assert.Single(f.Stock.Returns);
     }
 
-    // ---- Refund ----
+    // ---- Refund (to the wallet) ----
+
+    [Fact]
+    public async Task ReceivingTheGoodsPutsTheRefundInTheWalletAtOnceAndTellsTheCustomer()
+    {
+        var f = new Fixture();
+        var request = await f.RequestAsync((Line1, 1));
+        await f.Create().ApproveAsync(Fixture.ShopCaller(), request.Id, null, CancellationToken.None);
+        f.Queue.Queued.Clear();
+
+        var refunded = (await f.Create().ReceiveAsync(Fixture.ShopCaller(), request.Id, false, CancellationToken.None)).Value!;
+
+        Assert.Equal(ReturnStatus.Refunded, refunded.Status);
+        Assert.Equal((Buyer, 30m, $"return-{request.Id}"), Assert.Single(f.Wallets.Credits));
+        Assert.Contains("return.refunded", f.Audit.Entries.Select(e => e.Event));
+        var (kind, message) = Assert.Single(f.Queue.Queued);
+        Assert.Equal(EmailKinds.ReturnRefunded, kind);
+        Assert.Contains("30 USD", message.HtmlBody);
+        Assert.Contains("wallet", message.HtmlBody);
+    }
+
+    [Fact]
+    public async Task AWalletThatCannotBeReachedLeavesTheReturnReceivedForAnAdministrator()
+    {
+        var f = new Fixture();
+
+        var received = await f.ReceivedAsync();
+
+        Assert.Equal(ReturnStatus.Received, received.Status);
+        Assert.Empty(f.Wallets.Credits);
+        var refunded = await f.Create().RefundAsync(Fixture.AdminCaller(), received.Id, false, CancellationToken.None);
+        Assert.Equal(ReturnStatus.Refunded, refunded.Value!.Status);
+        Assert.Equal(30m, Assert.Single(f.Wallets.Credits).Amount);
+    }
 
     [Fact]
     public async Task OnlyAnAdministratorCanRefundAndOnlyAReceivedReturn()
@@ -620,30 +657,12 @@ public sealed class ReturnTests
 
         Assert.Equal(ReturnErrors.InvalidTransition, (await f.Create().RefundAsync(Fixture.ShopCaller(), received.Id, false, CancellationToken.None)).ErrorCode);
         Assert.Equal(ReturnErrors.InvalidTransition, (await f.Create().RefundAsync(Fixture.AdminCaller(), waiting.Id, false, CancellationToken.None)).ErrorCode);
-        Assert.Empty(f.Payments.Refunds);
+        Assert.Empty(f.Wallets.Credits);
         Assert.Equal(CatalogErrors.NotFound, (await f.Create().RefundAsync(Fixture.AdminCaller(), 999, false, CancellationToken.None)).ErrorCode);
     }
 
     [Fact]
-    public async Task TheRefundGoesThroughThePaymentOfTheOrderAndTheCustomerIsToldOnce()
-    {
-        var f = new Fixture();
-        var received = await f.ReceivedAsync();
-        f.Queue.Queued.Clear();
-
-        var refunded = await f.Create().RefundAsync(Fixture.AdminCaller(), received.Id, false, CancellationToken.None);
-
-        Assert.Equal((ReturnStatus.Refunded, 30m), (refunded.Value!.Status, refunded.Value.RefundAmount));
-        Assert.Equal((7, 30m, Admin), Assert.Single(f.Payments.Refunds));
-        Assert.Equal(7, f.Store.Raw(received.Id).PaymentId);
-        Assert.Contains("return.refunded", f.Audit.Entries.Select(e => e.Event));
-        var (kind, message) = Assert.Single(f.Queue.Queued);
-        Assert.Equal(EmailKinds.ReturnRefunded, kind);
-        Assert.Contains("30 USD", message.HtmlBody);
-    }
-
-    [Fact]
-    public async Task TwoClicksOnRefundMovePaymentMoneyOnlyOnce()
+    public async Task TwoClicksOnRefundCreditTheWalletOnlyOnce()
     {
         var f = new Fixture();
         var received = await f.ReceivedAsync();
@@ -652,61 +671,19 @@ public sealed class ReturnTests
         var second = await f.Create().RefundAsync(Fixture.AdminCaller(), received.Id, false, CancellationToken.None);
 
         Assert.Equal(ReturnErrors.InvalidTransition, second.ErrorCode);
-        Assert.Single(f.Payments.Refunds);
+        Assert.Single(f.Wallets.Credits);
     }
 
     [Fact]
-    public async Task WithoutAPaidPaymentTheRefundIsRefusedAndTheReturnStaysReceived()
+    public async Task ARefundMadeByHandCreditsNothing()
     {
         var f = new Fixture();
-        f.Payments.Payments[7].Status = PaymentStatus.Pending;
-        var received = await f.ReceivedAsync();
-
-        var result = await f.Create().RefundAsync(Fixture.AdminCaller(), received.Id, false, CancellationToken.None);
-
-        Assert.Equal(ReturnErrors.NoRefundablePayment, result.ErrorCode);
-        Assert.Equal(ReturnStatus.Received, f.Store.Raw(received.Id).Status);
-    }
-
-    [Fact]
-    public async Task APaymentWithTooLittleLeftToRefundIsNotUsed()
-    {
-        var f = new Fixture();
-        f.Payments.Payments[7].RefundedAmount = 100m;
-        var received = await f.ReceivedAsync();
-
-        Assert.Equal(ReturnErrors.NoRefundablePayment, (await f.Create().RefundAsync(Fixture.AdminCaller(), received.Id, false, CancellationToken.None)).ErrorCode);
-    }
-
-    [Fact]
-    public async Task AGatewayThatRefusesGivesTheStepBackSoItCanBeTriedAgain()
-    {
-        var f = new Fixture();
-        var received = await f.ReceivedAsync();
-        f.Payments.Refuse = true;
-
-        var failed = await f.Create().RefundAsync(Fixture.AdminCaller(), received.Id, false, CancellationToken.None);
-
-        Assert.Equal(PaymentErrors.ProviderFailed, failed.ErrorCode);
-        Assert.Equal((ReturnStatus.Received, null), (f.Store.Raw(received.Id).Status, f.Store.Raw(received.Id).PaymentId));
-        Assert.DoesNotContain(f.Queue.Queued, q => q.Kind == EmailKinds.ReturnRefunded);
-
-        f.Payments.Refuse = false;
-        Assert.Equal(ReturnStatus.Refunded, (await f.Create().RefundAsync(Fixture.AdminCaller(), received.Id, false, CancellationToken.None)).Value!.Status);
-    }
-
-    [Fact]
-    public async Task ARefundMadeByHandMovesNoGatewayMoneyAndHasNoPayment()
-    {
-        var f = new Fixture();
-        f.Payments.Payments[7].Status = PaymentStatus.Pending;
         var received = await f.ReceivedAsync();
 
         var refunded = await f.Create().RefundAsync(Fixture.AdminCaller(), received.Id, true, CancellationToken.None);
 
         Assert.Equal(ReturnStatus.Refunded, refunded.Value!.Status);
-        Assert.Empty(f.Payments.Refunds);
-        Assert.Null(f.Store.Raw(received.Id).PaymentId);
+        Assert.Empty(f.Wallets.Credits);
     }
 
     // ---- The shop order after its returns ----
@@ -714,8 +691,8 @@ public sealed class ReturnTests
     private static async Task RefundAsync(Fixture f, ReturnRequest request)
     {
         await f.Create().ApproveAsync(Fixture.ShopCaller(), request.Id, null, CancellationToken.None);
-        await f.Create().ReceiveAsync(Fixture.ShopCaller(), request.Id, false, CancellationToken.None);
-        Assert.True((await f.Create().RefundAsync(Fixture.AdminCaller(), request.Id, true, CancellationToken.None)).Succeeded);
+        var received = await f.Create().ReceiveAsync(Fixture.ShopCaller(), request.Id, false, CancellationToken.None);
+        Assert.Equal(ReturnStatus.Refunded, received.Value!.Status);
     }
 
     [Fact]
@@ -743,6 +720,60 @@ public sealed class ReturnTests
         Assert.Equal(ShopOrderStatus.Returned, f.Orders.Orders[0].ShopOrders[0].Status);
     }
 
+    // ---- The shipping the customer paid ----
+
+    [Theory]
+    [InlineData(ReturnReasons.Damaged, ReturnPayers.Shop)]
+    [InlineData(ReturnReasons.ChangedMind, ReturnPayers.Platform)]
+    public async Task AShopOrderReturnedWholeGivesTheShippingBackWhateverTheReason(string reason, string payer)
+    {
+        var f = new Fixture();
+        var request = (await f.Create().RequestAsync(Buyer, Because(reason, (Line1, 1), (Line2, 1)), CancellationToken.None)).Value!;
+
+        await RefundAsync(f, request);
+
+        var refunded = (await f.Store.GetAsync(request.Id, CancellationToken.None))!;
+        Assert.Equal((5m, payer), (refunded.ShippingRefund, refunded.ShippingRefundPaidBy));
+        Assert.Equal(request.RefundAmount + 5m, Assert.Single(f.Wallets.Credits).Amount);
+        Assert.Equal(payer == ReturnPayers.Shop ? 5m : 0m, ReturnRules.ShopShipping(refunded));
+    }
+
+    [Fact]
+    public async Task OnlyTheReturnThatCompletesTheShopOrderGivesTheShippingBack()
+    {
+        var f = new Fixture();
+        var first = await f.RequestAsync((Line1, 1));
+        await RefundAsync(f, first);
+        var second = await f.RequestAsync((Line2, 1));
+        await RefundAsync(f, second);
+
+        Assert.Equal(0m, (await f.Store.GetAsync(first.Id, CancellationToken.None))!.ShippingRefund);
+        Assert.Equal(5m, (await f.Store.GetAsync(second.Id, CancellationToken.None))!.ShippingRefund);
+        Assert.Equal([first.RefundAmount, second.RefundAmount + 5m], f.Wallets.Credits.Select(c => c.Amount));
+    }
+
+    [Fact]
+    public async Task APartReturnedGivesNoShippingBack()
+    {
+        var f = new Fixture();
+        var request = await f.RequestAsync((Line1, 1));
+
+        await RefundAsync(f, request);
+
+        Assert.Equal(0m, (await f.Store.GetAsync(request.Id, CancellationToken.None))!.ShippingRefund);
+        Assert.Equal(request.RefundAmount, Assert.Single(f.Wallets.Credits).Amount);
+    }
+
+    [Fact]
+    public void TheShippingGivenBackIsPartOfThePayOutAndThePayerIsTheShopOnlyForFaultyGoods()
+    {
+        var request = new ReturnRequest { RefundAmount = 30m, ShippingRefund = 5m, ReturnShippingFee = 4m, ReturnShippingPaidBy = ReturnPayers.Customer };
+
+        Assert.Equal(31m, ReturnRules.PayOut(request));
+        Assert.Equal(ReturnPayers.Platform, ReturnRules.ShippingRefundPayer(ReturnReasons.ChangedMind));
+        Assert.Equal(ReturnPayers.Shop, ReturnRules.ShippingRefundPayer(ReturnReasons.WrongItem));
+    }
+
     [Fact]
     public void AShopOrderIsReturnedWholeOnlyWhenEveryUnitWasRefunded()
     {
@@ -750,69 +781,6 @@ public sealed class ReturnTests
 
         Assert.False(ReturnRules.IsReturnedWhole(lines, new Dictionary<int, int> { [1] = 2 }));
         Assert.True(ReturnRules.IsReturnedWhole(lines, new Dictionary<int, int> { [1] = 2, [2] = 1 }));
-    }
-
-    // ---- Automatic refund when the shop receives the goods ----
-
-    private static Fixture PaidWith(string method, PaymentProviderKind kind)
-    {
-        var f = new Fixture();
-        f.Payments.Payments[7].Method = method;
-        f.Payments.Methods.Add(new PaymentMethodView(method, method, kind, true, 0, true));
-        return f;
-    }
-
-    private static async Task<CatalogResult<ReturnRequest>> ApproveAndReceiveAsync(Fixture f, ReturnRequest request)
-    {
-        await f.Create().ApproveAsync(Fixture.ShopCaller(), request.Id, null, CancellationToken.None);
-        return await f.Create().ReceiveAsync(Fixture.ShopCaller(), request.Id, false, CancellationToken.None);
-    }
-
-    [Fact]
-    public async Task APaymentOnlineIsRefundedAsSoonAsTheShopReceivesTheGoods()
-    {
-        var f = PaidWith("gateway", PaymentProviderKind.Gateway);
-        var request = await f.RequestAsync((Line1, 1));
-
-        var received = await ApproveAndReceiveAsync(f, request);
-
-        Assert.Equal(ReturnStatus.Refunded, received.Value!.Status);
-        Assert.Equal((7, request.RefundAmount, Seller), Assert.Single(f.Payments.Refunds));
-        Assert.Contains("return.refunded", f.Audit.Events);
-    }
-
-    [Fact]
-    public async Task CashOnDeliveryWaitsForAnAdministratorToSendTheMoney()
-    {
-        var f = PaidWith("cod", PaymentProviderKind.Offline);
-
-        var received = await ApproveAndReceiveAsync(f, await f.RequestAsync((Line1, 1)));
-
-        Assert.Equal(ReturnStatus.Received, received.Value!.Status);
-        Assert.Empty(f.Payments.Refunds);
-    }
-
-    [Fact]
-    public async Task AGatewayThatRefusesLeavesTheReturnReceivedForAnAdministrator()
-    {
-        var f = PaidWith("gateway", PaymentProviderKind.Gateway);
-        f.Payments.Refuse = true;
-
-        var received = await ApproveAndReceiveAsync(f, await f.RequestAsync((Line1, 1)));
-
-        Assert.True(received.Succeeded);
-        Assert.Equal(ReturnStatus.Received, received.Value!.Status);
-        Assert.Empty(f.Payments.Refunds);
-    }
-
-    [Fact]
-    public async Task AnAutomaticRefundOfTheLastItemMakesTheShopOrderReturned()
-    {
-        var f = PaidWith("gateway", PaymentProviderKind.Gateway);
-
-        await ApproveAndReceiveAsync(f, await f.RequestAsync((Line1, 1), (Line2, 1)));
-
-        Assert.Equal(ShopOrderStatus.Returned, f.Orders.Orders[0].ShopOrders[0].Status);
     }
 
     // ---- The parcel back (GHN) ----
@@ -823,7 +791,7 @@ public sealed class ReturnTests
     [Fact]
     public async Task ApprovingMakesTheParcelBackAndTheCustomerPaysItWhenTheyNoLongerNeedTheGoods()
     {
-        var f = PaidWith("gateway", PaymentProviderKind.Gateway);
+        var f = new Fixture();
         f.Shipper.Next = new ReturnShipment("LBACK1", 5m, null);
         var request = (await f.Create().RequestAsync(Buyer, Because(ReturnReasons.ChangedMind, (Line1, 1)), CancellationToken.None)).Value!;
 
@@ -835,7 +803,7 @@ public sealed class ReturnTests
 
         var refunded = (await f.Create().ReceiveAsync(Fixture.ShopCaller(), request.Id, false, CancellationToken.None)).Value!;
         Assert.Equal(ReturnStatus.Refunded, refunded.Status);
-        Assert.Equal(request.RefundAmount - 5m, Assert.Single(f.Payments.Refunds).Amount);
+        Assert.Equal(request.RefundAmount - 5m, Assert.Single(f.Wallets.Credits).Amount);
     }
 
     [Fact]

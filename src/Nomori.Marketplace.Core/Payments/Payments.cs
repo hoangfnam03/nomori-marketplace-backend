@@ -24,6 +24,19 @@ public static class PaymentReferenceTypes
 {
     public const string Checkout = "checkout";
     public const string Order = "order";
+
+    /// <summary>Money put into the customer's wallet; the reference id is the customer.</summary>
+    public const string WalletTopUp = "wallet_topup";
+
+    /// <summary>
+    /// Where the customer lands after a gateway's payment page, by what was paid: the order, or the wallet. Relative to the site.
+    /// </summary>
+    public static string LandingPath(PaymentTransaction payment) => payment.ReferenceType switch
+    {
+        Order => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"/customer/orders/{payment.ReferenceId}?payment=return"),
+        WalletTopUp => "/customer/wallet?topup=return",
+        _ => "/storefront"
+    };
 }
 
 /// <summary>The stored value is part of the database contract: add at the end, never renumber.</summary>
@@ -69,6 +82,12 @@ public sealed class PaymentTransaction
     /// <summary>A short code (never a gateway message) saying why the payment failed.</summary>
     public string? FailureCode { get; set; }
 
+    /// <summary>The payment page a gateway gave when the payment was started (ZaloPay), for gateways whose page cannot be worked out.</summary>
+    public string? GatewayRedirectUrl { get; set; }
+
+    /// <summary>The gateway's id of the money movement once paid (ZaloPay's zp_trans_id); refunds name it.</summary>
+    public string? GatewayTransactionId { get; set; }
+
     public DateTime CreatedOnUtc { get; set; }
     public DateTime UpdatedOnUtc { get; set; }
 
@@ -95,14 +114,19 @@ public sealed record PaymentQuery(PaymentStatus? Status, int Page, int PageSize)
 // ---- Providers ----
 
 /// <summary>What a provider answers. The provider never decides the status: the service maps this through <see cref="PaymentRules"/>.</summary>
-public sealed record PaymentProviderResult(bool Succeeded, string? ProviderReference = null, string? FailureCode = null)
+/// <param name="RedirectUrl">The payment page the gateway gave, kept so the customer can be sent there (and back there) later.</param>
+/// <param name="PaidNow">The money moved while starting (the wallet): the payment is paid at once, not held or pending.</param>
+public sealed record PaymentProviderResult(
+    bool Succeeded, string? ProviderReference = null, string? FailureCode = null, string? RedirectUrl = null, bool PaidNow = false)
 {
     public static PaymentProviderResult Ok(string? providerReference = null) => new(true, providerReference);
     public static PaymentProviderResult Fail(string failureCode) => new(false, null, failureCode);
 }
 
 /// <summary>An event from a gateway whose signature has been verified. <see cref="Type"/> is one of <see cref="PaymentCallbackTypes"/>.</summary>
-public sealed record PaymentCallback(string EventId, string Type, string ProviderReference);
+/// <param name="Amount">What the gateway says was paid, when it says; a different amount than the payment's is refused.</param>
+/// <param name="GatewayTransactionId">The gateway's id of the money movement, kept for refunds.</param>
+public sealed record PaymentCallback(string EventId, string Type, string ProviderReference, decimal? Amount = null, string? GatewayTransactionId = null);
 
 public static class PaymentCallbackTypes
 {
@@ -233,6 +257,9 @@ public interface IPaymentStore
 
     Task<PagedResult<PaymentTransaction>> GetPagedAsync(PaymentQuery query, CancellationToken cancellationToken);
 
+    /// <summary>Keeps what a gateway gave about the payment (its page, its transaction id). A null value leaves the stored one as it is.</summary>
+    Task SaveGatewayDetailsAsync(int id, string? redirectUrl, string? gatewayTransactionId, CancellationToken cancellationToken);
+
     /// <summary>Stores a gateway event. False when this provider already sent this event id (a replay).</summary>
     Task<bool> TryAddEventAsync(string provider, string eventId, string type, int? transactionId, string outcome, DateTime nowUtc, CancellationToken cancellationToken);
 }
@@ -279,5 +306,11 @@ public enum CallbackOutcome
     Rejected = 0,
     Applied = 1,
     Ignored = 2,
-    Replay = 3
+    Replay = 3,
+
+    /// <summary>The signature was right but no payment has this reference.</summary>
+    NotFound = 4,
+
+    /// <summary>The gateway reports another amount than the payment's: nothing is changed.</summary>
+    AmountMismatch = 5
 }

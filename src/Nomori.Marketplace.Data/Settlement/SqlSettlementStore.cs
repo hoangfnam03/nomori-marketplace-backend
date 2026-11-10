@@ -167,7 +167,10 @@ public sealed class SqlSettlementStore(IOptions<DatabaseOptions> options) : ISet
         await using var connection = await OpenAsync(cancellationToken);
         await using var cmd = connection.CreateCommand();
         cmd.CommandText = $"""
-            SELECT TOP (@Take) r.Id, r.RefundAmount, CASE WHEN r.ReturnShippingPaidBy = 'shop' THEN r.ReturnShippingFee ELSE 0 END, {OrderColumns}
+            SELECT TOP (@Take) r.Id, r.RefundAmount,
+                CASE WHEN r.ReturnShippingPaidBy = 'shop' THEN r.ReturnShippingFee ELSE 0 END
+                    + CASE WHEN r.ShippingRefundPaidBy = 'shop' THEN r.ShippingRefund ELSE 0 END,
+                {OrderColumns}
             FROM ReturnRequest r
             INNER JOIN ShopOrder s ON s.Id = r.ShopOrderId
             INNER JOIN CustomerOrder o ON o.Id = s.OrderId
