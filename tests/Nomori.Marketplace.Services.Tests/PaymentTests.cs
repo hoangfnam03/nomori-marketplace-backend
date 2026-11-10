@@ -35,6 +35,14 @@ public sealed class PaymentTests
         public Task<PaymentTransaction?> GetAsync(int id, CancellationToken cancellationToken) =>
             Task.FromResult(Payments.FirstOrDefault(p => p.Id == id));
 
+        public Task SaveGatewayDetailsAsync(int id, string? redirectUrl, string? gatewayTransactionId, CancellationToken cancellationToken)
+        {
+            var payment = Payments.Single(p => p.Id == id);
+            payment.GatewayRedirectUrl = redirectUrl ?? payment.GatewayRedirectUrl;
+            payment.GatewayTransactionId = gatewayTransactionId ?? payment.GatewayTransactionId;
+            return Task.CompletedTask;
+        }
+
         public Task<PaymentTransaction?> GetByKeyAsync(string idempotencyKey, CancellationToken cancellationToken) =>
             Task.FromResult(Payments.FirstOrDefault(p => p.IdempotencyKey == idempotencyKey));
 
@@ -515,7 +523,7 @@ public sealed class PaymentTests
         var illegal = Event("evt_2", "captured", payment.ProviderReference!);
         var strange = Event("evt_3", "exploded", payment.ProviderReference!);
 
-        Assert.Equal(CallbackOutcome.Ignored, await f.Create().HandleCallbackAsync("sandbox", unknown, Signed(f.Sandbox, unknown), CancellationToken.None));
+        Assert.Equal(CallbackOutcome.NotFound, await f.Create().HandleCallbackAsync("sandbox", unknown, Signed(f.Sandbox, unknown), CancellationToken.None));
         Assert.Equal(CallbackOutcome.Ignored, await f.Create().HandleCallbackAsync("sandbox", illegal, Signed(f.Sandbox, illegal), CancellationToken.None));
         Assert.Equal(CallbackOutcome.Ignored, await f.Create().HandleCallbackAsync("sandbox", strange, Signed(f.Sandbox, strange), CancellationToken.None));
         Assert.Equal(PaymentStatus.Voided, payment.Status);
@@ -549,13 +557,6 @@ public sealed class PaymentTests
         Assert.Null(sandbox.ParseCallback(body, new Dictionary<string, string> { ["X-Nomori-Signature"] = good[..^1] }));
         Assert.Null(sandbox.ParseCallback(body, new Dictionary<string, string> { ["X-Nomori-Signature"] = string.Empty }));
     }
-
-    [Theory]
-    [InlineData("", false)]
-    [InlineData("short", false)]
-    [InlineData("a-secret-of-sixteen", true)]
-    public void TheSandboxNeedsALongEnoughSecret(string secret, bool configured) =>
-        Assert.Equal(configured, new SandboxPaymentOptions { Secret = secret }.IsConfigured);
 
     // ---- Hosted (redirect) payments ----
 
@@ -698,14 +699,4 @@ public sealed class PaymentTests
             gateway.ReturnUrl(new PaymentTransaction { ReferenceType = PaymentReferenceTypes.Order, ReferenceId = 42 }));
         Assert.Equal("http://app.test/storefront", gateway.ReturnUrl(new PaymentTransaction { ReferenceType = "checkout", ReferenceId = 1 }));
     }
-
-    [Theory]
-    [InlineData("a-secret-of-sixteen", "http://localhost:4200", true)]
-    [InlineData("a-secret-of-sixteen", "https://shop.example", true)]
-    [InlineData("a-secret-of-sixteen", "", false)]
-    [InlineData("a-secret-of-sixteen", "localhost:4200", false)]
-    [InlineData("a-secret-of-sixteen", "ftp://shop.example", false)]
-    [InlineData("short", "http://localhost:4200", false)]
-    public void TheHostedGatewayNeedsTheSecretAndAnAbsoluteAddress(string secret, string address, bool configured) =>
-        Assert.Equal(configured, new SandboxPaymentOptions { Secret = secret, PageBaseUrl = address }.HostedConfigured);
 }

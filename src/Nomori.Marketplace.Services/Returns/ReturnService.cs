@@ -10,6 +10,7 @@ using Nomori.Marketplace.Core.Payments;
 using Nomori.Marketplace.Core.Returns;
 using Nomori.Marketplace.Core.Security;
 using Nomori.Marketplace.Core.Time;
+using Nomori.Marketplace.Core.Wallets;
 
 namespace Nomori.Marketplace.Services.Returns;
 
@@ -22,7 +23,7 @@ public sealed partial class ReturnService(
     IOrderStore orders,
     IPrimaryCurrencyProvider primaryCurrency,
     IInventoryService inventory,
-    IPaymentService payments,
+    IWalletService wallets,
     IReturnShipper shipper,
     ICustomerIdentityStore customers,
     IEmailQueueService emailQueue,
@@ -176,14 +177,18 @@ public sealed partial class ReturnService(
         // The step is done once (compare-and-set), so the stock goes back once too.
         if (restock) await RestockAsync(request, caller, cancellationToken);
 
-        // Paid online: the money goes back at once, through the same gateway. Cash on delivery or a transfer needs a person to send it, so an
-        // administrator refunds it by hand; so does a refund the gateway refuses.
-        var payment = await FindRefundablePaymentAsync(request, cancellationToken);
-        if (payment is null || !await IsOnlineAsync(payment, cancellationToken)) return moved;
-        // Nothing to send back (a fully discounted item, or the return shipping took it all): just close it.
-        if (ReturnRules.PayOut(request) <= 0) payment = null;
-        var refunded = await RefundThroughAsync(request, payment, manual: false, caller.ActorCustomerId, automatic: true, cancellationToken);
-        return refunded.Succeeded ? refunded : CatalogResult.Success((await store.GetAsync(id, cancellationToken))!);
+        // The money goes back to the customer's wallet at once, whatever paid for the order (cash on delivery included). A wallet that
+        // cannot be reached leaves the return received: the receipt stands and an administrator refunds it.
+        try
+        {
+            var refunded = await RefundThroughAsync(request, manual: false, caller.ActorCustomerId, automatic: true, cancellationToken);
+            if (refunded.Succeeded) return refunded;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            LogRefundFailed(exception, request.Number);
+        }
+        return CatalogResult.Success((await store.GetAsync(id, cancellationToken))!);
     }
 
     // ---- Administrators ----
@@ -195,45 +200,38 @@ public sealed partial class ReturnService(
         if (ReturnRules.Transition(request.Status, ReturnAction.Refund, caller.Actor) is null)
             return CatalogResult.Error<ReturnRequest>(ReturnErrors.InvalidTransition);
 
-        // Find the payment first: a refund that cannot go anywhere must not use up the step.
-        PaymentTransaction? payment = null;
-        if (!manual && ReturnRules.PayOut(request) > 0)
-        {
-            payment = await FindRefundablePaymentAsync(request, cancellationToken);
-            if (payment is null) return CatalogResult.Error<ReturnRequest>(ReturnErrors.NoRefundablePayment);
-        }
-
-        return await RefundThroughAsync(request, payment, manual, caller.ActorCustomerId, automatic: false, cancellationToken);
+        return await RefundThroughAsync(request, manual, caller.ActorCustomerId, automatic: false, cancellationToken);
     }
 
     /// <summary>
-    /// Sends the refund of a received return through <paramref name="payment"/> (null: nothing to send, the money went back by hand) and marks
-    /// it refunded. The step is claimed first, so of two attempts only one moves money.
+    /// Marks a received return refunded and puts what the customer is owed in their wallet (<paramref name="manual"/>: the money went back by
+    /// hand, nothing is credited). The step is claimed first and the credit is keyed by the return, so the customer is never paid twice.
     /// </summary>
     private async Task<CatalogResult<ReturnRequest>> RefundThroughAsync(
-        ReturnRequest request, PaymentTransaction? payment, bool manual, int actorCustomerId, bool automatic, CancellationToken cancellationToken)
+        ReturnRequest request, bool manual, int actorCustomerId, bool automatic, CancellationToken cancellationToken)
     {
         var id = request.Id;
-        // Claim the step before moving money: of two clicks only one gets here, so the customer is never paid twice.
-        var now = clock.UtcNow;
-        if (!await store.TryTransitionAsync(new ReturnTransition(id, ReturnStatus.Received, ReturnStatus.Refunded, null, null, payment?.Id, now), cancellationToken))
+        if (!await store.TryTransitionAsync(new ReturnTransition(id, ReturnStatus.Received, ReturnStatus.Refunded, null, null, null, clock.UtcNow), cancellationToken))
             return CatalogResult.Error<ReturnRequest>(ReturnErrors.InvalidTransition);
 
-        if (payment is not null)
+        await DecideShippingRefundAsync(request, cancellationToken);
+        var payOut = ReturnRules.PayOut(request);
+        if (!manual && payOut > 0)
         {
-            var refund = await payments.RefundAsync(payment.Id, ReturnRules.PayOut(request), actorCustomerId, cancellationToken);
-            if (!refund.Succeeded)
+            try
             {
-                // Nothing was sent: give the step back so it can be tried again.
+                await wallets.CreditAsync(request.CustomerId, WalletEntryKind.Refund, payOut, $"return-{id}", "return", id, request.Number, cancellationToken);
+            }
+            catch
+            {
+                // Nothing was credited: give the step back so it can be tried again.
                 await store.TryTransitionAsync(new ReturnTransition(id, ReturnStatus.Refunded, ReturnStatus.Received, null, null, null, clock.UtcNow), CancellationToken.None);
-                return refund.Errors.Count > 0
-                    ? CatalogResult.Failure<ReturnRequest>(refund.Errors)
-                    : CatalogResult.Error<ReturnRequest>(refund.ErrorCode ?? ReturnErrors.NoRefundablePayment);
+                throw;
             }
         }
 
         await auditLog.WriteAsync("return.refunded", actorCustomerId, entityType: "ReturnRequest", entityId: id,
-            details: new { returnId = id, request.Number, request.RefundAmount, payOut = ReturnRules.PayOut(request), manual, automatic, paymentId = payment?.Id },
+            details: new { returnId = id, request.Number, request.RefundAmount, request.ShippingRefund, payOut, manual, automatic, toWallet = !manual },
             cancellationToken: cancellationToken);
         await MarkReturnedWhenWholeAsync(request.ShopOrderId, cancellationToken);
         var updated = (await store.GetAsync(id, cancellationToken))!;
@@ -244,6 +242,28 @@ public sealed partial class ReturnService(
     // ---- Helpers ----
 
     /// <summary>When the refund just made was the last item of the shop order, the shop order becomes returned (the system does it).</summary>
+    /// <summary>
+    /// The refund that leaves nothing of the shop order unreturned also gives back the shipping the customer paid for it, whatever the reason.
+    /// Decided at the refund (the status is already claimed, so this return counts as refunded), and written on <paramref name="request"/>.
+    /// </summary>
+    private async Task DecideShippingRefundAsync(ReturnRequest request, CancellationToken cancellationToken)
+    {
+        var shopOrder = await orders.GetShopOrderAsync(request.ShopOrderId, cancellationToken);
+        var whole = shopOrder is not null && shopOrder.ShippingFee > 0
+            && ReturnRules.IsReturnedWhole(shopOrder.Lines, await store.RefundedQuantitiesAsync(request.ShopOrderId, cancellationToken));
+        var amount = whole ? shopOrder!.ShippingFee : 0m;
+        var payer = whole ? ReturnRules.ShippingRefundPayer(request.Reason) : null;
+
+        if (!await store.TrySetShippingRefundAsync(request.Id, request.ShopOrderId, amount, payer, clock.UtcNow, cancellationToken))
+        {
+            // Another return of this shop order gave the shipping back already.
+            amount = 0m;
+            payer = null;
+        }
+        request.ShippingRefund = amount;
+        request.ShippingRefundPaidBy = payer;
+    }
+
     private async Task MarkReturnedWhenWholeAsync(int shopOrderId, CancellationToken cancellationToken)
     {
         var shopOrder = await orders.GetShopOrderAsync(shopOrderId, cancellationToken);
@@ -316,21 +336,6 @@ public sealed partial class ReturnService(
         return shipment;
     }
 
-    /// <summary>Whether the payment went through a gateway, which can send money back by itself; cash on delivery and transfers cannot.</summary>
-    private async Task<bool> IsOnlineAsync(PaymentTransaction payment, CancellationToken cancellationToken) =>
-        (await payments.GetMethodsAsync(cancellationToken)).Any(m =>
-            string.Equals(m.SystemName, payment.Method, StringComparison.OrdinalIgnoreCase) && m.Kind != PaymentProviderKind.Offline);
-
-    private async Task<PaymentTransaction?> FindRefundablePaymentAsync(ReturnRequest request, CancellationToken cancellationToken)
-    {
-        foreach (var paymentId in await store.PaymentIdsForOrderAsync(request.OrderId, cancellationToken))
-        {
-            var payment = await payments.GetPaymentAsync(paymentId, cancellationToken);
-            if (payment is not null && PaymentRules.CanRefund(payment.Status) && PaymentRules.Refundable(payment) >= ReturnRules.PayOut(request)) return payment;
-        }
-        return null;
-    }
-
     private async Task RestockAsync(ReturnRequest request, ReturnCaller caller, CancellationToken cancellationToken)
     {
         var lines = request.Lines.Select(l => new StockReturnLine(l.ProductId, l.CombinationId, l.Quantity)).ToList();
@@ -370,7 +375,7 @@ public sealed partial class ReturnService(
                 ReturnStatus.Rejected => (EmailKinds.ReturnRejected, $"Your return {request.Number} was not approved",
                     $"<p>Your return <strong>{number}</strong> was not approved.</p>{note}"),
                 ReturnStatus.Refunded => (EmailKinds.ReturnRefunded, $"Your refund for return {request.Number}",
-                    $"<p>Your return <strong>{number}</strong> is complete. We refunded {ReturnRules.PayOut(request).ToString("#,0.##", System.Globalization.CultureInfo.InvariantCulture)} {WebUtility.HtmlEncode(request.CurrencyCode)}.</p>"),
+                    $"<p>Your return <strong>{number}</strong> is complete. We added {ReturnRules.PayOut(request).ToString("#,0.##", System.Globalization.CultureInfo.InvariantCulture)} {WebUtility.HtmlEncode(request.CurrencyCode)} to your Nomori wallet.</p>"),
                 _ => (string.Empty, string.Empty, string.Empty)
             };
             if (kind.Length == 0) return;
@@ -387,6 +392,9 @@ public sealed partial class ReturnService(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Could not queue the email of return {Number}.")]
     private partial void LogNotifyFailed(Exception exception, string number);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Could not refund return {Number} to the wallet; it stays received for an administrator.")]
+    private partial void LogRefundFailed(Exception exception, string number);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Could not make the parcel back of return {Number}.")]
     private partial void LogShipmentFailed(Exception exception, string number);

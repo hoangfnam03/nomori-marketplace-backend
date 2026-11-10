@@ -14,7 +14,8 @@ public sealed class OrderService(
     IInventoryService inventory,
     IAuditLogService auditLog,
     IClock clock,
-    IOrderNotifier notifier) : IOrderService
+    IOrderNotifier notifier,
+    IOrderCancellationRefunds cancellationRefunds) : IOrderService
 {
     // ---- Checkout ----
 
@@ -326,6 +327,8 @@ public sealed class OrderService(
         if (action == OrderAction.Cancel && OrderRules.ReturnsStock(from)) await ReturnStockAsync(shopOrder, actorCustomerId, cancellationToken);
 
         var updated = (await store.GetShopOrderAsync(shopOrder.Id, cancellationToken))!;
+        // Also once: the cancel above is the only one that gets here.
+        if (action == OrderAction.Cancel) await cancellationRefunds.RefundCancelledAsync(updated, actor, cancellationToken);
         await notifier.ShopOrderChangedAsync(updated, cancellationToken);
         return CatalogResult.Success(await DetailAsync(updated, cancellationToken));
     }

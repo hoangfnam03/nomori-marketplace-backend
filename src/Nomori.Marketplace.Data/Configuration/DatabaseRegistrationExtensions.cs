@@ -38,6 +38,8 @@ using Nomori.Marketplace.Data.Customers;
 using Nomori.Marketplace.Data.Media;
 using Nomori.Marketplace.Data.Security;
 using Nomori.Marketplace.Data.Vendors;
+using Nomori.Marketplace.Data.Wallets;
+using Nomori.Marketplace.Core.Wallets;
 
 namespace Nomori.Marketplace.Data.Configuration;
 
@@ -64,6 +66,8 @@ public static class DatabaseRegistrationExtensions
         services.AddScoped<ICartStore, SqlCartStore>();
         services.AddScoped<IGhnStore, SqlGhnStore>();
         services.AddScoped<IPaymentStore, SqlPaymentStore>();
+        // A singleton: the wallet payment method (a singleton provider) posts through it; it keeps no state but its options.
+        services.AddSingleton<IWalletStore, SqlWalletStore>();
         services.AddScoped<IOrderStore, SqlOrderStore>();
         services.AddScoped<IEmailQueueStore, SqlEmailQueueStore>();
         services.AddScoped<IReminderStore, SqlReminderStore>();

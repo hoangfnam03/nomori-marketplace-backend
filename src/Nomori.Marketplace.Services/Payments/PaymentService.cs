@@ -77,8 +77,9 @@ public sealed class PaymentService(
             return CatalogResult.Error<PaymentTransaction>(PaymentErrors.ProviderFailed);
         }
 
-        var status = provider.Kind == PaymentProviderKind.Gateway ? PaymentStatus.Authorized : PaymentStatus.Pending;
+        var status = started.PaidNow ? PaymentStatus.Paid : provider.Kind == PaymentProviderKind.Gateway ? PaymentStatus.Authorized : PaymentStatus.Pending;
         await store.TryChangeAsync(payment.Id, PaymentStatus.Pending, status, 0, started.ProviderReference, null, clock.UtcNow, cancellationToken);
+        if (started.RedirectUrl is not null) await store.SaveGatewayDetailsAsync(payment.Id, started.RedirectUrl, null, cancellationToken);
 
         await AuditAsync("payment.created", command.CustomerId, payment,
             new { payment.Id, payment.ReferenceType, payment.ReferenceId, payment.Method, payment.Amount, payment.CurrencyCode }, cancellationToken);
@@ -187,6 +188,13 @@ public sealed class PaymentService(
         if (callback is null) return CallbackOutcome.Rejected;
 
         var payment = await store.GetByProviderReferenceAsync(adapter.SystemName, callback.ProviderReference, cancellationToken);
+        // A gateway that names the amount must name the payment's: anything else is not this payment, whatever its signature.
+        if (payment is not null && callback.Amount is { } reported && reported != payment.Amount)
+        {
+            await auditLog.WriteAsync("payment.callback_amount_mismatch", entityType: "PaymentTransaction", entityId: payment.Id,
+                details: new { provider = adapter.SystemName, callback.EventId, reported, expected = payment.Amount }, cancellationToken: cancellationToken);
+            return CallbackOutcome.AmountMismatch;
+        }
         var rule = PaymentRules.ForCallback(callback.Type);
 
         var outcome = Ignored;
@@ -208,8 +216,11 @@ public sealed class PaymentService(
 
         await auditLog.WriteAsync(outcome == Applied ? "payment.callback_applied" : "payment.callback_ignored", entityType: "PaymentTransaction",
             entityId: payment?.Id, details: new { provider = adapter.SystemName, callback.EventId, callback.Type }, cancellationToken: cancellationToken);
+        // The gateway's transaction id is what a refund names later.
+        if (outcome == Applied && callback.GatewayTransactionId is not null)
+            await store.SaveGatewayDetailsAsync(payment!.Id, null, callback.GatewayTransactionId, cancellationToken);
         if (outcome == Applied) await NotifyHandlersAsync(payment!.Id, cancellationToken);
-        return outcome == Applied ? CallbackOutcome.Applied : CallbackOutcome.Ignored;
+        return outcome == Applied ? CallbackOutcome.Applied : payment is null ? CallbackOutcome.NotFound : CallbackOutcome.Ignored;
     }
 
     // ---- Helpers ----

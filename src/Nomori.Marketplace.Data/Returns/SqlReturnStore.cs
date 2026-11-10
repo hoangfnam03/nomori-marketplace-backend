@@ -12,7 +12,7 @@ public sealed class SqlReturnStore(IOptions<DatabaseOptions> options) : IReturnS
     private const string Columns =
         "Id, Number, ShopOrderId, OrderId, ShopOrderNumber, VendorId, ShopName, CustomerId, Status, Reason, CustomerNote, ResolutionNote, " +
         "CurrencyCode, RefundAmount, Restocked, PaymentId, CreatedOnUtc, UpdatedOnUtc, " +
-        "ReturnTrackingNumber, ReturnShippingFee, ReturnShippingPaidBy, ReturnShipmentStatus, ReturnShipmentError";
+        "ReturnTrackingNumber, ReturnShippingFee, ReturnShippingPaidBy, ReturnShipmentStatus, ReturnShipmentError, ShippingRefund, ShippingRefundPaidBy";
 
     public async Task<(ReturnRequest? Request, bool QuantityExceeded)> InsertAsync(ReturnRequest request, CancellationToken cancellationToken)
     {
@@ -218,6 +218,28 @@ public sealed class SqlReturnStore(IOptions<DatabaseOptions> options) : IReturnS
         return await cmd.ExecuteNonQueryAsync(cancellationToken) == 1;
     }
 
+    public async Task<bool> TrySetShippingRefundAsync(
+        int id, int shopOrderId, decimal amount, string? payer, DateTime nowUtc, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        // The check and the write are one statement, under a range lock on the shop order's returns: two refunds at once give it back once.
+        cmd.CommandText = """
+            UPDATE ReturnRequest
+            SET ShippingRefund = @Amount, ShippingRefundPaidBy = @Payer, UpdatedOnUtc = @Now
+            WHERE Id = @Id
+              AND (@Amount = 0 OR NOT EXISTS (
+                  SELECT 1 FROM ReturnRequest o WITH (UPDLOCK, HOLDLOCK)
+                  WHERE o.ShopOrderId = @ShopOrderId AND o.Id <> @Id AND o.ShippingRefund > 0))
+            """;
+        cmd.Parameters.AddWithValue("@Id", id);
+        cmd.Parameters.AddWithValue("@ShopOrderId", shopOrderId);
+        cmd.Parameters.Add(new SqlParameter("@Amount", SqlDbType.Decimal) { Precision = 18, Scale = 4, Value = amount });
+        cmd.Parameters.Add(new SqlParameter("@Payer", SqlDbType.NVarChar, 10) { Value = (object?)payer ?? DBNull.Value });
+        Add(cmd, "@Now", nowUtc);
+        return await cmd.ExecuteNonQueryAsync(cancellationToken) == 1;
+    }
+
     public async Task SetShipmentAsync(int id, ReturnShipment shipment, string payer, DateTime nowUtc, CancellationToken cancellationToken)
     {
         await using var connection = await OpenAsync(cancellationToken);
@@ -283,7 +305,8 @@ public sealed class SqlReturnStore(IOptions<DatabaseOptions> options) : IReturnS
         CreatedOnUtc = Utc(r.GetDateTime(16)), UpdatedOnUtc = Utc(r.GetDateTime(17)),
         ReturnTrackingNumber = r.IsDBNull(18) ? null : r.GetString(18), ReturnShippingFee = r.GetDecimal(19),
         ReturnShippingPaidBy = r.IsDBNull(20) ? null : r.GetString(20), ReturnShipmentStatus = r.IsDBNull(21) ? null : r.GetString(21),
-        ReturnShipmentError = r.IsDBNull(22) ? null : r.GetString(22)
+        ReturnShipmentError = r.IsDBNull(22) ? null : r.GetString(22),
+        ShippingRefund = r.GetDecimal(23), ShippingRefundPaidBy = r.IsDBNull(24) ? null : r.GetString(24)
     };
 
     private static DateTime Utc(DateTime value) => DateTime.SpecifyKind(value, DateTimeKind.Utc);

@@ -15,20 +15,21 @@ public sealed record ReturnLineResponse(int Id, int OrderLineId, string Name, st
     public static ReturnLineResponse From(ReturnLine line) => new(line.Id, line.OrderLineId, line.Name, line.VariantLabel, line.Quantity, line.Amount);
 }
 
-/// <param name="PayOut">What the customer gets back: the refund less the return shipping they pay.</param>
+/// <param name="PayOut">What the customer gets back: the refund and the shipping given back, less the return shipping they pay.</param>
+/// <param name="ShippingRefund">The shipping of the shop order given back with this return (the one that leaves nothing unreturned).</param>
 /// <param name="ReturnTrackingNumber">The GHN parcel that brings the goods back; null when the customer sends them by themselves.</param>
 /// <param name="ReturnShippingPaidBy"><c>customer</c> (taken off the refund) or <c>shop</c>.</param>
 public sealed record ReturnResponse(
     int Id, string Number, int ShopOrderId, int OrderId, string ShopOrderNumber, int VendorId, string ShopName, string Status, string Reason,
     string? CustomerNote, string? ResolutionNote, string CurrencyCode, decimal RefundAmount, bool Restocked, DateTime CreatedOnUtc, DateTime UpdatedOnUtc,
     IReadOnlyList<ReturnLineResponse> Lines, decimal PayOut, string? ReturnTrackingNumber, decimal ReturnShippingFee, string? ReturnShippingPaidBy,
-    string? ReturnShipmentStatus, string? ReturnShipmentError)
+    string? ReturnShipmentStatus, string? ReturnShipmentError, decimal ShippingRefund, string? ShippingRefundPaidBy)
 {
     public static ReturnResponse From(ReturnRequest r) => new(
         r.Id, r.Number, r.ShopOrderId, r.OrderId, r.ShopOrderNumber, r.VendorId, r.ShopName, ReturnRules.ToWire(r.Status), r.Reason,
         r.CustomerNote, r.ResolutionNote, r.CurrencyCode, r.RefundAmount, r.Restocked, r.CreatedOnUtc, r.UpdatedOnUtc,
         r.Lines.Select(ReturnLineResponse.From).ToList(), ReturnRules.PayOut(r), r.ReturnTrackingNumber, r.ReturnShippingFee, r.ReturnShippingPaidBy,
-        r.ReturnShipmentStatus, r.ReturnShipmentError);
+        r.ReturnShipmentStatus, r.ReturnShipmentError, r.ShippingRefund, r.ShippingRefundPaidBy);
 }
 
 public sealed record ReturnPageResponse(IReadOnlyList<ReturnResponse> Items, int TotalCount, int Page, int PageSize, int TotalPages)

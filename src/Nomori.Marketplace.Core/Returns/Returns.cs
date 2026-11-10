@@ -90,8 +90,17 @@ public sealed class ReturnRequest
 
     public string CurrencyCode { get; set; } = string.Empty;
 
-    /// <summary>What the customer gets back for these lines, worked out when the request was made (see <see cref="ReturnRules.RefundFor"/>). Shipping is never refunded.</summary>
+    /// <summary>What the customer gets back for these lines, worked out when the request was made (see <see cref="ReturnRules.RefundFor"/>).</summary>
     public decimal RefundAmount { get; set; }
+
+    /// <summary>
+    /// The shipping the customer paid for the shop order, given back with the refund that leaves nothing of the shop order unreturned. At most
+    /// one return of a shop order carries it; 0 on every other.
+    /// </summary>
+    public decimal ShippingRefund { get; set; }
+
+    /// <summary>Who bears <see cref="ShippingRefund"/>: <c>shop</c> (the goods were at fault; taken off its settlement) or <c>platform</c>.</summary>
+    public string? ShippingRefundPaidBy { get; set; }
 
     public bool Restocked { get; set; }
 
@@ -163,6 +172,7 @@ public static class ReturnPayers
 {
     public const string Customer = "customer";
     public const string Shop = "shop";
+    public const string Platform = "platform";
 }
 
 public static class ReturnRules
@@ -173,12 +183,24 @@ public static class ReturnRules
     /// </summary>
     public static string ShippingPayer(string reason) => reason == ReturnReasons.ChangedMind ? ReturnPayers.Customer : ReturnPayers.Shop;
 
-    /// <summary>What the customer actually gets back: the refund, less the return shipping when they pay it. Never negative.</summary>
+    /// <summary>
+    /// What the customer actually gets back: the refund and the shipping given back with it, less the return shipping when they pay it.
+    /// Never negative.
+    /// </summary>
     public static decimal PayOut(ReturnRequest request) =>
-        Math.Max(0m, request.RefundAmount - (request.ReturnShippingPaidBy == ReturnPayers.Customer ? request.ReturnShippingFee : 0m));
+        Math.Max(0m, request.RefundAmount + request.ShippingRefund
+            - (request.ReturnShippingPaidBy == ReturnPayers.Customer ? request.ReturnShippingFee : 0m));
 
-    /// <summary>The return shipping the shop bears, taken off its settlement with the refund.</summary>
-    public static decimal ShopShipping(ReturnRequest request) => request.ReturnShippingPaidBy == ReturnPayers.Shop ? request.ReturnShippingFee : 0m;
+    /// <summary>The shipping the shop bears, taken off its settlement with the refund: the parcel back and, when the goods were at fault, the shipping given back.</summary>
+    public static decimal ShopShipping(ReturnRequest request) =>
+        (request.ReturnShippingPaidBy == ReturnPayers.Shop ? request.ReturnShippingFee : 0m)
+        + (request.ShippingRefundPaidBy == ReturnPayers.Shop ? request.ShippingRefund : 0m);
+
+    /// <summary>
+    /// Who bears the shipping given back when a shop order is returned whole: the shop when its goods were at fault, the platform when the
+    /// customer no longer needed them.
+    /// </summary>
+    public static string ShippingRefundPayer(string reason) => reason == ReturnReasons.ChangedMind ? ReturnPayers.Platform : ReturnPayers.Shop;
 
     /// <summary>The status an action leads to, or null when this actor may not do it from this status.</summary>
     public static ReturnStatus? Transition(ReturnStatus from, ReturnAction action, OrderActor actor) => (action, from, actor) switch
@@ -271,6 +293,12 @@ public interface IReturnStore
 
     /// <summary>Writes what came of making the parcel back (its number and fee, or the error).</summary>
     Task SetShipmentAsync(int id, ReturnShipment shipment, string payer, DateTime nowUtc, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Gives this return the shipping to give back (0 clears it). Refused (false) when another return of the same shop order already carries
+    /// it, so the shipping is given back once.
+    /// </summary>
+    Task<bool> TrySetShippingRefundAsync(int id, int shopOrderId, decimal amount, string? payer, DateTime nowUtc, CancellationToken cancellationToken);
 
     /// <summary>The return whose parcel back has this carrier number; null when there is none.</summary>
     Task<int?> FindByTrackingNumberAsync(string trackingNumber, CancellationToken cancellationToken);

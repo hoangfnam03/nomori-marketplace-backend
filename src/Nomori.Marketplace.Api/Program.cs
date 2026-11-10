@@ -19,6 +19,8 @@ using Nomori.Marketplace.Services.Seo;
 using Nomori.Marketplace.Core.Settlement;
 using Nomori.Marketplace.Services.Settlement;
 using Nomori.Marketplace.Services.Returns;
+using Nomori.Marketplace.Services.Wallets;
+using Nomori.Marketplace.Core.Wallets;
 using Nomori.Marketplace.Core.Payments;
 using Nomori.Marketplace.Core.Shipping;
 using Nomori.Marketplace.Core.Tax;
@@ -194,6 +196,8 @@ builder.Services.AddOptions<ReturnOptions>()
     .Validate(options => options.WindowDays is >= 1 and <= 365, "Returns:WindowDays must be between 1 and 365.")
     .ValidateOnStart();
 builder.Services.AddScoped<IReturnService, ReturnService>();
+builder.Services.AddScoped<IWalletService, WalletService>();
+builder.Services.AddScoped<IOrderCancellationRefunds, CancelledOrderWalletRefunds>();
 builder.Services.AddOptions<SeoOptions>()
     .Bind(builder.Configuration.GetSection(SeoOptions.SectionName))
     .Validate(options => Uri.TryCreate(options.SiteBaseUrl, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https", "Seo:SiteBaseUrl must be an absolute http or https address.")
@@ -238,14 +242,19 @@ builder.Services.AddScoped<IGhnShippingService>(services => services.GetRequired
 builder.Services.AddScoped<IReturnShipper>(services => services.GetRequiredService<GhnShippingService>());
 builder.Services.AddOptions<PaymentOptions>().Bind(builder.Configuration.GetSection(PaymentOptions.SectionName));
 builder.Services.AddSingleton<IPaymentProvider, CashOnDeliveryProvider>();
-// The test gateway only exists where a secret is configured, so production cannot offer it by accident.
-var sandboxPayments = builder.Configuration.GetSection($"{PaymentOptions.SectionName}:Sandbox").Get<SandboxPaymentOptions>();
-if (sandboxPayments is { IsConfigured: true })
-    builder.Services.AddSingleton<IPaymentProvider>(new SandboxPaymentProvider(sandboxPayments.Secret));
-// The test gateway with a payment page also needs the address of the Angular app, where that page lives.
-if (sandboxPayments is { HostedConfigured: true })
-    builder.Services.AddSingleton<IPaymentProvider>(new HostedSandboxPaymentProvider(sandboxPayments.Secret, sandboxPayments.PageBaseUrl));
+// Stripe only exists where its secret key and webhook secret are configured (Payments__Stripe__* in .env or the server's environment).
+var stripe = builder.Configuration.GetSection($"{PaymentOptions.SectionName}:Stripe").Get<StripePaymentOptions>();
+if (stripe is { IsConfigured: true })
+{
+    builder.Services.AddHttpClient(StripePaymentProvider.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(30));
+    builder.Services.AddSingleton(services => new StripePaymentProvider(
+        stripe, services.GetRequiredService<IHttpClientFactory>().CreateClient(StripePaymentProvider.HttpClientName), services.GetRequiredService<IClock>()));
+    builder.Services.AddSingleton<IPaymentProvider>(services => services.GetRequiredService<StripePaymentProvider>());
+}
+// The wallet pays at once from its balance; a paid top-up adds to it.
+builder.Services.AddSingleton<IPaymentProvider, WalletPaymentProvider>();
 builder.Services.AddScoped<IPaymentOutcomeHandler, OrderPaymentOutcomeHandler>();
+builder.Services.AddScoped<IPaymentOutcomeHandler, WalletTopUpHandler>();
 builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
 builder.Services.AddScoped<IDiscountService, DiscountService>();

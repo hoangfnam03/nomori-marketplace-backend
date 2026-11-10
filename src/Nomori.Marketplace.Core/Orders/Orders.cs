@@ -460,3 +460,12 @@ public interface IOrderNotifier
     /// <summary>A shop order was shipped, delivered or cancelled. Other statuses send nothing.</summary>
     Task ShopOrderChangedAsync(ShopOrder shopOrder, CancellationToken cancellationToken);
 }
+
+/// <summary>
+/// Gives back the money of a shop order cancelled after it was paid online (gateway or wallet): it goes to the customer's wallet, once. Cash on
+/// delivery took nothing yet; cancellations by the system happen before the money or are refunded through the gateway.
+/// </summary>
+public interface IOrderCancellationRefunds
+{
+    Task RefundCancelledAsync(ShopOrder shopOrder, OrderActor actor, CancellationToken cancellationToken);
+}

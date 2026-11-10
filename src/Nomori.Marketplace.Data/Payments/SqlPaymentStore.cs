@@ -9,7 +9,8 @@ namespace Nomori.Marketplace.Data.Payments;
 public sealed class SqlPaymentStore(IOptions<DatabaseOptions> options) : IPaymentStore
 {
     private const string Columns =
-        "Id, ReferenceType, ReferenceId, IdempotencyKey, Method, CustomerId, Amount, CurrencyCode, Status, RefundedAmount, ProviderReference, FailureCode, CreatedOnUtc, UpdatedOnUtc";
+        "Id, ReferenceType, ReferenceId, IdempotencyKey, Method, CustomerId, Amount, CurrencyCode, Status, RefundedAmount, ProviderReference, FailureCode, CreatedOnUtc, UpdatedOnUtc, " +
+        "GatewayRedirectUrl, GatewayTransactionId";
 
     // 2601 and 2627: a unique index says the row already exists.
     private static bool IsDuplicate(SqlException ex) => ex.Number is 2601 or 2627;
@@ -111,6 +112,21 @@ public sealed class SqlPaymentStore(IOptions<DatabaseOptions> options) : IPaymen
         return await cmd.ExecuteNonQueryAsync(cancellationToken) > 0;
     }
 
+    public async Task SaveGatewayDetailsAsync(int id, string? redirectUrl, string? gatewayTransactionId, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            UPDATE PaymentTransaction
+            SET GatewayRedirectUrl = COALESCE(@RedirectUrl, GatewayRedirectUrl), GatewayTransactionId = COALESCE(@TransactionId, GatewayTransactionId)
+            WHERE Id = @Id
+            """;
+        cmd.Parameters.AddWithValue("@Id", id);
+        cmd.Parameters.Add(new SqlParameter("@RedirectUrl", System.Data.SqlDbType.NVarChar, 2000) { Value = (object?)redirectUrl ?? DBNull.Value });
+        cmd.Parameters.Add(new SqlParameter("@TransactionId", System.Data.SqlDbType.NVarChar, 100) { Value = (object?)gatewayTransactionId ?? DBNull.Value });
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     public async Task<PagedResult<PaymentTransaction>> GetPagedAsync(PaymentQuery query, CancellationToken cancellationToken)
     {
         await using var connection = await OpenAsync(cancellationToken);
@@ -183,7 +199,9 @@ public sealed class SqlPaymentStore(IOptions<DatabaseOptions> options) : IPaymen
         ProviderReference = r.IsDBNull(10) ? null : r.GetString(10),
         FailureCode = r.IsDBNull(11) ? null : r.GetString(11),
         CreatedOnUtc = DateTime.SpecifyKind(r.GetDateTime(12), DateTimeKind.Utc),
-        UpdatedOnUtc = DateTime.SpecifyKind(r.GetDateTime(13), DateTimeKind.Utc)
+        UpdatedOnUtc = DateTime.SpecifyKind(r.GetDateTime(13), DateTimeKind.Utc),
+        GatewayRedirectUrl = r.IsDBNull(14) ? null : r.GetString(14),
+        GatewayTransactionId = r.IsDBNull(15) ? null : r.GetString(15)
     };
 
     private async Task<SqlConnection> OpenAsync(CancellationToken cancellationToken)

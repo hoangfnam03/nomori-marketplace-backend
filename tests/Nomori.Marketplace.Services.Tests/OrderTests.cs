@@ -127,6 +127,7 @@ public sealed class OrderTests
         public FakeStockService Stock { get; } = new();
         public RecordingAuditLog Audit { get; } = new();
         public RecordingOrderNotifier Notifier { get; } = new();
+        public RecordingCancellationRefunds Refunds { get; } = new();
 
         public Fixture()
         {
@@ -134,7 +135,7 @@ public sealed class OrderTests
             Vendors.Vendors.Add(new Vendor { Id = OtherShop, Name = "Tea Co", Active = true });
         }
 
-        public OrderService Create(int decimals = 2) => new(Store, Vendors, new FakePrimaryCurrency(decimals), Stock, Audit, new TestClock(), Notifier);
+        public OrderService Create(int decimals = 2) => new(Store, Vendors, new FakePrimaryCurrency(decimals), Stock, Audit, new TestClock(), Notifier, Refunds);
 
         /// <summary>An order with one shop order per given shop, owned by the buyer.</summary>
         public async Task<Order> PlaceAsync(string key = "k1", int customer = Buyer, params int[] shops)
@@ -620,9 +621,12 @@ public sealed class OrderTests
 
         Assert.Equal((ShopOrderStatus.Cancelled, "Out of stock"), (cancelled.Value!.ShopOrder.Status, cancelled.Value.ShopOrder.CancelReason));
         Assert.Equal("Out of stock", cancelled.Value.History[^1].Note);
+        // The money is looked at once, for the cancel that happened, not for the refused attempts.
+        Assert.Equal((shop.Id, OrderActor.Shop), Assert.Single(f.Refunds.Cancelled));
 
         Move(order, Shop, ShopOrderStatus.Shipped);
         Assert.Equal(OrderErrors.InvalidTransition, (await f.Create().CancelAsShopAsync(Shop, shop.Id, "Late", Seller, CancellationToken.None)).ErrorCode);
+        Assert.Single(f.Refunds.Cancelled);
     }
 
     [Fact]
