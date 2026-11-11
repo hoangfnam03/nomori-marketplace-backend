@@ -34,7 +34,12 @@ public sealed class StripeTests
             ["POST /v1/checkout/sessions"] = """{"id":"cs_test_1","url":"https://checkout.stripe.test/c/pay/cs_test_1"}""",
             ["GET /v1/checkout/sessions/cs_test_1"] =
                 """{"id":"cs_test_1","object":"checkout.session","payment_status":"paid","amount_total":150000,"currency":"vnd","payment_intent":"pi_1"}""",
-            ["POST /v1/refunds"] = """{"id":"re_1","status":"succeeded"}"""
+            ["POST /v1/refunds"] = """{"id":"re_1","status":"succeeded"}""",
+            // A VND charge settled in a USD balance: 150,000 VND at 0.0000395 USD each is 5.93 USD; Stripe kept 0.47 USD of it.
+            ["GET /v1/payment_intents/pi_1"] = """
+                {"id":"pi_1","latest_charge":{"id":"ch_1","currency":"vnd",
+                 "balance_transaction":{"id":"txn_1","amount":593,"fee":47,"currency":"usd","exchange_rate":0.0000395}}}
+                """
         };
 
         public List<(string Key, Dictionary<string, string> Form, HttpRequestMessage Request)> Sent { get; } = [];
@@ -243,5 +248,46 @@ public sealed class StripeTests
         var api = new FakeStripe();
         api.Answers["POST /v1/refunds"] = """{"error":{"code":"charge_already_refunded"}}""";
         Assert.Equal("stripe_refund_charge_already_refunded", (await Provider(api).RefundAsync(Payment(PaymentStatus.Paid), 1_000m, CancellationToken.None)).FailureCode);
+    }
+
+    // ---- The fee ----
+
+    [Fact]
+    public async Task TheFeeIsReadFromTheChargeAndBroughtBackToThePaymentsCurrency()
+    {
+        var api = new FakeStripe();
+
+        var fee = await Provider(api).GetFeeAsync(Payment(PaymentStatus.Paid), CancellationToken.None);
+
+        // 0.47 USD / 0.0000395 = 11,898.73... VND, rounded to the dong.
+        Assert.Equal(11_899m, fee);
+        var (key, _, request) = Assert.Single(api.Sent);
+        Assert.Equal("GET /v1/payment_intents/pi_1", key);
+        Assert.Contains("expand", request.RequestUri!.Query);
+    }
+
+    [Theory]
+    [InlineData("""{"latest_charge":{"currency":"vnd","balance_transaction":{"fee":3500,"currency":"vnd","exchange_rate":null}}}""", 3500)]
+    [InlineData("""{"latest_charge":{"currency":"usd","balance_transaction":{"fee":59,"currency":"usd"}}}""", 0.59)]
+    public void AFeeInThePaymentsOwnCurrencyNeedsNoRate(string json, double expected) =>
+        Assert.Equal((decimal)expected, StripePaymentProvider.FeeOf(JsonNode.Parse(json) as JsonObject));
+
+    [Theory]
+    [InlineData("""{"latest_charge":"ch_1"}""")]
+    [InlineData("""{"latest_charge":{"balance_transaction":"txn_1"}}""")]
+    [InlineData("""{"latest_charge":null}""")]
+    [InlineData("""{"error":{"message":"No such payment_intent"}}""")]
+    public void NoFeeIsKnownWithoutTheBalanceTransaction(string json) =>
+        Assert.Null(StripePaymentProvider.FeeOf(JsonNode.Parse(json) as JsonObject));
+
+    [Fact]
+    public async Task APaymentWithoutAPaymentIntentHasNoFeeToAskFor()
+    {
+        var api = new FakeStripe();
+
+        var payment = Payment(PaymentStatus.Paid);
+        payment.GatewayTransactionId = null;
+        Assert.Null(await Provider(api).GetFeeAsync(payment, CancellationToken.None));
+        Assert.Empty(api.Sent);
     }
 }

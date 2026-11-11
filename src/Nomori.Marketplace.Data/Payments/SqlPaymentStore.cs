@@ -10,7 +10,7 @@ public sealed class SqlPaymentStore(IOptions<DatabaseOptions> options) : IPaymen
 {
     private const string Columns =
         "Id, ReferenceType, ReferenceId, IdempotencyKey, Method, CustomerId, Amount, CurrencyCode, Status, RefundedAmount, ProviderReference, FailureCode, CreatedOnUtc, UpdatedOnUtc, " +
-        "GatewayRedirectUrl, GatewayTransactionId";
+        "GatewayRedirectUrl, GatewayTransactionId, GatewayFee";
 
     // 2601 and 2627: a unique index says the row already exists.
     private static bool IsDuplicate(SqlException ex) => ex.Number is 2601 or 2627;
@@ -112,6 +112,34 @@ public sealed class SqlPaymentStore(IOptions<DatabaseOptions> options) : IPaymen
         return await cmd.ExecuteNonQueryAsync(cancellationToken) > 0;
     }
 
+    public async Task<IReadOnlyList<int>> FindPaidWithoutFeeAsync(string method, int take, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        // 2: paid, 3: partly refunded.
+        cmd.CommandText = """
+            SELECT TOP (@Take) Id FROM PaymentTransaction
+            WHERE Method = @Method AND Status IN (2, 3) AND GatewayFee IS NULL AND GatewayTransactionId IS NOT NULL
+            ORDER BY Id
+            """;
+        cmd.Parameters.AddWithValue("@Take", take);
+        cmd.Parameters.Add(new SqlParameter("@Method", System.Data.SqlDbType.NVarChar, 50) { Value = method });
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        var ids = new List<int>();
+        while (await reader.ReadAsync(cancellationToken)) ids.Add(reader.GetInt32(0));
+        return ids;
+    }
+
+    public async Task SaveGatewayFeeAsync(int id, decimal fee, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "UPDATE PaymentTransaction SET GatewayFee = @Fee WHERE Id = @Id";
+        cmd.Parameters.AddWithValue("@Id", id);
+        cmd.Parameters.Add(new SqlParameter("@Fee", System.Data.SqlDbType.Decimal) { Precision = 18, Scale = 4, Value = fee });
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     public async Task SaveGatewayDetailsAsync(int id, string? redirectUrl, string? gatewayTransactionId, CancellationToken cancellationToken)
     {
         await using var connection = await OpenAsync(cancellationToken);
@@ -201,7 +229,8 @@ public sealed class SqlPaymentStore(IOptions<DatabaseOptions> options) : IPaymen
         CreatedOnUtc = DateTime.SpecifyKind(r.GetDateTime(12), DateTimeKind.Utc),
         UpdatedOnUtc = DateTime.SpecifyKind(r.GetDateTime(13), DateTimeKind.Utc),
         GatewayRedirectUrl = r.IsDBNull(14) ? null : r.GetString(14),
-        GatewayTransactionId = r.IsDBNull(15) ? null : r.GetString(15)
+        GatewayTransactionId = r.IsDBNull(15) ? null : r.GetString(15),
+        GatewayFee = r.IsDBNull(16) ? null : r.GetDecimal(16)
     };
 
     private async Task<SqlConnection> OpenAsync(CancellationToken cancellationToken)

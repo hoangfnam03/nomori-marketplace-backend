@@ -144,8 +144,20 @@ public sealed record SettlementOrderRow(
     decimal TaxAmount, decimal Rate, string CurrencyCode, bool PlatformShips = false, decimal ShopShippingCost = 0m, decimal ShippingAdjustment = 0m);
 
 /// <summary>A refunded return and the order it belongs to.</summary>
-/// <param name="ShopReturnShipping">The return shipping the shop bears (the goods were at fault).</param>
-public sealed record SettlementRefundRow(int ReturnRequestId, decimal RefundAmount, SettlementOrderRow Order, decimal ShopReturnShipping = 0m);
+/// <param name="ShopReturnShipping">
+/// The shipping the shop bears for the return (the goods were at fault): the parcel back and the shipping given back to the customer.
+/// </param>
+/// <param name="ShopWasPaid">
+/// The shop order has its sale line. False for a shop order returned whole before it was completed: the shop was never paid for it, so
+/// there is no revenue to take back, only the shipping it bears.
+/// </param>
+/// <param name="LastOfOrder">
+/// The last refunded return of the shop order. For a shop order returned whole, it also carries the shipping costs the shop had for the
+/// delivery (its free shipping, GHN's charge for an under-declared weight), which a sale line would otherwise have taken.
+/// </param>
+public sealed record SettlementRefundRow(
+    int ReturnRequestId, decimal RefundAmount, SettlementOrderRow Order, decimal ShopReturnShipping = 0m, bool ShopWasPaid = true,
+    bool LastOfOrder = false);
 
 public sealed record EntryQuery(int VendorId, EntryKind? Kind, DateTime? FromUtc, DateTime? ToUtc, string? Search, int Page, int PageSize);
 
@@ -229,12 +241,24 @@ public static class SettlementRules
         (order.PlatformShips ? order.ShippingFee : 0m) + order.ShopShippingCost + order.ShippingAdjustment;
 
     /// <summary>
-    /// The refund line of a return: the shop gives back the share of its revenue that matches the share of the items the customer got back.
-    /// Shipping is not refunded. The commission on that share is returned to the shop. The return shipping the shop bears comes off too.
+    /// The refund line of a return: the shop gives back the share of its revenue that matches the share of the items the customer got back,
+    /// and the commission on that share is returned to it. The shipping the shop bears for the return comes off too. A shop order returned
+    /// whole was never paid to the shop: its line only takes that shipping.
     /// </summary>
     public static SettlementEntry Refund(SettlementRefundRow refund, DateTime nowUtc, int places)
     {
         var order = refund.Order;
+        if (!refund.ShopWasPaid)
+        {
+            var deliveryCosts = refund.LastOfOrder ? order.ShopShippingCost + order.ShippingAdjustment : 0m;
+            return new SettlementEntry
+            {
+                VendorId = order.VendorId, Kind = EntryKind.Refund, ShopOrderId = order.ShopOrderId, ReturnRequestId = refund.ReturnRequestId,
+                ShopOrderNumber = order.Number, Gross = 0m, Commission = 0m, Amount = -(refund.ShopReturnShipping + deliveryCosts),
+                CurrencyCode = order.CurrencyCode, Note = "Shipping of a return the shop bears (order returned whole)", CreatedOnUtc = nowUtc
+            };
+        }
+
         var paidForItems = order.Subtotal - order.DiscountAmount + order.TaxAmount;
         var ratio = paidForItems <= 0m ? 0m : Math.Clamp(refund.RefundAmount / paidForItems, 0m, 1m);
         var goods = Base(order);

@@ -316,6 +316,32 @@ public sealed class SettlementTests
     }
 
     [Fact]
+    public void AShopOrderReturnedWholeWasNeverPaidSoItsLineTakesOnlyTheShippingTheShopBears()
+    {
+        var refund = SettlementRules.Refund(
+            new SettlementRefundRow(7, 96m, Order(discount: 10m, funding: "platform", tax: 6m), ShopReturnShipping: 35m, ShopWasPaid: false), Now, 2);
+
+        Assert.Equal((EntryKind.Refund, 0m, 0m, -35m), (refund.Kind, refund.Gross, refund.Commission, refund.Amount));
+        Assert.Equal((7, 1), (refund.ReturnRequestId, refund.ShopOrderId));
+        Assert.NotNull(refund.Note);
+    }
+
+    [Fact]
+    public void TheLastReturnOfAShopOrderReturnedWholeAlsoTakesTheShopsDeliveryCosts()
+    {
+        var order = Order(ghn: true, shopShipping: 20m, weightAdjustment: 7m);
+
+        var last = SettlementRules.Refund(new SettlementRefundRow(8, 50m, order, ShopReturnShipping: 30m, ShopWasPaid: false, LastOfOrder: true), Now, 2);
+        var earlier = SettlementRules.Refund(new SettlementRefundRow(7, 50m, order, ShopReturnShipping: 30m, ShopWasPaid: false), Now, 2);
+        // A shop order that was paid had those costs taken by its sale line already.
+        var paid = SettlementRules.Refund(new SettlementRefundRow(9, 50m, order, ShopWasPaid: true, LastOfOrder: true), Now, 2);
+
+        Assert.Equal(-57m, last.Amount);
+        Assert.Equal(-30m, earlier.Amount);
+        Assert.Equal(SettlementRules.Refund(new SettlementRefundRow(9, 50m, order), Now, 2).Amount, paid.Amount);
+    }
+
+    [Fact]
     public void ARefundTakesBackTheMatchingShareOfTheRevenueAndNeverTheShipping()
     {
         // The customer paid 100 - 10 discount + 6 tax = 96 for the items and gets 48 back: half.

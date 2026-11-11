@@ -130,6 +130,14 @@ public sealed class PaymentJobTests
             DeliveredByCarrier.Add((shopOrderId, note));
             return Task.FromResult(CatalogResult.Success(new ShopOrderDetail(new ShopOrder { Id = shopOrderId, Status = ShopOrderStatus.Delivered }, [])));
         }
+
+        public List<(int ShopOrderId, string Note)> FailedByCarrier { get; } = [];
+
+        public Task<CatalogResult<ShopOrderDetail>> FailDeliveryByCarrierAsync(int shopOrderId, string note, CancellationToken cancellationToken)
+        {
+            FailedByCarrier.Add((shopOrderId, note));
+            return Task.FromResult(CatalogResult.Success(new ShopOrderDetail(new ShopOrder { Id = shopOrderId, Status = ShopOrderStatus.Cancelled }, [])));
+        }
     }
 
     private sealed class FakeDiscounts : IDiscountService
@@ -486,5 +494,47 @@ public sealed class PaymentJobTests
             jobs.Select(j => j.Name));
         Assert.All(jobs, j => Assert.True(JobRules.IsValidInterval(j.DefaultIntervalMinutes)));
         Assert.All(jobs, j => Assert.False(string.IsNullOrWhiteSpace(j.Description)));
+    }
+
+    // ---- Gateway fees ----
+
+    private sealed class FakeFeeReader(string name) : IPaymentFeeReader
+    {
+        public string SystemName => name;
+        public Dictionary<int, decimal?> Fees { get; } = new();
+        public HashSet<int> Throwing { get; } = [];
+
+        public Task<decimal?> GetFeeAsync(PaymentTransaction transaction, CancellationToken cancellationToken)
+        {
+            if (Throwing.Contains(transaction.Id)) throw new HttpRequestException("down");
+            return Task.FromResult(Fees.GetValueOrDefault(transaction.Id));
+        }
+    }
+
+    [Fact]
+    public async Task TheFeeJobKeepsEachKnownFeeAndAsksAgainLaterForTheOthers()
+    {
+        var store = new PaymentTests.FakePaymentStore();
+        PaymentTransaction Paid(int id, string method = "stripe", PaymentStatus status = PaymentStatus.Paid, string? intent = "pi") => new()
+        {
+            Id = id, Method = method, Status = status, GatewayTransactionId = intent, ReferenceType = PaymentReferenceTypes.Order, Amount = 100_000m
+        };
+        store.Payments.AddRange([
+            Paid(1), Paid(2), Paid(3), Paid(4, status: PaymentStatus.Pending), Paid(5, method: "cod"), Paid(6, intent: null),
+            Paid(7, status: PaymentStatus.PartiallyRefunded)
+        ]);
+        var stripe = new FakeFeeReader("stripe");
+        stripe.Fees[1] = 3_500m;
+        stripe.Fees[7] = 2_000m;
+        stripe.Throwing.Add(3);
+        var job = new RecordGatewayFeesJob(store, [stripe], NullLogger<RecordGatewayFeesJob>.Instance);
+
+        var result = await job.RunAsync(CancellationToken.None);
+
+        Assert.Equal((2, 0), (result.Processed, result.Failed));
+        Assert.Equal([(1, 3_500m), (7, 2_000m)], store.Payments.Where(p => p.GatewayFee is not null).Select(p => (p.Id, p.GatewayFee!.Value)));
+        // Unknown (2) and unreachable (3) are asked again next time; the rest were never asked.
+        await job.RunAsync(CancellationToken.None);
+        Assert.Null(store.Payments.Single(p => p.Id == 2).GatewayFee);
     }
 }

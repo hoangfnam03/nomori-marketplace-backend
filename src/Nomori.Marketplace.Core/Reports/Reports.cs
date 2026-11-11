@@ -53,6 +53,50 @@ public sealed record Reconciliation(
     int RefundLines, decimal RefundedFromShops, decimal CommissionReturned, int PayoutMismatches, decimal PlatformShipping = 0m,
     decimal CarrierFees = 0m, decimal CodOutstanding = 0m);
 
+/// <summary>
+/// What the platform earned and spent in a range. Orders count on the day their sale line was recorded, returns on the day they were
+/// refunded, failed deliveries on the day they were cancelled, gateway fees on the day of the payment.
+/// </summary>
+/// <param name="Commission">Commission on the sales recorded.</param>
+/// <param name="CommissionReturned">Commission given back to shops with the refunds recorded.</param>
+/// <param name="ShippingCollected">
+/// Shipping that stays with the platform on the sales: the customers' shipping on GHN orders, the free shipping the shops paid for and GHN's
+/// charges for under-declared weights.
+/// </param>
+/// <param name="CarrierFees">What GHN charged for those deliveries.</param>
+/// <param name="PlatformDiscounts">Discount codes the platform paid for, on the sales recorded.</param>
+/// <param name="ReturnParcelFees">What GHN charged to bring returned goods back.</param>
+/// <param name="ShippingRefunds">Shipping given back to customers who returned a whole shop order.</param>
+/// <param name="ReturnShippingRecovered">
+/// What was taken back for returns: the parcel back paid by the customer, and the parcel back and the shipping given back that the shop bears.
+/// </param>
+/// <param name="ReturnedOrdersShipping">
+/// Shop orders returned whole (never sold): the customers' shipping and the shops' delivery costs that stay with the platform.
+/// </param>
+/// <param name="ReturnedOrdersCarrierFees">What GHN charged to deliver those shop orders.</param>
+/// <param name="FailedDeliveryFees">What GHN charged for parcels that came back without being delivered (the customer is refunded in full).</param>
+/// <param name="GatewayFees">What the payment gateways charged (Stripe).</param>
+/// <param name="GatewayFeesPending">Paid online payments in the range whose fee the gateway has not told yet.</param>
+public sealed record PlatformProfit(
+    string CurrencyCode, DateTime FromUtc, DateTime ToUtc,
+    decimal Commission, decimal CommissionReturned,
+    decimal ShippingCollected, decimal CarrierFees, decimal PlatformDiscounts,
+    decimal ReturnParcelFees, decimal ShippingRefunds, decimal ReturnShippingRecovered,
+    decimal ReturnedOrdersShipping, decimal ReturnedOrdersCarrierFees,
+    decimal FailedDeliveryFees, decimal GatewayFees, int GatewayFeesPending,
+    WalletSummary Wallets)
+{
+    public decimal NetCommission => Commission - CommissionReturned;
+    public decimal ShippingResult => ShippingCollected - CarrierFees;
+    public decimal ReturnsResult => ReturnShippingRecovered + ReturnedOrdersShipping - ReturnParcelFees - ShippingRefunds - ReturnedOrdersCarrierFees;
+    public decimal Profit => NetCommission + ShippingResult - PlatformDiscounts + ReturnsResult - FailedDeliveryFees - GatewayFees;
+}
+
+/// <summary>
+/// The customers' wallets: <see cref="Balance"/> is what the platform owes them today, whatever the range. The flows are in the range.
+/// </summary>
+public sealed record WalletSummary(decimal Balance, int CustomersWithBalance, decimal TopUps, decimal Payments, decimal Refunds);
+
 public static class ReportRules
 {
     public static class Errors
@@ -112,6 +156,7 @@ public interface IReportStore
     Task<IReadOnlyList<TopShop>> GetTopShopsAsync(DateTime fromUtc, DateTime toExclusiveUtc, int take, CancellationToken cancellationToken);
     Task<Operations> GetOperationsAsync(DateTime nowUtc, CancellationToken cancellationToken);
     Task<Reconciliation> GetReconciliationAsync(DateTime fromUtc, DateTime toExclusiveUtc, CancellationToken cancellationToken);
+    Task<PlatformProfit> GetPlatformProfitAsync(DateTime fromUtc, DateTime toExclusiveUtc, CancellationToken cancellationToken);
 }
 
 public interface IReportService
@@ -122,4 +167,7 @@ public interface IReportService
     Task<PlatformDashboard?> GetPlatformDashboardAsync(DateTime? firstDay, DateTime? lastDay, CancellationToken cancellationToken);
     Task<Operations> GetOperationsAsync(CancellationToken cancellationToken);
     Task<Reconciliation?> GetReconciliationAsync(DateTime? firstDay, DateTime? lastDay, CancellationToken cancellationToken);
+
+    /// <summary>The platform's own profit and loss, and what it owes in the customers' wallets. Null when the range is wrong.</summary>
+    Task<PlatformProfit?> GetPlatformProfitAsync(DateTime? firstDay, DateTime? lastDay, CancellationToken cancellationToken);
 }

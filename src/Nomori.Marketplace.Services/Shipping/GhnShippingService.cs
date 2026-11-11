@@ -286,6 +286,11 @@ public sealed class GhnShippingService(
 
         // "delivered" also moves the shop order; a repeat finds it delivered already and the refused transition changes nothing.
         if (status == "delivered") await orderService.DeliverByCarrierAsync(target.ShopOrderId, note, cancellationToken);
+        // "returned": GHN could not deliver and the parcel is back at the shop. The shop order is cancelled and the customer refunded; a
+        // repeat finds it cancelled already.
+        else if (status == "returned")
+            await orderService.FailDeliveryByCarrierAsync(target.ShopOrderId,
+                string.IsNullOrWhiteSpace(webhook.Reason) ? note : $"{note} ({webhook.Reason.Trim()})", cancellationToken);
     }
 
     private async Task ApplyWeighingAsync(GhnShopOrderRef target, GhnWebhook webhook, CancellationToken cancellationToken)

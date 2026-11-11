@@ -77,13 +77,8 @@ public sealed class AdminPaymentsController(IPaymentService paymentService, ICur
         return result.Succeeded ? Ok(PaymentResponse.From(result.Value!)) : this.ToFailure(result);
     }
 
-    [HttpPost("payments/{id:int}/refund")]
-    [ValidateAntiForgeryToken]
-    public async Task<IActionResult> Refund(int id, RefundPaymentRequest request, CancellationToken cancellationToken)
-    {
-        var result = await paymentService.RefundAsync(id, request.Amount, ActorId(), cancellationToken);
-        return result.Succeeded ? Ok(PaymentResponse.From(result.Value!)) : this.ToFailure(result);
-    }
+    // No refund here on purpose: customers are refunded to their Nomori wallet (returns, cancelled paid orders). A refund to the card on top
+    // of that would pay them twice, so administrators have no way to send one.
 }
 
 /// <summary>
@@ -118,7 +113,6 @@ public sealed class PaymentCallbackController(IPaymentService paymentService) : 
 
 public sealed record UpdatePaymentMethodRequest(bool Enabled, int DisplayOrder);
 
-public sealed record RefundPaymentRequest(decimal Amount);
 
 public sealed record PublicPaymentMethodResponse(string SystemName, string DisplayName, bool IsOffline, bool Redirects);
 

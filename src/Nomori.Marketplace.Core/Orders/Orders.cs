@@ -54,7 +54,10 @@ public enum OrderAction
     Deliver = 2,
     Complete = 3,
     Cancel = 4,
-    Return = 5
+    Return = 5,
+
+    /// <summary>The carrier could not deliver and brought the parcel back to the shop: the shop order is cancelled (only the system).</summary>
+    DeliveryFailed = 6
 }
 
 /// <summary>The status of a whole order, derived from its shop orders. It is never stored.</summary>
@@ -279,6 +282,8 @@ public static class OrderRules
         (OrderAction.Complete, ShopOrderStatus.Delivered, OrderActor.Customer or OrderActor.System) => ShopOrderStatus.Completed,
         // Only the system, when the last item of the shop order is refunded (F21).
         (OrderAction.Return, ShopOrderStatus.Delivered or ShopOrderStatus.Completed, OrderActor.System) => ShopOrderStatus.Returned,
+        // Only the system, when GHN reports the parcel back at the shop after a failed delivery.
+        (OrderAction.DeliveryFailed, ShopOrderStatus.Shipped, OrderActor.System) => ShopOrderStatus.Cancelled,
 
         (OrderAction.Cancel, ShopOrderStatus.Pending or ShopOrderStatus.Confirmed, OrderActor.Shop) => ShopOrderStatus.Cancelled,
         (OrderAction.Cancel, ShopOrderStatus.Pending, OrderActor.Customer or OrderActor.System) => ShopOrderStatus.Cancelled,
@@ -423,6 +428,12 @@ public interface IOrderService
     /// <summary>The customer never confirmed receipt: the system completes the delivered shop order. Refused while a return is open.</summary>
     Task<CatalogResult<ShopOrderDetail>> CompleteAsSystemAsync(int shopOrderId, string note, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// The carrier could not deliver and the parcel is back at the shop: the system cancels the shipped shop order, the goods go back on sale
+    /// and what the customer paid (shipping included) goes back to their wallet.
+    /// </summary>
+    Task<CatalogResult<ShopOrderDetail>> FailDeliveryByCarrierAsync(int shopOrderId, string note, CancellationToken cancellationToken);
+
     // ---- Customers ----
 
     Task<PagedResult<Order>> GetMyOrdersAsync(int customerId, int page, int pageSize, CancellationToken cancellationToken);
@@ -463,9 +474,10 @@ public interface IOrderNotifier
 
 /// <summary>
 /// Gives back the money of a shop order cancelled after it was paid online (gateway or wallet): it goes to the customer's wallet, once. Cash on
-/// delivery took nothing yet; cancellations by the system happen before the money or are refunded through the gateway.
+/// delivery took nothing yet. The system's own cancels happen before the money or are refunded through the gateway, except a failed
+/// delivery, which is refunded like any other cancel.
 /// </summary>
 public interface IOrderCancellationRefunds
 {
-    Task RefundCancelledAsync(ShopOrder shopOrder, OrderActor actor, CancellationToken cancellationToken);
+    Task RefundCancelledAsync(ShopOrder shopOrder, OrderActor actor, OrderAction action, CancellationToken cancellationToken);
 }
