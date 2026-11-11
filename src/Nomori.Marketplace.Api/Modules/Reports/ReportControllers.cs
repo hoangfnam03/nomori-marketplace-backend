@@ -59,6 +59,10 @@ public sealed class AdminReportsController(IReportService reports, IVendorStore 
     public async Task<IActionResult> Reconciliation([FromQuery] DateTime? from, [FromQuery] DateTime? to, CancellationToken cancellationToken) =>
         await reports.GetReconciliationAsync(from, to, cancellationToken) is { } report ? Ok(report) : this.WrongRange();
 
+    [HttpGet("profit")]
+    public async Task<IActionResult> Profit([FromQuery] DateTime? from, [FromQuery] DateTime? to, CancellationToken cancellationToken) =>
+        await reports.GetPlatformProfitAsync(from, to, cancellationToken) is { } report ? Ok(PlatformProfitResponse.From(report)) : this.WrongRange();
+
     [HttpGet("vendors/{vendorId:int}/dashboard")]
     public async Task<IActionResult> VendorDashboard(int vendorId, [FromQuery] DateTime? from, [FromQuery] DateTime? to, CancellationToken cancellationToken)
     {
@@ -68,4 +72,19 @@ public sealed class AdminReportsController(IReportService reports, IVendorStore 
             ? Ok(ShopDashboardResponse.From(dashboard))
             : this.WrongRange();
     }
+}
+
+/// <summary>The platform's profit and loss with its subtotals worked out, so the page only shows them.</summary>
+public sealed record PlatformProfitResponse(
+    string CurrencyCode, DateTime FromUtc, DateTime ToUtc,
+    decimal Commission, decimal CommissionReturned, decimal NetCommission,
+    decimal ShippingCollected, decimal CarrierFees, decimal ShippingResult, decimal PlatformDiscounts,
+    decimal ReturnParcelFees, decimal ShippingRefunds, decimal ReturnShippingRecovered, decimal ReturnedOrdersShipping, decimal ReturnedOrdersCarrierFees,
+    decimal ReturnsResult, decimal FailedDeliveryFees, decimal GatewayFees, int GatewayFeesPending, decimal Profit, WalletSummary Wallets)
+{
+    public static PlatformProfitResponse From(PlatformProfit p) => new(
+        p.CurrencyCode, p.FromUtc, p.ToUtc, p.Commission, p.CommissionReturned, p.NetCommission,
+        p.ShippingCollected, p.CarrierFees, p.ShippingResult, p.PlatformDiscounts,
+        p.ReturnParcelFees, p.ShippingRefunds, p.ReturnShippingRecovered, p.ReturnedOrdersShipping, p.ReturnedOrdersCarrierFees,
+        p.ReturnsResult, p.FailedDeliveryFees, p.GatewayFees, p.GatewayFeesPending, p.Profit, p.Wallets);
 }

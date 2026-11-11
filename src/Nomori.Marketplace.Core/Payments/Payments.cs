@@ -85,8 +85,11 @@ public sealed class PaymentTransaction
     /// <summary>The payment page a gateway gave when the payment was started (ZaloPay), for gateways whose page cannot be worked out.</summary>
     public string? GatewayRedirectUrl { get; set; }
 
-    /// <summary>The gateway's id of the money movement once paid (ZaloPay's zp_trans_id); refunds name it.</summary>
+    /// <summary>The gateway's id of the money movement once paid (Stripe's PaymentIntent); refunds name it.</summary>
     public string? GatewayTransactionId { get; set; }
+
+    /// <summary>What the gateway charged the platform for this payment, in the payment's currency; null until it is known.</summary>
+    public decimal? GatewayFee { get; set; }
 
     public DateTime CreatedOnUtc { get; set; }
     public DateTime UpdatedOnUtc { get; set; }
@@ -260,6 +263,12 @@ public interface IPaymentStore
     /// <summary>Keeps what a gateway gave about the payment (its page, its transaction id). A null value leaves the stored one as it is.</summary>
     Task SaveGatewayDetailsAsync(int id, string? redirectUrl, string? gatewayTransactionId, CancellationToken cancellationToken);
 
+    /// <summary>Paid (or partly refunded) payments of this method whose gateway fee is not known yet. Oldest first.</summary>
+    Task<IReadOnlyList<int>> FindPaidWithoutFeeAsync(string method, int take, CancellationToken cancellationToken);
+
+    /// <summary>Keeps what the gateway charged for the payment.</summary>
+    Task SaveGatewayFeeAsync(int id, decimal fee, CancellationToken cancellationToken);
+
     /// <summary>Stores a gateway event. False when this provider already sent this event id (a replay).</summary>
     Task<bool> TryAddEventAsync(string provider, string eventId, string type, int? transactionId, string outcome, DateTime nowUtc, CancellationToken cancellationToken);
 }
@@ -313,4 +322,13 @@ public enum CallbackOutcome
 
     /// <summary>The gateway reports another amount than the payment's: nothing is changed.</summary>
     AmountMismatch = 5
+}
+
+/// <summary>A gateway that can say what it charged the platform for a payment (its fee), once the money has moved.</summary>
+public interface IPaymentFeeReader
+{
+    string SystemName { get; }
+
+    /// <summary>The fee in the payment's currency; null when the gateway does not know it yet or could not be asked.</summary>
+    Task<decimal?> GetFeeAsync(PaymentTransaction transaction, CancellationToken cancellationToken);
 }

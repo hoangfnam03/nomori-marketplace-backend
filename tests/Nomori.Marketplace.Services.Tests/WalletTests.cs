@@ -13,10 +13,12 @@ namespace Nomori.Marketplace.Services.Tests;
 internal sealed class RecordingCancellationRefunds : IOrderCancellationRefunds
 {
     public List<(int ShopOrderId, OrderActor Actor)> Cancelled { get; } = [];
+    public List<OrderAction> Actions { get; } = [];
 
-    public Task RefundCancelledAsync(ShopOrder shopOrder, OrderActor actor, CancellationToken cancellationToken)
+    public Task RefundCancelledAsync(ShopOrder shopOrder, OrderActor actor, OrderAction action, CancellationToken cancellationToken)
     {
         Cancelled.Add((shopOrder.Id, actor));
+        Actions.Add(action);
         return Task.CompletedTask;
     }
 }
@@ -335,8 +337,8 @@ public sealed class WalletTests
         var f = new Fixture();
         var refunds = Refunds(f, PaymentStatus.Paid);
 
-        await refunds.RefundCancelledAsync(Cancelled(), actor, CancellationToken.None);
-        await refunds.RefundCancelledAsync(Cancelled(), actor, CancellationToken.None);
+        await refunds.RefundCancelledAsync(Cancelled(), actor, OrderAction.Cancel, CancellationToken.None);
+        await refunds.RefundCancelledAsync(Cancelled(), actor, OrderAction.Cancel, CancellationToken.None);
 
         var entry = Assert.Single(f.Wallets.Entries);
         Assert.Equal((Buyer, WalletEntryKind.Refund, 120_000m, "shop_order", 11), (entry.CustomerId, entry.Kind, entry.Amount, entry.ReferenceType, entry.ReferenceId));
@@ -349,8 +351,8 @@ public sealed class WalletTests
         var f = new Fixture();
         var refunds = Refunds(f, PaymentStatus.Paid, WalletPaymentProvider.Name);
 
-        await refunds.RefundCancelledAsync(Cancelled(11, 120_000m), OrderActor.Customer, CancellationToken.None);
-        await refunds.RefundCancelledAsync(Cancelled(12, 80_000m), OrderActor.Shop, CancellationToken.None);
+        await refunds.RefundCancelledAsync(Cancelled(11, 120_000m), OrderActor.Customer, OrderAction.Cancel, CancellationToken.None);
+        await refunds.RefundCancelledAsync(Cancelled(12, 80_000m), OrderActor.Shop, OrderAction.Cancel, CancellationToken.None);
 
         Assert.Equal(200_000m, f.Wallets.Balances[Buyer]);
     }
@@ -364,7 +366,7 @@ public sealed class WalletTests
     {
         var f = new Fixture();
 
-        await Refunds(f, status, "cod").RefundCancelledAsync(Cancelled(), OrderActor.Customer, CancellationToken.None);
+        await Refunds(f, status, "cod").RefundCancelledAsync(Cancelled(), OrderActor.Customer, OrderAction.Cancel, CancellationToken.None);
 
         Assert.Empty(f.Wallets.Entries);
     }
@@ -374,7 +376,28 @@ public sealed class WalletTests
     {
         var f = new Fixture();
 
-        await Refunds(f, PaymentStatus.Paid).RefundCancelledAsync(Cancelled(), OrderActor.System, CancellationToken.None);
+        await Refunds(f, PaymentStatus.Paid).RefundCancelledAsync(Cancelled(), OrderActor.System, OrderAction.Cancel, CancellationToken.None);
+
+        Assert.Empty(f.Wallets.Entries);
+    }
+
+    [Fact]
+    public async Task AFailedDeliveryGivesEverythingBackShippingIncluded()
+    {
+        var f = new Fixture();
+
+        await Refunds(f, PaymentStatus.Paid).RefundCancelledAsync(Cancelled(total: 135_000m), OrderActor.System, OrderAction.DeliveryFailed, CancellationToken.None);
+
+        Assert.Equal(135_000m, f.Wallets.Balances[Buyer]);
+        Assert.Single(f.Audit.Events, e => e == "order.cancel_refunded");
+    }
+
+    [Fact]
+    public async Task AFailedDeliveryOfCashOnDeliveryGivesNothingBack()
+    {
+        var f = new Fixture();
+
+        await Refunds(f, PaymentStatus.Pending, "cod").RefundCancelledAsync(Cancelled(), OrderActor.System, OrderAction.DeliveryFailed, CancellationToken.None);
 
         Assert.Empty(f.Wallets.Entries);
     }

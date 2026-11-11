@@ -80,6 +80,52 @@ public sealed partial class ExpireUnpaidOrdersJob(
 }
 
 /// <summary>
+/// Asks the gateways what they charged for each paid payment and keeps it, so the platform's report shows what payments cost. A gateway
+/// that does not know the fee yet is asked again at the next run.
+/// </summary>
+public sealed partial class RecordGatewayFeesJob(
+    IPaymentStore store,
+    IEnumerable<IPaymentFeeReader> readers,
+    ILogger<RecordGatewayFeesJob> logger) : IScheduledJob
+{
+    public string Name => "payments.record_fees";
+    public string Description => "Records what the payment gateways charged for each paid payment (Stripe's fee).";
+    public int DefaultIntervalMinutes => 60;
+
+    public async Task<JobResult> RunAsync(CancellationToken cancellationToken)
+    {
+        var recorded = 0;
+        var waiting = 0;
+        foreach (var reader in readers)
+        {
+            foreach (var id in await store.FindPaidWithoutFeeAsync(reader.SystemName, JobRules.BatchSize, cancellationToken))
+            {
+                try
+                {
+                    if (await store.GetAsync(id, cancellationToken) is not { } payment) continue;
+                    if (await reader.GetFeeAsync(payment, cancellationToken) is { } fee and >= 0m)
+                    {
+                        await store.SaveGatewayFeeAsync(id, fee, cancellationToken);
+                        recorded++;
+                    }
+                    else waiting++;
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    LogFeeFailed(exception, id);
+                    waiting++;
+                }
+            }
+        }
+        // A fee not known yet is not a failure: it is asked again next time.
+        return new JobResult(recorded, 0, recorded + waiting == 0 ? null : $"Recorded {recorded} fees; {waiting} not known yet.");
+    }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not read the gateway fee of payment {PaymentId}.")]
+    private partial void LogFeeFailed(Exception exception, int paymentId);
+}
+
+/// <summary>
 /// Voids payments that nobody is going to complete: pending or authorized, for an order that is fully cancelled, and quiet for the grace period.
 /// Payments of orders that are still alive (cash on delivery in progress) are never listed.
 /// </summary>

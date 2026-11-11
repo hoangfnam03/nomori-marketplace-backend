@@ -250,6 +250,7 @@ if (stripe is { IsConfigured: true })
     builder.Services.AddSingleton(services => new StripePaymentProvider(
         stripe, services.GetRequiredService<IHttpClientFactory>().CreateClient(StripePaymentProvider.HttpClientName), services.GetRequiredService<IClock>()));
     builder.Services.AddSingleton<IPaymentProvider>(services => services.GetRequiredService<StripePaymentProvider>());
+    builder.Services.AddSingleton<IPaymentFeeReader>(services => services.GetRequiredService<StripePaymentProvider>());
 }
 // The wallet pays at once from its balance; a paid top-up adds to it.
 builder.Services.AddSingleton<IPaymentProvider, WalletPaymentProvider>();
@@ -279,6 +280,7 @@ builder.Services.AddOptions<JobOptions>()
 builder.Services.AddScoped<IScheduledJob, ExpireUnpaidOrdersJob>();
 builder.Services.AddScoped<IScheduledJob, CompleteDeliveredOrdersJob>();
 builder.Services.AddScoped<IScheduledJob, VoidStalePaymentsJob>();
+builder.Services.AddScoped<IScheduledJob, RecordGatewayFeesJob>();
 builder.Services.AddScoped<IScheduledJob, PurgeReservationsJob>();
 builder.Services.AddScoped<IScheduledJob, PurgeStaleCartsJob>();
 builder.Services.AddScoped<IScheduledJob, PurgeJobHistoryJob>();

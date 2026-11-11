@@ -838,6 +838,38 @@ public sealed class OrderTests
 
     // ---- Stock back on cancel ----
 
+    [Fact]
+    public async Task AParcelTheCarrierBroughtBackCancelsTheShopOrderPutsTheGoodsBackAndRefunds()
+    {
+        var f = new Fixture();
+        var order = await f.PlaceAsync();
+        var shop = Move(order, Shop, ShopOrderStatus.Shipped);
+
+        var failed = await f.Create().FailDeliveryByCarrierAsync(shop.Id, "Đã trả hàng (khách không nhận)", CancellationToken.None);
+        // GHN repeats its callbacks: the second one is refused and changes nothing.
+        var again = await f.Create().FailDeliveryByCarrierAsync(shop.Id, "Đã trả hàng", CancellationToken.None);
+
+        Assert.Equal((ShopOrderStatus.Cancelled, "Đã trả hàng (khách không nhận)"), (failed.Value!.ShopOrder.Status, failed.Value.ShopOrder.CancelReason));
+        Assert.Equal(OrderErrors.InvalidTransition, again.ErrorCode);
+        Assert.Equal([(1, 2), (2, 1)], f.Stock.Returns.Select(r => (r.ProductId, r.Quantity)));
+        Assert.Equal((shop.Id, OrderActor.System), Assert.Single(f.Refunds.Cancelled));
+        Assert.Equal(OrderAction.DeliveryFailed, Assert.Single(f.Refunds.Actions));
+    }
+
+    [Theory]
+    [InlineData(ShopOrderStatus.Pending)]
+    [InlineData(ShopOrderStatus.Confirmed)]
+    [InlineData(ShopOrderStatus.Delivered)]
+    public async Task OnlyAShippedShopOrderCanFailItsDelivery(ShopOrderStatus status)
+    {
+        var f = new Fixture();
+        var order = await f.PlaceAsync();
+        var shop = Move(order, Shop, status);
+
+        Assert.Equal(OrderErrors.InvalidTransition, (await f.Create().FailDeliveryByCarrierAsync(shop.Id, "x", CancellationToken.None)).ErrorCode);
+        Assert.Empty(f.Refunds.Cancelled);
+    }
+
     [Theory]
     [InlineData(ShopOrderStatus.Pending)]
     [InlineData(ShopOrderStatus.Confirmed)]

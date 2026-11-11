@@ -15,7 +15,7 @@ namespace Nomori.Marketplace.Services.Payments;
 /// and written as the same signed event, so a payment completes even where Stripe cannot reach the server (locally). Refunds name the
 /// PaymentIntent the session made.
 /// </summary>
-public sealed class StripePaymentProvider(StripePaymentOptions options, HttpClient http, IClock clock) : IPaymentProvider
+public sealed class StripePaymentProvider(StripePaymentOptions options, HttpClient http, IClock clock) : IPaymentProvider, IPaymentFeeReader
 {
     public const string Name = "stripe";
     public const string HttpClientName = "stripe";
@@ -166,6 +166,37 @@ public sealed class StripePaymentProvider(StripePaymentOptions options, HttpClie
 
     public static string Sign(string secret, string payload) =>
         Convert.ToHexString(HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret), Encoding.UTF8.GetBytes(payload))).ToLowerInvariant();
+
+    /// <summary>
+    /// Stripe's fee for the payment, from the balance transaction of its charge. The fee is in the currency of the Stripe balance; when that is
+    /// not the payment's currency, Stripe's exchange rate (payment currency to balance currency) brings it back.
+    /// </summary>
+    public async Task<decimal?> GetFeeAsync(PaymentTransaction transaction, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(transaction.GatewayTransactionId)) return null;
+        var intent = await SendAsync(HttpMethod.Get,
+            $"/v1/payment_intents/{Uri.EscapeDataString(transaction.GatewayTransactionId)}?expand[]=latest_charge.balance_transaction", null, null, cancellationToken);
+        return FeeOf(intent);
+    }
+
+    /// <summary>The fee in the charge's currency, read from a PaymentIntent with its latest charge's balance transaction expanded.</summary>
+    public static decimal? FeeOf(JsonObject? intent)
+    {
+        if (intent?["latest_charge"] is not JsonObject charge || charge["balance_transaction"] is not JsonObject balance) return null;
+        if (balance["fee"] is not JsonValue feeValue || !long.TryParse(feeValue.ToString(), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var minor))
+            return null;
+
+        var fee = ZeroDecimal.Contains(Text(balance, "currency") ?? string.Empty) ? minor : minor / 100m;
+        // Converted: the balance amount is the charge amount times the rate, so the fee goes back by dividing.
+        if (balance["exchange_rate"] is JsonValue rateValue
+            && decimal.TryParse(rateValue.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var rate) && rate > 0m)
+        {
+            fee /= rate;
+            if (ZeroDecimal.Contains(Text(charge, "currency") ?? string.Empty)) fee = Math.Round(fee, 0, MidpointRounding.AwayFromZero);
+            else fee = Math.Round(fee, 2, MidpointRounding.AwayFromZero);
+        }
+        return fee;
+    }
 
     // ---- Plumbing ----
 

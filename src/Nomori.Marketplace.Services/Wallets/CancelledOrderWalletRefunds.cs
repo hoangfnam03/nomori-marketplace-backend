@@ -22,10 +22,11 @@ public sealed partial class CancelledOrderWalletRefunds(
     IClock clock,
     ILogger<CancelledOrderWalletRefunds> logger) : IOrderCancellationRefunds
 {
-    public async Task RefundCancelledAsync(ShopOrder shopOrder, OrderActor actor, CancellationToken cancellationToken)
+    public async Task RefundCancelledAsync(ShopOrder shopOrder, OrderActor actor, OrderAction action, CancellationToken cancellationToken)
     {
-        // The system cancels orders that were never paid (or refunds them through the gateway itself).
-        if (actor == OrderActor.System || shopOrder.Order is not { } order || shopOrder.Total <= 0m) return;
+        // The system cancels orders that were never paid (or refunds them through the gateway itself). A failed delivery is the exception:
+        // the customer paid and gets everything back, shipping included (the shop order's total); the platform bears GHN's return.
+        if ((actor == OrderActor.System && action != OrderAction.DeliveryFailed) || shopOrder.Order is not { } order || shopOrder.Total <= 0m) return;
 
         try
         {
@@ -37,7 +38,8 @@ public sealed partial class CancelledOrderWalletRefunds(
                 order.CustomerId, WalletEntryKind.Refund, shopOrder.Total, key, "shop_order", shopOrder.Id, order.Number, clock.UtcNow), cancellationToken);
             if (posted.Outcome != WalletPostOutcome.Posted) return;
             await auditLog.WriteAsync("order.cancel_refunded", null, entityType: "ShopOrder", entityId: shopOrder.Id,
-                details: new { shopOrderId = shopOrder.Id, orderId = order.Id, shopOrder.Total, toWallet = true }, cancellationToken: cancellationToken);
+                details: new { shopOrderId = shopOrder.Id, orderId = order.Id, shopOrder.Total, toWallet = true, deliveryFailed = action == OrderAction.DeliveryFailed },
+                cancellationToken: cancellationToken);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {

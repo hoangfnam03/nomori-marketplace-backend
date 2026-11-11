@@ -54,7 +54,24 @@ public sealed class ReportTests
 
         public Task<Reconciliation> GetReconciliationAsync(DateTime fromUtc, DateTime toExclusiveUtc, CancellationToken cancellationToken) =>
             Task.FromResult(new Reconciliation(string.Empty, fromUtc, toExclusiveUtc, 1, 100m, 0m, 10m, 5m, 6m, 101m, 95m, 10m, 0m, 0, 0m, 0m, 0));
+
+        public (DateTime From, DateTime To)? ProfitRange { get; private set; }
+
+        public Task<PlatformProfit> GetPlatformProfitAsync(DateTime fromUtc, DateTime toExclusiveUtc, CancellationToken cancellationToken)
+        {
+            ProfitRange = (fromUtc, toExclusiveUtc);
+            return Task.FromResult(Profit());
+        }
     }
+
+    private static PlatformProfit Profit() => new(
+        string.Empty, default, default,
+        Commission: 100m, CommissionReturned: 10m,
+        ShippingCollected: 60m, CarrierFees: 45m, PlatformDiscounts: 20m,
+        ReturnParcelFees: 30m, ShippingRefunds: 15m, ReturnShippingRecovered: 25m,
+        ReturnedOrdersShipping: 15m, ReturnedOrdersCarrierFees: 12m,
+        FailedDeliveryFees: 8m, GatewayFees: 7m, GatewayFeesPending: 2,
+        new WalletSummary(500m, 3, 300m, 200m, 50m));
 
     private static ReportService Create(FakeReportStore store, OrderTests.FakeOrderStore? orders = null) =>
         new(store, orders ?? new OrderTests.FakeOrderStore(), new FakePrimaryCurrency(), new FixedClock());
@@ -138,6 +155,32 @@ public sealed class ReportTests
         Assert.Equal("USD", dashboard.CurrencyCode);
         Assert.Single(dashboard.TopProducts);
         Assert.Single(dashboard.LowStock);
+    }
+
+    [Fact]
+    public void TheProfitAddsUpWhatThePlatformEarnedLessWhatItSpent()
+    {
+        var p = Profit();
+
+        Assert.Equal(90m, p.NetCommission);
+        Assert.Equal(15m, p.ShippingResult);
+        // Recovered 25 + returned orders' shipping 15 - parcels back 30 - shipping given back 15 - GHN for those orders 12.
+        Assert.Equal(-17m, p.ReturnsResult);
+        // 90 + 15 - 20 discounts - 17 - 8 failed deliveries - 7 gateway fees.
+        Assert.Equal(53m, p.Profit);
+    }
+
+    [Fact]
+    public async Task TheProfitReportCoversTheDaysAskedForBothIncluded()
+    {
+        var store = new FakeReportStore();
+
+        var report = (await Create(store).GetPlatformProfitAsync(new DateTime(2025, 12, 1), new DateTime(2025, 12, 31), CancellationToken.None))!;
+
+        Assert.Equal((new DateTime(2025, 12, 1), new DateTime(2026, 1, 1)), store.ProfitRange);
+        Assert.Equal((new DateTime(2025, 12, 1), new DateTime(2025, 12, 31)), (report.FromUtc, report.ToUtc));
+        Assert.False(string.IsNullOrEmpty(report.CurrencyCode));
+        Assert.Null(await Create(store).GetPlatformProfitAsync(new DateTime(2025, 1, 1), null, CancellationToken.None));
     }
 
     [Fact]

@@ -436,6 +436,30 @@ public sealed class GhnTests
     }
 
     [Fact]
+    public async Task AParcelGhnBroughtBackToTheShopCancelsTheShopOrder()
+    {
+        var f = new WebhookFixture();
+
+        await f.Create().HandleWebhookAsync(Hook("returned"), CancellationToken.None);
+
+        Assert.Equal([(9, "Đã trả hàng")], f.Orders.FailedByCarrier);
+        Assert.Empty(f.Orders.DeliveredByCarrier);
+    }
+
+    [Theory]
+    [InlineData("delivery_fail")]
+    [InlineData("waiting_to_return")]
+    [InlineData("return_transporting")]
+    public async Task AParcelOnItsWayBackCancelsNothingYet(string status)
+    {
+        var f = new WebhookFixture();
+
+        await f.Create().HandleWebhookAsync(Hook(status), CancellationToken.None);
+
+        Assert.Empty(f.Orders.FailedByCarrier);
+    }
+
+    [Fact]
     public async Task AParcelGhnWeighedHeavierMakesTheShopOweTheRiseInFee()
     {
         var f = new WebhookFixture();

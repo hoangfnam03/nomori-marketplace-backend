@@ -3,6 +3,7 @@ using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Options;
 using Nomori.Marketplace.Core.Configuration;
 using Nomori.Marketplace.Core.Reports;
+using Nomori.Marketplace.Data.Settlement;
 
 namespace Nomori.Marketplace.Data.Reports;
 
@@ -212,8 +213,13 @@ public sealed class SqlReportStore(IOptions<DatabaseOptions> options) : IReportS
             await CountAsync("SELECT COUNT(*) FROM ScheduledTask WHERE LastStatus IN ('failed', 'partial') AND LastFinishedUtc >= @Since",
                 ("@Since", nowUtc.AddHours(-ReportLimits.RecentJobHours))),
             await CountAsync("SELECT COUNT(*) FROM QueuedEmail WHERE Status = 'failed'"),
+            // Cash on delivery counts as with the platform once the customer confirms receipt: no wait for the carrier's transfer.
             await CountAsync("SELECT COUNT(*) FROM ShopOrder s WHERE s.Status = 4 AND NOT EXISTS (SELECT 1 FROM SettlementEntry e WHERE e.ShopOrderId = s.Id AND e.Kind = 0)"),
-            await CountAsync("SELECT COUNT(*) FROM ReturnRequest r WHERE r.Status = 4 AND NOT EXISTS (SELECT 1 FROM SettlementEntry e WHERE e.ReturnRequestId = r.Id AND e.Kind = 1)"),
+            await CountAsync($"""
+                SELECT COUNT(*) FROM ReturnRequest r INNER JOIN ShopOrder s ON s.Id = r.ShopOrderId
+                WHERE r.Status = 4 AND NOT EXISTS (SELECT 1 FROM SettlementEntry e WHERE e.ReturnRequestId = r.Id AND e.Kind = 1)
+                  AND {SqlSettlementStore.RefundRecordable}
+                """),
             await CountAsync("""
                 SELECT COUNT(*) FROM Product p INNER JOIN Vendor v ON v.Id = p.VendorId
                 WHERE p.Deleted = 0 AND v.Deleted = 0 AND p.TrackInventory = 1 AND p.Status = 1 AND p.StockQuantity <= p.LowStockThreshold
@@ -281,6 +287,88 @@ public sealed class SqlReportStore(IOptions<DatabaseOptions> options) : IReportS
             string.Empty, fromUtc, toExclusiveUtc, saleLines, items, shopDiscount, platformDiscount, shipping, tax, paid, revenue, commission,
             ReportRules.Difference(paid, revenue, commission, tax, platformDiscount, platformShipping), refundLines, refundedFromShops, commissionReturned,
             mismatches, platformShipping, carrierFees, codOutstanding);
+    }
+
+    public async Task<PlatformProfit> GetPlatformProfitAsync(DateTime fromUtc, DateTime toExclusiveUtc, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+
+        async Task<decimal[]> RowAsync(string sql)
+        {
+            await using var cmd = Command(connection, sql, fromUtc, toExclusiveUtc);
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            await reader.ReadAsync(cancellationToken);
+            var values = new decimal[reader.FieldCount];
+            for (var i = 0; i < values.Length; i++) values[i] = reader.IsDBNull(i) ? 0m : Convert.ToDecimal(reader.GetValue(i), System.Globalization.CultureInfo.InvariantCulture);
+            return values;
+        }
+
+        // The sales recorded in the range: commission, the shipping that stays with the platform, GHN's fees, the platform's discounts.
+        var sales = await RowAsync("""
+            SELECT COALESCE(SUM(e.Commission), 0),
+                   COALESCE(SUM(CASE WHEN s.ShippingRateId = -100 THEN s.ShippingFee ELSE 0 END + s.ShopShippingCost + s.ShippingAdjustment), 0),
+                   COALESCE(SUM(CASE WHEN s.ShippingRateId = -100 THEN COALESCE(s.CarrierFee, 0) ELSE 0 END), 0),
+                   COALESCE(SUM(CASE WHEN s.DiscountFunding = 'platform' THEN s.DiscountAmount ELSE 0 END), 0)
+            FROM SettlementEntry e INNER JOIN ShopOrder s ON s.Id = e.ShopOrderId
+            WHERE e.Kind = 0 AND e.CreatedOnUtc >= @From AND e.CreatedOnUtc < @To
+            """);
+
+        // Commission given back with the refund lines of the range.
+        var returned = await RowAsync("SELECT COALESCE(SUM(Commission), 0) FROM SettlementEntry WHERE Kind = 1 AND CreatedOnUtc >= @From AND CreatedOnUtc < @To");
+
+        // Returns refunded in the range (4: refunded).
+        var returns = await RowAsync("""
+            SELECT COALESCE(SUM(r.ReturnShippingFee), 0),
+                   COALESCE(SUM(r.ShippingRefund), 0),
+                   COALESCE(SUM(CASE WHEN r.ReturnShippingPaidBy IN ('customer', 'shop') THEN r.ReturnShippingFee ELSE 0 END
+                              + CASE WHEN r.ShippingRefundPaidBy = 'shop' THEN r.ShippingRefund ELSE 0 END), 0)
+            FROM ReturnRequest r
+            WHERE r.Status = 4 AND r.UpdatedOnUtc >= @From AND r.UpdatedOnUtc < @To
+            """);
+
+        // Shop orders returned whole in the range (6: returned), never sold: the shipping paid for them stays with the platform, GHN was paid.
+        var returnedOrders = await RowAsync("""
+            SELECT COALESCE(SUM(CASE WHEN s.ShippingRateId = -100 THEN s.ShippingFee ELSE 0 END + s.ShopShippingCost + s.ShippingAdjustment), 0),
+                   COALESCE(SUM(CASE WHEN s.ShippingRateId = -100 THEN COALESCE(s.CarrierFee, 0) ELSE 0 END), 0)
+            FROM ShopOrder s
+            WHERE s.Status = 6 AND s.UpdatedOnUtc >= @From AND s.UpdatedOnUtc < @To
+              AND NOT EXISTS (SELECT 1 FROM SettlementEntry sale WHERE sale.ShopOrderId = s.Id AND sale.Kind = 0)
+            """);
+
+        // Parcels cancelled after GHN took them (2: shipped, 5: cancelled): GHN was paid and the customer gets everything back.
+        var failed = await RowAsync("""
+            SELECT COALESCE(SUM(COALESCE(s.CarrierFee, 0)), 0)
+            FROM ShopOrder s
+            WHERE s.ShippingRateId = -100 AND EXISTS (
+                SELECT 1 FROM ShopOrderHistory h
+                WHERE h.ShopOrderId = s.Id AND h.FromStatus = 2 AND h.ToStatus = 5 AND h.CreatedOnUtc >= @From AND h.CreatedOnUtc < @To)
+            """);
+
+        // Gateway fees of the payments made in the range, and how many paid online payments still wait for theirs (2, 3: paid, part refunded).
+        var gateway = await RowAsync("""
+            SELECT COALESCE(SUM(GatewayFee), 0),
+                   COUNT(CASE WHEN GatewayFee IS NULL AND Method NOT IN ('cod', 'wallet') AND Status IN (2, 3) THEN 1 END)
+            FROM PaymentTransaction
+            WHERE CreatedOnUtc >= @From AND CreatedOnUtc < @To
+            """);
+
+        // Wallets: the balance owed today, and the flows of the range (0: top-up, 1: payment, 2: refund).
+        var owed = await RowAsync("SELECT COALESCE(SUM(Balance), 0), COUNT(CASE WHEN Balance > 0 THEN 1 END) FROM Wallet");
+        var flows = await RowAsync("""
+            SELECT COALESCE(SUM(CASE WHEN Kind = 0 THEN Amount END), 0),
+                   COALESCE(SUM(CASE WHEN Kind = 1 THEN -Amount END), 0),
+                   COALESCE(SUM(CASE WHEN Kind = 2 THEN Amount END), 0)
+            FROM WalletEntry WHERE CreatedOnUtc >= @From AND CreatedOnUtc < @To
+            """);
+
+        return new PlatformProfit(
+            string.Empty, fromUtc, toExclusiveUtc,
+            sales[0], returned[0],
+            sales[1], sales[2], sales[3],
+            returns[0], returns[1], returns[2],
+            returnedOrders[0], returnedOrders[1],
+            failed[0], gateway[0], (int)gateway[1],
+            new WalletSummary(owed[0], (int)owed[1], flows[0], flows[1], flows[2]));
     }
 
     private static SqlCommand Command(SqlConnection connection, string sql, DateTime fromUtc, DateTime toExclusiveUtc)

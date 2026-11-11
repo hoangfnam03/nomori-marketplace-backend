@@ -170,6 +170,14 @@ public sealed class OrderService(
             : await MoveAsync(shopOrder, OrderAction.Complete, OrderActor.System, null, note, null, null, cancellationToken);
     }
 
+    public async Task<CatalogResult<ShopOrderDetail>> FailDeliveryByCarrierAsync(int shopOrderId, string note, CancellationToken cancellationToken)
+    {
+        var shopOrder = await store.GetShopOrderAsync(shopOrderId, cancellationToken);
+        return shopOrder is null
+            ? CatalogResult.Error<ShopOrderDetail>(CatalogErrors.NotFound)
+            : await MoveAsync(shopOrder, OrderAction.DeliveryFailed, OrderActor.System, null, note, null, null, cancellationToken, cancelReason: note);
+    }
+
     // ---- Customers ----
 
     public Task<PagedResult<Order>> GetMyOrdersAsync(int customerId, int page, int pageSize, CancellationToken cancellationToken) =>
@@ -324,11 +332,14 @@ public sealed class OrderService(
             cancellationToken: cancellationToken);
 
         // The change above happens once (compare-and-set), so the stock goes back once too.
-        if (action == OrderAction.Cancel && OrderRules.ReturnsStock(from)) await ReturnStockAsync(shopOrder, actorCustomerId, cancellationToken);
+        // A parcel the carrier brought back is at the shop again: its goods go back on sale too.
+        if ((action == OrderAction.Cancel && OrderRules.ReturnsStock(from)) || action == OrderAction.DeliveryFailed)
+            await ReturnStockAsync(shopOrder, actorCustomerId, cancellationToken);
 
         var updated = (await store.GetShopOrderAsync(shopOrder.Id, cancellationToken))!;
         // Also once: the cancel above is the only one that gets here.
-        if (action == OrderAction.Cancel) await cancellationRefunds.RefundCancelledAsync(updated, actor, cancellationToken);
+        if (action is OrderAction.Cancel or OrderAction.DeliveryFailed)
+            await cancellationRefunds.RefundCancelledAsync(updated, actor, action, cancellationToken);
         await notifier.ShopOrderChangedAsync(updated, cancellationToken);
         return CatalogResult.Success(await DetailAsync(updated, cancellationToken));
     }

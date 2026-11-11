@@ -47,6 +47,14 @@ public sealed class ReportService(
 
     public Task<Operations> GetOperationsAsync(CancellationToken cancellationToken) => store.GetOperationsAsync(clock.UtcNow, cancellationToken);
 
+    public async Task<PlatformProfit?> GetPlatformProfitAsync(DateTime? firstDay, DateTime? lastDay, CancellationToken cancellationToken)
+    {
+        if (ReportRules.ResolveRange(firstDay, lastDay, clock.UtcNow) is not { } range) return null;
+        var currency = await primaryCurrency.GetPrimaryAsync(cancellationToken);
+        var report = await store.GetPlatformProfitAsync(range.FromUtc, range.ToExclusiveUtc, cancellationToken);
+        return report with { CurrencyCode = currency.Code, FromUtc = range.FromUtc, ToUtc = range.ToExclusiveUtc.AddDays(-1) };
+    }
+
     public async Task<Reconciliation?> GetReconciliationAsync(DateTime? firstDay, DateTime? lastDay, CancellationToken cancellationToken)
     {
         if (ReportRules.ResolveRange(firstDay, lastDay, clock.UtcNow) is not { } range) return null;

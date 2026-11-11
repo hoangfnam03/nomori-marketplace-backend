@@ -13,6 +13,23 @@ public sealed class SqlSettlementStore(IOptions<DatabaseOptions> options) : ISet
         "s.Id, s.Number, s.VendorId, s.Subtotal, s.ShippingFee, s.DiscountAmount, s.DiscountFunding, s.TaxAmount, s.CommissionRate, o.CurrencyCode, " +
         "CAST(CASE WHEN s.ShippingRateId = -100 THEN 1 ELSE 0 END AS bit), s.ShopShippingCost, s.ShippingAdjustment"; // -100: GhnRules.RateId
 
+    /// <summary>The shipping the shop bears for a return (alias r): the parcel back and the shipping given back, when its goods were at fault.</summary>
+    internal const string ShopReturnShipping =
+        "(CASE WHEN r.ReturnShippingPaidBy = 'shop' THEN r.ReturnShippingFee ELSE 0 END " +
+        "+ CASE WHEN r.ShippingRefundPaidBy = 'shop' THEN r.ShippingRefund ELSE 0 END)";
+
+    /// <summary>
+    /// When a refunded return (alias r, shop order s) goes into the ledger: once the shop was credited with the sale; or, for a shop order
+    /// returned whole (never completed, never paid), when the shop bears some shipping for it. Otherwise there is nothing to take from the shop.
+    /// </summary>
+    internal const string RefundRecordable =
+        "(EXISTS (SELECT 1 FROM SettlementEntry sale WHERE sale.ShopOrderId = s.Id AND sale.Kind = 0) " +
+        "OR (s.Status = 6 AND (" + ShopReturnShipping + " > 0 OR (" + LastReturn + " AND s.ShopShippingCost + s.ShippingAdjustment > 0))))"; // 6: Returned
+
+    /// <summary>The return (alias r) is the last refunded one of its shop order (alias s).</summary>
+    internal const string LastReturn =
+        "r.Id = (SELECT MAX(x.Id) FROM ReturnRequest x WHERE x.ShopOrderId = s.Id AND x.Status = 4)";
+
     private const string EntryColumns =
         "e.Id, e.VendorId, e.Kind, e.ShopOrderId, e.ReturnRequestId, e.ShopOrderNumber, e.Gross, e.Commission, e.Amount, e.CurrencyCode, e.Note, e.PayoutId, " +
         "e.CreatedByCustomerId, e.CreatedOnUtc";
@@ -168,22 +185,23 @@ public sealed class SqlSettlementStore(IOptions<DatabaseOptions> options) : ISet
         await using var cmd = connection.CreateCommand();
         cmd.CommandText = $"""
             SELECT TOP (@Take) r.Id, r.RefundAmount,
-                CASE WHEN r.ReturnShippingPaidBy = 'shop' THEN r.ReturnShippingFee ELSE 0 END
-                    + CASE WHEN r.ShippingRefundPaidBy = 'shop' THEN r.ShippingRefund ELSE 0 END,
+                {ShopReturnShipping},
+                CAST(CASE WHEN EXISTS (SELECT 1 FROM SettlementEntry sale WHERE sale.ShopOrderId = s.Id AND sale.Kind = 0) THEN 1 ELSE 0 END AS bit),
+                CAST(CASE WHEN {LastReturn} THEN 1 ELSE 0 END AS bit),
                 {OrderColumns}
             FROM ReturnRequest r
             INNER JOIN ShopOrder s ON s.Id = r.ShopOrderId
             INNER JOIN CustomerOrder o ON o.Id = s.OrderId
             WHERE r.Status = 4 AND NOT EXISTS (SELECT 1 FROM SettlementEntry e WHERE e.ReturnRequestId = r.Id AND e.Kind = 1)
-              -- Only once the shop was credited with the sale: a shop order returned whole before completion was never paid to the shop.
-              AND EXISTS (SELECT 1 FROM SettlementEntry sale WHERE sale.ShopOrderId = s.Id AND sale.Kind = 0)
+              AND {RefundRecordable}
             ORDER BY r.Id
             """;
         cmd.Parameters.AddWithValue("@Take", take);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
         var rows = new List<SettlementRefundRow>();
         while (await reader.ReadAsync(cancellationToken))
-            rows.Add(new SettlementRefundRow(reader.GetInt32(0), reader.GetDecimal(1), ReadOrder(reader, 3), reader.GetDecimal(2)));
+            rows.Add(new SettlementRefundRow(
+                reader.GetInt32(0), reader.GetDecimal(1), ReadOrder(reader, 5), reader.GetDecimal(2), reader.GetBoolean(3), reader.GetBoolean(4)));
         return rows;
     }
 

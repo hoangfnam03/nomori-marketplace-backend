@@ -35,6 +35,18 @@ public sealed class PaymentTests
         public Task<PaymentTransaction?> GetAsync(int id, CancellationToken cancellationToken) =>
             Task.FromResult(Payments.FirstOrDefault(p => p.Id == id));
 
+        public Task<IReadOnlyList<int>> FindPaidWithoutFeeAsync(string method, int take, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<int>>(Payments
+                .Where(p => p.Method == method && p.Status is PaymentStatus.Paid or PaymentStatus.PartiallyRefunded
+                    && p.GatewayFee is null && p.GatewayTransactionId is not null)
+                .OrderBy(p => p.Id).Take(take).Select(p => p.Id).ToList());
+
+        public Task SaveGatewayFeeAsync(int id, decimal fee, CancellationToken cancellationToken)
+        {
+            Payments.Single(p => p.Id == id).GatewayFee = fee;
+            return Task.CompletedTask;
+        }
+
         public Task SaveGatewayDetailsAsync(int id, string? redirectUrl, string? gatewayTransactionId, CancellationToken cancellationToken)
         {
             var payment = Payments.Single(p => p.Id == id);
